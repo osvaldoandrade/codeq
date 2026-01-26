@@ -14,11 +14,28 @@ spec:
     metadata:
       labels:
 {{ include "codeq.labels" . | indent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
     spec:
+      serviceAccountName: {{ include "codeq.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+      {{- end }}
       containers:
         - name: codeq
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+{{ toYaml . | indent 12 }}
+          {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
@@ -35,12 +52,22 @@ spec:
                   name: {{ include "codeq.fullname" . }}-secrets
                   key: webhookHmacSecret
             {{- end }}
+            {{- with .Values.extraEnv }}
+{{ toYaml . | indent 12 }}
+            {{- end }}
+          {{- with .Values.extraEnvFrom }}
+          envFrom:
+{{ toYaml . | indent 12 }}
+          {{- end }}
           volumeMounts:
             - name: config
               mountPath: /app/etc/scheduler-api.yaml
               subPath: scheduler-api.yaml
             - name: artifacts
               mountPath: {{ .Values.config.localArtifactsDir }}
+            {{- with .Values.extraVolumeMounts }}
+{{ toYaml . | indent 12 }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -66,9 +93,18 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- with .Values.extraVolumes }}
+{{ toYaml . | indent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
       nodeSelector:
-{{ toYaml .Values.nodeSelector | indent 8 }}
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
       tolerations:
-{{ toYaml .Values.tolerations | indent 8 }}
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
       affinity:
-{{ toYaml .Values.affinity | indent 8 }}
+{{ toYaml . | indent 8 }}
+      {{- end }}

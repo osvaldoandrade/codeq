@@ -1,0 +1,13 @@
+{{- if .Values.kvrocks.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "codeq.fullname" . }}-kvrocks
+  labels:
+{{ include "codeq.labels" . | indent 4 }}
+data:
+  kvrocks.conf: |
+    bind 0.0.0.0
+    port {{ .Values.kvrocks.service.port }}
+    dir /var/lib/kvrocks
+{{- end }}

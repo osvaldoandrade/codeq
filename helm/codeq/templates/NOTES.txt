@@ -1,0 +1,15 @@
+codeQ has been installed.
+
+Service URL (ClusterIP):
+  http://{{ include "codeq.fullname" . }}:{{ .Values.service.port }}
+
+Health check:
+  /healthz
+
+API base:
+  /v1/codeq
+
+If ingress is enabled, use the configured host(s).
+
+If kvrocks.enabled=true, codeQ will use the embedded KVRocks service:
+  {{ include "codeq.fullname" . }}-kvrocks:{{ .Values.kvrocks.service.port }}

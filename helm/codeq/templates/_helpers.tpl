@@ -17,3 +17,19 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
+
+{{- define "codeq.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+{{ include "codeq.fullname" . }}
+{{- end -}}
+{{- else -}}
+{{- if .Values.serviceAccount.name -}}
+{{- .Values.serviceAccount.name -}}
+{{- else -}}
+default
+{{- end -}}
+{{- end -}}
+{{- end -}}

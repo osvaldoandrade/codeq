@@ -7,10 +7,10 @@ metadata:
 data:
   scheduler-api.yaml: |
     port: {{ .Values.config.port }}
-    redisAddr: {{ .Values.config.redisAddr | quote }}
+    redisAddr: {{- if .Values.kvrocks.enabled }} {{ printf "%s-kvrocks:%d" (include "codeq.fullname" .) .Values.kvrocks.service.port | quote }}{{- else }} {{ .Values.config.redisAddr | quote }}{{- end }}
 
     identityServiceUrl: {{ .Values.config.identityServiceUrl | quote }}
-    identityServiceApiKey: ""
+    identityServiceApiKey: {{- if .Values.secrets.enabled }} ""{{- else }} {{ .Values.secrets.identityServiceApiKey | quote }}{{- end }}
 
     logLevel: {{ .Values.config.logLevel | quote }}
     logFormat: {{ .Values.config.logFormat | quote }}
@@ -32,7 +32,7 @@ data:
     workerIssuer: {{ .Values.config.workerIssuer | quote }}
     allowedClockSkewSeconds: {{ .Values.config.allowedClockSkewSeconds }}
 
-    webhookHmacSecret: ""
+    webhookHmacSecret: {{- if .Values.secrets.enabled }} ""{{- else }} {{ .Values.secrets.webhookHmacSecret | quote }}{{- end }}
     subscriptionMinIntervalSeconds: {{ .Values.config.subscriptionMinIntervalSeconds }}
     subscriptionCleanupIntervalSeconds: {{ .Values.config.subscriptionCleanupIntervalSeconds }}
     resultWebhookMaxAttempts: {{ .Values.config.resultWebhookMaxAttempts }}

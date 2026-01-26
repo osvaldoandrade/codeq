@@ -1,0 +1,79 @@
+{{- if .Values.kvrocks.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "codeq.fullname" . }}-kvrocks
+  labels:
+{{ include "codeq.labels" . | indent 4 }}
+spec:
+  serviceName: {{ include "codeq.fullname" . }}-kvrocks
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "codeq.name" . }}-kvrocks
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "codeq.name" . }}-kvrocks
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: kvrocks
+          image: "{{ .Values.kvrocks.image.repository }}:{{ .Values.kvrocks.image.tag }}"
+          imagePullPolicy: {{ .Values.kvrocks.image.pullPolicy }}
+          ports:
+            - name: kvrocks
+              containerPort: {{ .Values.kvrocks.service.port }}
+          args:
+            - /etc/kvrocks/kvrocks.conf
+          volumeMounts:
+            - name: kvrocks-config
+              mountPath: /etc/kvrocks/kvrocks.conf
+              subPath: kvrocks.conf
+            - name: data
+              mountPath: /var/lib/kvrocks
+          resources:
+{{ toYaml .Values.kvrocks.resources | indent 12 }}
+      {{- if not .Values.kvrocks.persistence.enabled }}
+      volumes:
+        - name: kvrocks-config
+          configMap:
+            name: {{ include "codeq.fullname" . }}-kvrocks
+        - name: data
+          emptyDir: {}
+      {{- else }}
+      volumes:
+        - name: kvrocks-config
+          configMap:
+            name: {{ include "codeq.fullname" . }}-kvrocks
+      {{- end }}
+      {{- with .Values.kvrocks.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.kvrocks.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.kvrocks.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+  {{- if .Values.kvrocks.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+{{ include "codeq.labels" . | indent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: {{ .Values.kvrocks.persistence.size }}
+        {{- if .Values.kvrocks.persistence.storageClass }}
+        storageClassName: {{ .Values.kvrocks.persistence.storageClass }}
+        {{- end }}
+  {{- end }}
+{{- end }}

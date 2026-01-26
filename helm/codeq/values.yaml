@@ -1,9 +1,22 @@
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   repository: ghcr.io/osvaldoandrade/codeq-service
   tag: "0.1.0"
   pullPolicy: IfNotPresent
 
+imagePullSecrets: []
+
 replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+
+podAnnotations: {}
+podSecurityContext: {}
+securityContext: {}
 
 service:
   type: ClusterIP
@@ -21,10 +34,21 @@ ingress:
           pathType: Prefix
   tls: []
 
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+
 resources: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+extraEnv: []
+extraEnvFrom: []
+extraVolumes: []
+extraVolumeMounts: []
 
 config:
   port: 8080
@@ -61,3 +85,20 @@ persistence:
     enabled: false
     size: 1Gi
     storageClass: ""
+
+kvrocks:
+  enabled: true
+  image:
+    repository: apache/kvrocks
+    tag: "2.7.0"
+    pullPolicy: IfNotPresent
+  service:
+    port: 6666
+  persistence:
+    enabled: true
+    size: 4Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

@@ -1,0 +1,17 @@
+{{- if .Values.kvrocks.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "codeq.fullname" . }}-kvrocks
+  labels:
+{{ include "codeq.labels" . | indent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: kvrocks
+      port: {{ .Values.kvrocks.service.port }}
+      targetPort: {{ .Values.kvrocks.service.port }}
+  selector:
+    app.kubernetes.io/name: {{ include "codeq.name" . }}-kvrocks
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
