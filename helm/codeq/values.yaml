@@ -1,0 +1,63 @@
+image:
+  repository: ghcr.io/osvaldoandrade/codeq-service
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: codeq.local
+      paths:
+        - path: /v1/codeq
+          pathType: Prefix
+  tls: []
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+config:
+  port: 8080
+  redisAddr: "127.0.0.1:6379"
+  identityServiceUrl: "http://api.codecompany.ai"
+  timezone: "America/Sao_Paulo"
+  logLevel: "info"
+  logFormat: "json"
+  env: "dev"
+  defaultLeaseSeconds: 300
+  requeueInspectLimit: 200
+  localArtifactsDir: "/tmp/codeq-artifacts"
+  maxAttemptsDefault: 5
+  backoffPolicy: "exp_full_jitter"
+  backoffBaseSeconds: 5
+  backoffMaxSeconds: 900
+  workerJwksUrl: ""
+  workerAudience: "codeq-worker"
+  workerIssuer: ""
+  allowedClockSkewSeconds: 60
+  subscriptionMinIntervalSeconds: 5
+  subscriptionCleanupIntervalSeconds: 60
+  resultWebhookMaxAttempts: 5
+  resultWebhookBaseBackoffSeconds: 2
+  resultWebhookMaxBackoffSeconds: 60
+
+secrets:
+  enabled: false
+  identityServiceApiKey: ""
+  webhookHmacSecret: ""
+
+persistence:
+  artifacts:
+    enabled: false
+    size: 1Gi
+    storageClass: ""

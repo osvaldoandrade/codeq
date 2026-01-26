@@ -1,0 +1,17 @@
+{{- if .Values.persistence.artifacts.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "codeq.fullname" . }}-artifacts
+  labels:
+{{ include "codeq.labels" . | indent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.persistence.artifacts.size }}
+  {{- if .Values.persistence.artifacts.storageClass }}
+  storageClassName: {{ .Values.persistence.artifacts.storageClass }}
+  {{- end }}
+{{- end }}

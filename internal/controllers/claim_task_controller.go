@@ -1,0 +1,62 @@
+package controllers
+
+import (
+	"net/http"
+
+	"github.com/osvaldoandrade/codeq/pkg/domain"
+	"github.com/osvaldoandrade/codeq/internal/middleware"
+	"github.com/osvaldoandrade/codeq/internal/services"
+
+	"github.com/gin-gonic/gin"
+)
+
+type claimTaskController struct{ svc services.SchedulerService }
+
+func NewClaimTaskController(svc services.SchedulerService) *claimTaskController {
+	return &claimTaskController{svc}
+}
+
+type claimReq struct {
+	Commands     []domain.Command `json:"commands,omitempty"`
+	LeaseSeconds int              `json:"leaseSeconds,omitempty"`
+	WaitSeconds  int              `json:"waitSeconds,omitempty"`
+}
+
+func (h *claimTaskController) Handle(c *gin.Context) {
+	var req claimReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	claims, okClaims := middleware.GetWorkerClaims(c)
+	if !okClaims || claims == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing worker claims"})
+		return
+	}
+	allowed := map[domain.Command]bool{}
+	for _, ev := range claims.EventTypes {
+		allowed[domain.Command(ev)] = true
+	}
+	if len(req.Commands) > 0 {
+		for _, cmd := range req.Commands {
+			if !allowed[cmd] {
+				c.JSON(http.StatusForbidden, gin.H{"error": "event type not allowed"})
+				return
+			}
+		}
+	} else {
+		for cmd := range allowed {
+			req.Commands = append(req.Commands, cmd)
+		}
+	}
+	task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, req.WaitSeconds)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !ok {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	c.JSON(http.StatusOK, task)
+}

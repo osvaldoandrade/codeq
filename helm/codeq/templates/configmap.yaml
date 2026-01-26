@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "codeq.fullname" . }}-config
+  labels:
+{{ include "codeq.labels" . | indent 4 }}
+data:
+  scheduler-api.yaml: |
+    port: {{ .Values.config.port }}
+    redisAddr: {{ .Values.config.redisAddr | quote }}
+
+    identityServiceUrl: {{ .Values.config.identityServiceUrl | quote }}
+    identityServiceApiKey: ""
+
+    logLevel: {{ .Values.config.logLevel | quote }}
+    logFormat: {{ .Values.config.logFormat | quote }}
+    env: {{ .Values.config.env | quote }}
+    timezone: {{ .Values.config.timezone | quote }}
+
+    defaultLeaseSeconds: {{ .Values.config.defaultLeaseSeconds }}
+    requeueInspectLimit: {{ .Values.config.requeueInspectLimit }}
+
+    localArtifactsDir: {{ .Values.config.localArtifactsDir | quote }}
+
+    maxAttemptsDefault: {{ .Values.config.maxAttemptsDefault }}
+    backoffPolicy: {{ .Values.config.backoffPolicy | quote }}
+    backoffBaseSeconds: {{ .Values.config.backoffBaseSeconds }}
+    backoffMaxSeconds: {{ .Values.config.backoffMaxSeconds }}
+
+    workerJwksUrl: {{ .Values.config.workerJwksUrl | quote }}
+    workerAudience: {{ .Values.config.workerAudience | quote }}
+    workerIssuer: {{ .Values.config.workerIssuer | quote }}
+    allowedClockSkewSeconds: {{ .Values.config.allowedClockSkewSeconds }}
+
+    webhookHmacSecret: ""
+    subscriptionMinIntervalSeconds: {{ .Values.config.subscriptionMinIntervalSeconds }}
+    subscriptionCleanupIntervalSeconds: {{ .Values.config.subscriptionCleanupIntervalSeconds }}
+    resultWebhookMaxAttempts: {{ .Values.config.resultWebhookMaxAttempts }}
+    resultWebhookBaseBackoffSeconds: {{ .Values.config.resultWebhookBaseBackoffSeconds }}
+    resultWebhookMaxBackoffSeconds: {{ .Values.config.resultWebhookMaxBackoffSeconds }}

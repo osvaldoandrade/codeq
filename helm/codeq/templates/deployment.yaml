@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "codeq.fullname" . }}
+  labels:
+{{ include "codeq.labels" . | indent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "codeq.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+{{ include "codeq.labels" . | indent 8 }}
+    spec:
+      containers:
+        - name: codeq
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+          env:
+            {{- if .Values.secrets.enabled }}
+            - name: IDENTITY_SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "codeq.fullname" . }}-secrets
+                  key: identityServiceApiKey
+            - name: WEBHOOK_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "codeq.fullname" . }}-secrets
+                  key: webhookHmacSecret
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/etc/scheduler-api.yaml
+              subPath: scheduler-api.yaml
+            - name: artifacts
+              mountPath: {{ .Values.config.localArtifactsDir }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.targetPort }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+{{ toYaml .Values.resources | indent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "codeq.fullname" . }}-config
+        - name: artifacts
+          {{- if .Values.persistence.artifacts.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "codeq.fullname" . }}-artifacts
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      nodeSelector:
+{{ toYaml .Values.nodeSelector | indent 8 }}
+      tolerations:
+{{ toYaml .Values.tolerations | indent 8 }}
+      affinity:
+{{ toYaml .Values.affinity | indent 8 }}
