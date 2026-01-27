@@ -4,6 +4,7 @@
 
 - `port` (int): HTTP port, default 8080
 - `redisAddr` (string): KVRocks/Redis address, default `localhost:6379`
+- `redisPassword` (string, optional): KVRocks/Redis password
 - `timezone` (string): default `America/Sao_Paulo`
 - `env` (string): default `dev`
 - `logLevel` (string): default `info`

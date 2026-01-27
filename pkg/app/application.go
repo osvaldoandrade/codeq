@@ -26,7 +26,7 @@ type Application struct {
 }
 
 func NewApplication(cfg *config.Config) *Application {
-	redisClient := providers.NewRedisProvider(cfg.RedisAddr)
+	redisClient := providers.NewRedisProvider(cfg.RedisAddr, cfg.RedisPassword)
 
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {

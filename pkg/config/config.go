@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Port                               int    `yaml:"port"`
 	RedisAddr                          string `yaml:"redisAddr"`
+	RedisPassword                      string `yaml:"redisPassword"`
 	IdentityServiceURL                 string `yaml:"identityServiceUrl"`
 	IdentityServiceApiKey              string `yaml:"identityServiceApiKey"`
 	Timezone                           string `yaml:"timezone"`
@@ -56,6 +57,11 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if v := os.Getenv("REDIS_ADDR"); v != "" {
 		c.RedisAddr = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		c.RedisPassword = v
+	} else if v := os.Getenv("KVROCKS_PASSWORD"); v != "" {
+		c.RedisPassword = v
 	}
 	if v := os.Getenv("IDENTITY_SERVICE_URL"); v != "" {
 		c.IdentityServiceURL = v
