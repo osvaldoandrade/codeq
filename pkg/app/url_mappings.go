@@ -26,6 +26,7 @@ func SetupMappings(app *Application) {
 
 		admin := producer.Group("/admin", middleware.RequireAdmin())
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
+		admin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
 
 		// Novo: limpeza administrativa de tasks expiradas no índice Z
 		admin.POST("/tasks/cleanup", controllers.NewCleanupExpiredController(app.Scheduler).Handle)

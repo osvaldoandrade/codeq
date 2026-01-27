@@ -26,6 +26,7 @@ type TaskRepository interface {
 	PendingLength(ctx context.Context, cmd domain.Command) (int64, error)
 	Get(ctx context.Context, taskID string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
+	QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error)
 
 	// Novo: limpeza administrativa por índice Z (sem custo no Claim/Get)
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
@@ -614,8 +615,52 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 			return nil, err
 		}
 		out[ki] = li
+
+		kd := r.keyQueueDelayed(cmd)
+		ld, err := r.rdb.ZCard(ctx, kd).Result()
+		if err != nil && err != redis.Nil {
+			return nil, err
+		}
+		out[kd] = ld
+
+		kdlq := r.keyQueueDLQ(cmd)
+		ldlq, err := r.rdb.LLen(ctx, kdlq).Result()
+		if err != nil && err != redis.Nil {
+			return nil, err
+		}
+		out[kdlq] = ldlq
 	}
 	return out, nil
+}
+
+func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
+	var ready int64
+	for p := maxPriority; p >= minPriority; p-- {
+		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p)).Result()
+		if err != nil && err != redis.Nil {
+			return nil, err
+		}
+		ready += n
+	}
+	inprog, err := r.rdb.LLen(ctx, r.keyQueueInprog(cmd)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	dlq, err := r.rdb.LLen(ctx, r.keyQueueDLQ(cmd)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	return &domain.QueueStats{
+		Command:    cmd,
+		Ready:      ready,
+		Delayed:    delayed,
+		InProgress: inprog,
+		DLQ:        dlq,
+	}, nil
 }
 
 func (r *taskRedisRepo) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {

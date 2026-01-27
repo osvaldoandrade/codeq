@@ -5,11 +5,12 @@ import (
 	"errors"
 	"math/rand"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
-	"github.com/osvaldoandrade/codeq/pkg/domain"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
 type SchedulerService interface {
@@ -20,6 +21,7 @@ type SchedulerService interface {
 	NackTask(ctx context.Context, taskID, workerID string, delaySeconds int, reason string) (int, bool, error)
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
+	QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error)
 
 	// Novo: limpeza administrativa por índice Z
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
@@ -68,9 +70,7 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 }
 
 func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string) (*domain.Task, error) {
-	switch cmd {
-	case domain.CmdGenerateMaster, domain.CmdGenerateCreative:
-	default:
+	if strings.TrimSpace(string(cmd)) == "" {
 		return nil, errors.New("invalid command")
 	}
 	if webhook != "" {
@@ -172,6 +172,10 @@ func (s *schedulerService) GetTask(ctx context.Context, id string) (*domain.Task
 
 func (s *schedulerService) AdminQueues(ctx context.Context) (map[string]any, error) {
 	return s.repo.AdminQueues(ctx)
+}
+
+func (s *schedulerService) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
+	return s.repo.QueueStats(ctx, cmd)
 }
 
 func (s *schedulerService) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {

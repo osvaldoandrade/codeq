@@ -270,7 +270,7 @@
                             </div>
                             <div>
                                 <h4 class="font-bold text-white">CLI First</h4>
-                                <p class="text-sm text-brand-muted"><code>codeq-cli</code> for managing tasks, queues, and workers.</p>
+                                <p class="text-sm text-brand-muted"><code>codeq</code> for managing tasks, queues, and workers.</p>
                             </div>
                         </div>
                         <div class="flex items-center gap-4">
@@ -296,7 +296,7 @@
                     <!-- CLI Content -->
                     <div id="content-cli" class="p-6 bg-[#0D1117] font-mono text-sm overflow-x-auto h-[320px]">
 <pre><code class="language-bash"><span class="text-gray-500"># 1. Enqueue a task from the terminal</span>
-$ codeq-cli task create \
+$ codeq task create \
     --event render_video \
     --priority 10 \
     --payload '{"jobId": 500}'
@@ -304,7 +304,7 @@ $ codeq-cli task create \
 <span class="text-blue-400">✔ Task created: a5a4d2ad...</span>
 
 <span class="text-gray-500"># 2. Start a worker for this event type</span>
-$ codeq-cli worker start \
+$ codeq worker start \
     --events render_video \
     --concurrency 5
 
@@ -312,7 +312,7 @@ $ codeq-cli worker start \
 <span class="text-emerald-400">✔ Worker connected. Listening...</span>
 
 <span class="text-gray-500"># 3. Inspect queue depth</span>
-$ codeq-cli queue inspect render_video
+$ codeq queue inspect render_video
 
 <span class="text-blue-400">READY: 124 | DELAYED: 5 | IN_PROGRESS: 5</span></code></pre>
                     </div>

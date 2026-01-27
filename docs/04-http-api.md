@@ -202,6 +202,24 @@ Auth: worker token.
 
 Auth: admin token.
 
+## Admin queue stats (per event)
+
+`GET /v1/codeq/admin/queues/:command`
+
+Auth: admin token.
+
+Response `200`:
+
+```json
+{
+  "command": "RENDER_VIDEO",
+  "ready": 124,
+  "delayed": 5,
+  "inProgress": 5,
+  "dlq": 0
+}
+```
+
 ## Admin cleanup
 
 `POST /v1/codeq/admin/tasks/cleanup`
