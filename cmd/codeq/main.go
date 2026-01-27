@@ -729,8 +729,13 @@ func workerCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui)
 		Short:   "Start a worker (polling)",
 		Example: "codeq worker start --events render_video --concurrency 5",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			token := workerAuthToken(*workerToken, *producerToken)
-			if strings.TrimSpace(token) == "" {
+			tokenSource := "worker"
+			token := strings.TrimSpace(*workerToken)
+			if strings.TrimSpace(*producerToken) != "" {
+				tokenSource = "producer"
+				token = strings.TrimSpace(*producerToken)
+			}
+			if token == "" {
 				return errors.New("token is required (run `codeq auth login` or set token)")
 			}
 			ev := splitEvents(events)
@@ -762,7 +767,7 @@ func workerCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui)
 			for i := 0; i < concurrency; i++ {
 				_ = bar.Add(1)
 			}
-			fmt.Printf("%s Worker connected. Listening...\n", ui.info("[INFO]"))
+			fmt.Printf("%s Worker connected. Listening... (token: %s)\n", ui.info("[INFO]"), tokenSource)
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
@@ -851,6 +856,7 @@ func workerLoop(ctx context.Context, c *client, events []string, leaseSec int, w
 		"leaseSeconds": leaseSec,
 		"waitSeconds":  waitSec,
 	}
+	var lastErr time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -859,6 +865,10 @@ func workerLoop(ctx context.Context, c *client, events []string, leaseSec int, w
 		}
 		status, resp, err := c.request("POST", "/v1/codeq/tasks/claim", c.workerToken, payload)
 		if err != nil {
+			if time.Since(lastErr) > 3*time.Second {
+				fmt.Printf("%s claim error: %s\n", ui.warn("[WARN]"), err.Error())
+				lastErr = time.Now()
+			}
 			time.Sleep(1 * time.Second)
 			continue
 		}
@@ -866,6 +876,10 @@ func workerLoop(ctx context.Context, c *client, events []string, leaseSec int, w
 			continue
 		}
 		if status != http.StatusOK {
+			if time.Since(lastErr) > 3*time.Second {
+				fmt.Printf("%s claim denied (%d): %s\n", ui.warn("[WARN]"), status, strings.TrimSpace(string(resp)))
+				lastErr = time.Now()
+			}
 			time.Sleep(1 * time.Second)
 			continue
 		}
@@ -941,11 +955,11 @@ func producerAuthToken(producer, worker string) string {
 }
 
 func workerAuthToken(worker, producer string) string {
-	if strings.TrimSpace(worker) != "" {
-		return worker
-	}
 	if strings.TrimSpace(producer) != "" {
 		return producer
+	}
+	if strings.TrimSpace(worker) != "" {
+		return worker
 	}
 	return ""
 }
