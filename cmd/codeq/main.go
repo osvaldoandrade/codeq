@@ -1078,7 +1078,12 @@ func renderTemplate(tpl string, vars map[string]string) (string, error) {
 	if strings.TrimSpace(tpl) == "" {
 		return "", errors.New("payload template is empty")
 	}
-	t, err := template.New("tpl").Option("missingkey=error").Parse(tpl)
+	funcs := template.FuncMap{}
+	for k, v := range vars {
+		val := v
+		funcs[k] = func() string { return val }
+	}
+	t, err := template.New("tpl").Funcs(funcs).Option("missingkey=error").Parse(tpl)
 	if err != nil {
 		return "", err
 	}
