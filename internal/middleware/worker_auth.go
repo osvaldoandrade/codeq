@@ -53,12 +53,40 @@ func WorkerAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, err := validateWorkerJWT(c.Request.Context(), cfg, cache, c.GetHeader("Authorization"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
-			return
+			if cfg.AllowProducerAsWorker {
+				if user, perr := validateProducerToken(c.Request.Context(), cfg, c.GetHeader("Authorization")); perr == nil {
+					now := time.Now().Unix()
+					claims = &WorkerClaims{
+						Issuer:     "producer",
+						Audience:   cfg.WorkerAudience,
+						Subject:    firstNonEmpty(user.LocalId, user.Email),
+						ExpiresAt:  now + 3600,
+						IssuedAt:   now - 10,
+						JWTID:      "producer-fallback",
+						EventTypes: []string{"*"},
+						Scope:      "codeq:claim codeq:heartbeat codeq:abandon codeq:nack codeq:result codeq:subscribe",
+					}
+				} else {
+					c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+					return
+				}
+			} else {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				return
+			}
 		}
 		c.Set("workerClaims", claims)
 		c.Next()
 	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func validateWorkerJWT(ctx context.Context, cfg *config.Config, cache *jwksCache, authHeader string) (*WorkerClaims, error) {

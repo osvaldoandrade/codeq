@@ -3,9 +3,9 @@ package controllers
 import (
 	"net/http"
 
-	"github.com/osvaldoandrade/codeq/pkg/domain"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,19 +34,28 @@ func (h *claimTaskController) Handle(c *gin.Context) {
 		return
 	}
 	allowed := map[domain.Command]bool{}
+	hasWildcard := false
 	for _, ev := range claims.EventTypes {
+		if ev == "*" {
+			hasWildcard = true
+			break
+		}
 		allowed[domain.Command(ev)] = true
 	}
 	if len(req.Commands) > 0 {
-		for _, cmd := range req.Commands {
-			if !allowed[cmd] {
-				c.JSON(http.StatusForbidden, gin.H{"error": "event type not allowed"})
-				return
+		if !hasWildcard {
+			for _, cmd := range req.Commands {
+				if !allowed[cmd] {
+					c.JSON(http.StatusForbidden, gin.H{"error": "event type not allowed"})
+					return
+				}
 			}
 		}
 	} else {
-		for cmd := range allowed {
-			req.Commands = append(req.Commands, cmd)
+		if !hasWildcard {
+			for cmd := range allowed {
+				req.Commands = append(req.Commands, cmd)
+			}
 		}
 	}
 	task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, req.WaitSeconds)

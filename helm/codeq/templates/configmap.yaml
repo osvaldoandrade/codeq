@@ -31,6 +31,7 @@ data:
     workerAudience: {{ .Values.config.workerAudience | quote }}
     workerIssuer: {{ .Values.config.workerIssuer | quote }}
     allowedClockSkewSeconds: {{ .Values.config.allowedClockSkewSeconds }}
+    allowProducerAsWorker: {{ .Values.config.allowProducerAsWorker }}
 
     webhookHmacSecret: {{- if .Values.secrets.enabled }} ""{{- else }} {{ .Values.secrets.webhookHmacSecret | quote }}{{- end }}
     subscriptionMinIntervalSeconds: {{ .Values.config.subscriptionMinIntervalSeconds }}

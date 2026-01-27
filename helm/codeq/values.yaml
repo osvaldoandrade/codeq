@@ -69,6 +69,7 @@ config:
   workerAudience: "codeq-worker"
   workerIssuer: ""
   allowedClockSkewSeconds: 60
+  allowProducerAsWorker: true
   subscriptionMinIntervalSeconds: 5
   subscriptionCleanupIntervalSeconds: 60
   resultWebhookMaxAttempts: 5

@@ -32,6 +32,7 @@
 - `workerAudience` (string): default `codeq-worker`
 - `workerIssuer` (string)
 - `allowedClockSkewSeconds` (int): default 60
+- `allowProducerAsWorker` (bool): when true, producer tokens can access worker endpoints and are mapped to a wildcard worker identity (dev only)
 
 ## Webhooks
 

@@ -26,6 +26,10 @@ Required scopes:
 
 The worker ID is derived from `sub`. Request bodies do not provide `workerId`.
 
+### Dev fallback (producer as worker)
+
+When `allowProducerAsWorker=true`, codeQ accepts a producer token for worker endpoints and maps it to a synthetic worker identity with wildcard `eventTypes` and full worker scopes. This is intended for local/dev environments only.
+
 ### Worker identity semantics
 
 `sub` is the ownership identity stored in task records and leases. Two supported patterns:

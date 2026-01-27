@@ -12,31 +12,32 @@ import (
 )
 
 type Config struct {
-	Port                           int    `yaml:"port"`
-	RedisAddr                      string `yaml:"redisAddr"`
-	IdentityServiceURL             string `yaml:"identityServiceUrl"`
-	IdentityServiceApiKey          string `yaml:"identityServiceApiKey"`
-	Timezone                       string `yaml:"timezone"`
-	LogLevel                       string `yaml:"logLevel"`
-	LogFormat                      string `yaml:"logFormat"`
-	Env                            string `yaml:"env"`
-	DefaultLeaseSeconds            int    `yaml:"defaultLeaseSeconds"`
-	RequeueInspectLimit            int    `yaml:"requeueInspectLimit"`
-	LocalArtifactsDir              string `yaml:"localArtifactsDir"`
-	MaxAttemptsDefault             int    `yaml:"maxAttemptsDefault"`
-	BackoffPolicy                  string `yaml:"backoffPolicy"`
-	BackoffBaseSeconds             int    `yaml:"backoffBaseSeconds"`
-	BackoffMaxSeconds              int    `yaml:"backoffMaxSeconds"`
-	WorkerJwksURL                  string `yaml:"workerJwksUrl"`
-	WorkerAudience                 string `yaml:"workerAudience"`
-	WorkerIssuer                   string `yaml:"workerIssuer"`
-	AllowedClockSkewSeconds        int    `yaml:"allowedClockSkewSeconds"`
-	WebhookHmacSecret              string `yaml:"webhookHmacSecret"`
-	SubscriptionMinIntervalSeconds int    `yaml:"subscriptionMinIntervalSeconds"`
-	SubscriptionCleanupIntervalSeconds int `yaml:"subscriptionCleanupIntervalSeconds"`
-	ResultWebhookMaxAttempts       int    `yaml:"resultWebhookMaxAttempts"`
-	ResultWebhookBaseBackoffSeconds int   `yaml:"resultWebhookBaseBackoffSeconds"`
-	ResultWebhookMaxBackoffSeconds  int   `yaml:"resultWebhookMaxBackoffSeconds"`
+	Port                               int    `yaml:"port"`
+	RedisAddr                          string `yaml:"redisAddr"`
+	IdentityServiceURL                 string `yaml:"identityServiceUrl"`
+	IdentityServiceApiKey              string `yaml:"identityServiceApiKey"`
+	Timezone                           string `yaml:"timezone"`
+	LogLevel                           string `yaml:"logLevel"`
+	LogFormat                          string `yaml:"logFormat"`
+	Env                                string `yaml:"env"`
+	DefaultLeaseSeconds                int    `yaml:"defaultLeaseSeconds"`
+	RequeueInspectLimit                int    `yaml:"requeueInspectLimit"`
+	LocalArtifactsDir                  string `yaml:"localArtifactsDir"`
+	MaxAttemptsDefault                 int    `yaml:"maxAttemptsDefault"`
+	BackoffPolicy                      string `yaml:"backoffPolicy"`
+	BackoffBaseSeconds                 int    `yaml:"backoffBaseSeconds"`
+	BackoffMaxSeconds                  int    `yaml:"backoffMaxSeconds"`
+	WorkerJwksURL                      string `yaml:"workerJwksUrl"`
+	WorkerAudience                     string `yaml:"workerAudience"`
+	WorkerIssuer                       string `yaml:"workerIssuer"`
+	AllowedClockSkewSeconds            int    `yaml:"allowedClockSkewSeconds"`
+	AllowProducerAsWorker              bool   `yaml:"allowProducerAsWorker"`
+	WebhookHmacSecret                  string `yaml:"webhookHmacSecret"`
+	SubscriptionMinIntervalSeconds     int    `yaml:"subscriptionMinIntervalSeconds"`
+	SubscriptionCleanupIntervalSeconds int    `yaml:"subscriptionCleanupIntervalSeconds"`
+	ResultWebhookMaxAttempts           int    `yaml:"resultWebhookMaxAttempts"`
+	ResultWebhookBaseBackoffSeconds    int    `yaml:"resultWebhookBaseBackoffSeconds"`
+	ResultWebhookMaxBackoffSeconds     int    `yaml:"resultWebhookMaxBackoffSeconds"`
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -96,6 +97,9 @@ func LoadConfig(filePath string) (*Config, error) {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.AllowedClockSkewSeconds = n
 		}
+	}
+	if v := os.Getenv("ALLOW_PRODUCER_AS_WORKER"); v != "" {
+		c.AllowProducerAsWorker = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
 	}
 	if v := os.Getenv("WEBHOOK_HMAC_SECRET"); v != "" {
 		c.WebhookHmacSecret = v
