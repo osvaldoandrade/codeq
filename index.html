@@ -185,7 +185,7 @@
                 <div class="h-1 w-10 bg-brand-secondary mx-auto"></div>
             </div>
             
-            <div class="w-full h-[750px] border border-brand-border bg-black shadow-2xl rounded-xl overflow-hidden relative group">
+            <div class="w-full h-[800px] border border-brand-border bg-black shadow-2xl rounded-xl overflow-hidden relative group">
                 <iframe 
                     srcdoc='<!DOCTYPE html>
 <html lang="en">
@@ -203,8 +203,7 @@
         /* Animations */
         @keyframes flow-dash { to { stroke-dashoffset: -20; } }
         @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 5px rgba(6, 182, 212, 0.2); border-color: rgba(6, 182, 212, 0.4); } 50% { box-shadow: 0 0 20px rgba(6, 182, 212, 0.4); border-color: rgba(6, 182, 212, 1); } }
-
+        
         /* UI Components */
         .glass-panel { 
             background: rgba(15, 23, 42, 0.6); 
@@ -213,16 +212,23 @@
             transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
             z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .glass-panel:hover {
+            border-color: #334155;
+            background: rgba(30, 41, 59, 0.8); 
         }
         .glass-panel.active { 
             background: rgba(30, 41, 59, 0.95); 
             border-color: #06b6d4; 
-            box-shadow: 0 0 40px rgba(6, 182, 212, 0.2); 
-            transform: scale(1.03); 
+            box-shadow: 0 0 40px rgba(6, 182, 212, 0.15); 
+            transform: scale(1.02); 
             z-index: 50; 
         }
         .glass-panel.dimmed {
-            opacity: 0.3;
+            opacity: 0.4;
             filter: grayscale(0.8);
             transform: scale(0.98);
         }
@@ -244,11 +250,11 @@
             stroke-dasharray: 8 4; 
         }
 
-        /* Layout Grid */
+        /* Layout Grid - 3 Columns, 3 Rows, Symmetrical */
         .arch-grid {
             display: grid;
-            grid-template-columns: 220px 1fr 220px; 
-            grid-template-rows: auto 1fr auto;
+            grid-template-columns: 1fr 320px 1fr; 
+            grid-template-rows: 1fr 1fr 1fr;
             gap: 1.5rem;
             height: 100%;
             padding: 2rem;
@@ -262,6 +268,10 @@
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        .label-micro { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; font-weight: 700; margin-bottom: 4px; }
+        .node-icon { font-size: 1.5rem; margin-bottom: 0.5rem; color: #94a3b8; }
+        .glass-panel.active .node-icon { color: #fff; text-shadow: 0 0 10px rgba(6,182,212,0.8); }
     </style>
 </head>
 <body class="h-screen w-screen flex flex-col bg-[#020617]">
@@ -273,9 +283,9 @@
             <span class="font-display font-bold text-xl tracking-tight text-white">codeQ <span class="text-cyan-500 font-mono text-sm opacity-80 tracking-widest ml-2">// SYSTEM_VIEW</span></span>
         </div>
         <div class="flex items-center gap-8 text-xs font-mono text-slate-400">
-            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>pkg/app</div>
-            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>internal/kvrocks</div>
-            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-pink-500 rounded-full"></div>pkg/worker</div>
+            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>PRODUCER_FLOW</div>
+            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>CORE_LOGIC</div>
+            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-pink-500 rounded-full"></div>WORKER_FLOW</div>
         </div>
     </header>
 
@@ -283,8 +293,8 @@
     <div class="flex-1 flex overflow-hidden relative">
         
         <!-- Sidebar Narrative -->
-        <div class="w-[500px] h-full z-40 flex flex-col border-r border-slate-800 bg-[#0b1121]/95 backdrop-blur shadow-2xl shrink-0">
-            <div class="flex-1 p-10 overflow-y-auto" id="narrative-box">
+        <div class="w-[400px] h-full z-40 flex flex-col border-r border-slate-800 bg-[#0b1121]/95 backdrop-blur shadow-2xl shrink-0">
+            <div class="flex-1 p-8 overflow-y-auto" id="narrative-box">
                 <!-- Content injected via JS -->
                 <div class="flex flex-col items-center justify-center h-full text-center space-y-8 animate-[fade-in_0.5s_ease-out]">
                     <div class="relative">
@@ -294,11 +304,11 @@
                         </div>
                     </div>
                     <div>
-                        <h2 class="text-3xl font-bold text-white font-display mb-2">Queue Overview</h2>
+                        <h2 class="text-2xl font-bold text-white font-display mb-2">Architecture Trace</h2>
                         <p class="text-cyan-500 font-mono text-xs tracking-[0.2em] uppercase">Status: Online</p>
                     </div>
-                    <p class="text-slate-400 text-base leading-relaxed max-w-xs mx-auto">
-                        Interactive walkthrough of the codeQ lifecycle, from producer enqueue to worker completion and persistence.
+                    <p class="text-slate-400 text-sm leading-relaxed max-w-xs mx-auto">
+                        Visualização simétrica do fluxo de vida de uma tarefa no codeQ.
                     </p>
                     <button onclick="startTour()" class="group relative px-8 py-4 bg-cyan-950/50 text-cyan-400 font-mono text-sm font-bold tracking-widest rounded border border-cyan-500/30 hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all overflow-hidden">
                         <span class="relative z-10">START TRACE</span>
@@ -308,17 +318,17 @@
             </div>
 
             <!-- Navigation Controls -->
-            <div class="p-8 border-t border-slate-800 bg-[#020617]">
+            <div class="p-6 border-t border-slate-800 bg-[#020617]">
                 <div class="flex justify-between items-center text-[10px] font-mono text-slate-500 mb-3">
-                    <span class="tracking-widest">LIFECYCLE STEPS</span>
-                    <span id="step-counter" class="text-cyan-500">0 / 6</span>
+                    <span class="tracking-widest">TRACE STEP</span>
+                    <span id="step-counter" class="text-cyan-500">0 / 8</span>
                 </div>
-                <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mb-8">
+                <div class="w-full bg-slate-800 h-1 rounded-full overflow-hidden mb-6">
                     <div id="progress-bar" class="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 w-0 transition-all duration-500 ease-out shadow-[0_0_10px_#06b6d4]"></div>
                 </div>
-                <div class="flex gap-4">
-                    <button id="btn-prev" onclick="prevStep()" disabled class="px-6 py-3 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 disabled:opacity-30 disabled:hover:border-slate-700 transition-all text-xs font-mono font-bold">PREVIOUS</button>
-                    <button id="btn-next" onclick="nextStep()" disabled class="flex-1 px-6 py-3 rounded bg-slate-800 text-slate-500 font-mono text-xs font-bold transition-all border border-slate-700 flex items-center justify-center gap-2 group disabled:opacity-50">
+                <div class="flex gap-3">
+                    <button id="btn-prev" onclick="prevStep()" disabled class="px-4 py-3 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 disabled:opacity-30 disabled:hover:border-slate-700 transition-all text-xs font-mono font-bold"><i class="fa-solid fa-chevron-left"></i></button>
+                    <button id="btn-next" onclick="nextStep()" disabled class="flex-1 px-4 py-3 rounded bg-slate-800 text-slate-500 font-mono text-xs font-bold transition-all border border-slate-700 flex items-center justify-center gap-2 group disabled:opacity-50">
                         <span>WAITING...</span>
                     </button>
                 </div>
@@ -334,143 +344,155 @@
 
             <!-- SVG Connector Layer (Full Screen) -->
             <svg class="absolute inset-0 w-full h-full pointer-events-none z-0" id="connector-layer">
-                <path id="line-cli-reasoner" class="connector-line" />
-                <path id="line-reasoner-got" class="connector-line" />
-                <path id="line-reasoner-cot" class="connector-line" />
-                <path id="line-got-codex" class="connector-line" />
-                <path id="line-cot-codex" class="connector-line" />
-                <path id="line-got-store" class="connector-line" />
-                <path id="line-cot-store" class="connector-line" />
-                <path id="line-reasoner-store" class="connector-line" />
+                <!-- Dynamic Lines created by JS -->
             </svg>
 
-            <!-- Architecture Diagram Grid -->
+            <!-- Architecture Diagram Grid (3x3 Symmetrical) -->
             <div class="arch-grid w-full h-full relative z-10">
                 
-                <!-- 1. Producer (was CLI) -->
-                <div id="node-cli" class="glass-panel rounded-xl p-6 flex flex-col justify-center gap-4 h-[160px] self-start border-l-4 border-l-white">
+                <!-- ROW 1: INPUT / CONTROL / OUTPUT -->
+                
+                <!-- 1.1 Producer -->
+                <div id="node-producer" class="glass-panel rounded-xl p-5 border-t-4 border-t-indigo-500">
+                    <div>
+                        <div class="label-micro text-indigo-400">INPUT SOURCE</div>
+                        <div class="text-lg font-bold text-white"><i class="fa-solid fa-user-astronaut node-icon text-indigo-500"></i> PRODUCER</div>
+                    </div>
+                    <div class="text-xs text-slate-400 font-mono bg-black/20 p-2 rounded">
+                        Agent / CLI / API<br>
+                        POST /v1/tasks
+                    </div>
+                </div>
+
+                <!-- 1.2 API Gateway -->
+                <div id="node-api" class="glass-panel rounded-xl p-5 border-t-4 border-t-cyan-500 scale-105 z-20 shadow-xl bg-slate-900/80">
+                    <div>
+                        <div class="label-micro text-cyan-400">CONTROL PLANE</div>
+                        <div class="text-2xl font-bold text-white"><i class="fa-solid fa-network-wired node-icon text-cyan-500"></i> API SERVER</div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                         <div class="text-[10px] bg-slate-800 p-1 rounded text-center text-slate-300">Auth</div>
+                         <div class="text-[10px] bg-slate-800 p-1 rounded text-center text-slate-300">Validate</div>
+                    </div>
+                </div>
+
+                <!-- 1.3 Worker -->
+                <div id="node-worker" class="glass-panel rounded-xl p-5 border-t-4 border-t-pink-500">
+                    <div>
+                        <div class="label-micro text-pink-400">CONSUMER</div>
+                        <div class="text-lg font-bold text-white"><i class="fa-solid fa-robot node-icon text-pink-500"></i> WORKER</div>
+                    </div>
+                    <div class="text-xs text-slate-400 font-mono bg-black/20 p-2 rounded text-right">
+                        External Pool<br>
+                        Polling / Claim
+                    </div>
+                </div>
+
+
+                <!-- ROW 2: QUEUES / ENGINE / LEASES -->
+
+                <!-- 2.1 Pending Queue -->
+                <div id="node-pending" class="glass-panel rounded-xl p-5 border-l-4 border-l-emerald-500">
                     <div class="flex justify-between items-start">
                         <div>
-                            <div class="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">Source</div>
-                            <div class="text-xl font-bold text-white"><i class="fa-solid fa-code-branch mr-2 text-slate-400"></i>Producer</div>
+                            <div class="label-micro text-emerald-500">PRIORITY QUEUES</div>
+                            <div class="text-lg font-bold text-white">PENDING</div>
                         </div>
-                        <div class="px-2 py-1 bg-slate-800 rounded text-[10px] font-mono text-slate-400">Agent/CLI</div>
+                        <i class="fa-solid fa-layer-group text-emerald-500 opacity-50"></i>
                     </div>
-                    <div class="text-xs text-slate-400 font-mono bg-black/40 p-3 rounded border border-slate-800/50">
-                        POST /v1/codeq/tasks<br>
-                        Bearer Token
+                    <div class="space-y-1 mt-2">
+                        <div class="h-2 w-full bg-emerald-900/50 rounded overflow-hidden"><div class="h-full w-3/4 bg-emerald-500/50"></div></div>
+                        <div class="h-2 w-full bg-emerald-900/50 rounded overflow-hidden"><div class="h-full w-1/2 bg-emerald-500/30"></div></div>
+                        <div class="h-2 w-full bg-emerald-900/50 rounded overflow-hidden"><div class="h-full w-1/4 bg-emerald-500/20"></div></div>
+                    </div>
+                    <div class="text-[10px] text-slate-500 font-mono mt-2 text-right">Tier 9..0</div>
+                </div>
+
+                <!-- 2.2 Scheduler Core -->
+                <div id="node-scheduler" class="glass-panel rounded-xl p-5 border-x-4 border-x-cyan-600 bg-slate-900/60">
+                    <div class="text-center">
+                        <div class="label-micro text-cyan-500">CORE LOGIC</div>
+                        <div class="text-xl font-bold text-white mb-2">SCHEDULER</div>
+                    </div>
+                    <div class="flex-1 flex items-center justify-center relative">
+                         <!-- Visual representation of RPOPLPUSH -->
+                         <div class="absolute inset-0 border border-dashed border-slate-700 rounded-full animate-[spin_10s_linear_infinite]"></div>
+                         <i class="fa-solid fa-arrows-rotate text-3xl text-slate-600"></i>
+                         <div class="absolute bg-slate-900 px-2 text-[10px] font-mono text-cyan-400">RPOPLPUSH</div>
                     </div>
                 </div>
 
-                <!-- 2. API Server (was Reasoner) -->
-                <div id="node-reasoner" class="glass-panel rounded-xl p-6 h-[180px] self-start col-start-2 border-t-4 border-t-cyan-500 flex flex-col justify-between">
+                <!-- 2.3 Active Leases -->
+                <div id="node-leases" class="glass-panel rounded-xl p-5 border-r-4 border-r-pink-500">
                     <div class="flex justify-between items-start">
-                        <div>
-                            <div class="text-[10px] font-mono text-cyan-500 uppercase tracking-wider mb-1">Control Plane</div>
-                            <h3 class="text-2xl font-bold text-white tracking-tight">API SERVER</h3>
-                        </div>
-                        <div class="px-2 py-1 bg-cyan-950/30 border border-cyan-500/20 rounded text-[10px] font-mono text-cyan-400">pkg/app</div>
-                    </div>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div class="bg-slate-900/50 p-2 rounded border border-slate-800 text-center">
-                            <div class="text-[9px] text-slate-500 font-bold uppercase">Validation</div>
-                            <div class="text-xs text-white font-mono mt-1">Identity/JWKS</div>
-                        </div>
-                        <div class="bg-slate-900/50 p-2 rounded border border-slate-800 text-center">
-                            <div class="text-[9px] text-slate-500 font-bold uppercase">Routing</div>
-                            <div class="text-xs text-white font-mono mt-1">Priority 0-9</div>
+                        <i class="fa-solid fa-stopwatch text-pink-500 opacity-50"></i>
+                        <div class="text-right">
+                            <div class="label-micro text-pink-500">STATE TRACKING</div>
+                            <div class="text-lg font-bold text-white">IN-PROGRESS</div>
                         </div>
                     </div>
-                </div>
-
-                <!-- 3. Worker (was Codex) -->
-                <div id="node-codex" class="glass-panel rounded-xl p-4 h-[280px] flex flex-col gap-2 col-start-3 row-span-2 self-center border-r-4 border-r-pink-500">
-                    <div class="flex flex-col gap-1 mb-2">
-                        <div class="text-[10px] font-mono text-pink-500 uppercase tracking-wider">Consumer</div>
-                        <h3 class="text-xl font-bold text-white">Worker Pool</h3>
-                        <div class="text-[10px] font-mono text-slate-500">External Agent</div>
-                    </div>
-                    <div class="flex-1 flex flex-col gap-2 justify-center">
-                        <div class="p-2 bg-pink-950/10 border border-pink-500/20 rounded">
-                            <div class="flex items-center gap-2 text-pink-400 text-xs font-bold mb-1"><i class="fa-solid fa-download"></i> PULL (Claim)</div>
-                            <div class="text-[10px] text-slate-400">Lease: 60s</div>
+                    <div class="grid grid-cols-2 gap-2 mt-4">
+                        <div class="bg-pink-900/20 border border-pink-500/30 p-2 rounded text-center">
+                            <div class="text-lg font-bold text-pink-400">60s</div>
+                            <div class="text-[8px] text-pink-300">TTL</div>
                         </div>
-                        <div class="flex justify-center text-slate-600"><i class="fa-solid fa-arrows-rotate fa-spin"></i></div>
-                        <div class="p-2 bg-pink-950/10 border border-pink-500/20 rounded">
-                            <div class="flex items-center gap-2 text-pink-400 text-xs font-bold mb-1"><i class="fa-solid fa-check"></i> RESULT</div>
-                            <div class="text-[10px] text-slate-400">Completed / Failed</div>
+                        <div class="bg-slate-800/50 border border-slate-700 p-2 rounded text-center">
+                            <div class="text-lg font-bold text-slate-300">Heartbeat</div>
+                            <div class="text-[8px] text-slate-500">Active</div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 4. Queue Lists (was Execution Layer) -->
-                <div class="col-start-2 row-start-2 grid grid-cols-2 gap-6 h-[300px]">
-                    <!-- Priority/Pending Queue -->
-                    <div id="node-cot" class="glass-panel rounded-xl p-5 border-l-4 border-l-slate-600 flex flex-col">
-                        <div class="flex justify-between items-center mb-4">
-                            <h4 class="text-white font-bold"><i class="fa-solid fa-list-ol text-slate-500 mr-2"></i>Pending</h4>
-                            <span class="text-[9px] bg-slate-800 px-2 py-1 rounded text-slate-400 font-mono">Lists</span>
-                        </div>
-                        <div class="flex-1 bg-slate-900/30 rounded border border-slate-800/50 p-3 flex flex-col justify-center gap-2">
-                            <div class="flex items-center gap-2">
-                                <div class="w-2 h-2 bg-emerald-500 rounded-full"></div>
-                                <span class="text-xs text-slate-400 font-mono">pending:9 (High)</span>
-                            </div>
-                            <div class="h-4 border-l border-slate-700 ml-1"></div>
-                            <div class="flex items-center gap-2">
-                                <div class="w-2 h-2 bg-slate-500 rounded-full"></div>
-                                <span class="text-xs text-slate-400 font-mono">pending:0 (Low)</span>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Lease/In-Progress -->
-                    <div id="node-got" class="glass-panel rounded-xl p-5 border-l-4 border-l-violet-500 flex flex-col relative overflow-hidden">
-                        <div class="absolute top-0 right-0 p-2 opacity-10"><i class="fa-solid fa-stopwatch text-6xl text-violet-500"></i></div>
-                        <div class="flex justify-between items-center mb-4 relative z-10">
-                            <h4 class="text-white font-bold"><i class="fa-solid fa-lock text-violet-400 mr-2"></i>Lease Mgr</h4>
-                            <span class="text-[9px] bg-violet-900/30 border border-violet-500/30 px-2 py-1 rounded text-violet-300 font-mono">RPOPLPUSH</span>
+                <!-- ROW 3: RETRY / STORAGE / RESULT -->
+
+                <!-- 3.1 Delayed/DLQ -->
+                <div id="node-delayed" class="glass-panel rounded-xl p-5 border-b-4 border-b-yellow-500">
+                    <div>
+                        <div class="label-micro text-yellow-500">RETRY LOGIC</div>
+                        <div class="text-lg font-bold text-white">DELAYED / DLQ</div>
+                    </div>
+                    <div class="mt-2 flex gap-2">
+                        <div class="flex-1 bg-yellow-900/20 p-2 rounded border border-yellow-500/20">
+                            <i class="fa-solid fa-clock-rotate-left text-yellow-500 mb-1"></i>
+                            <div class="text-[9px] text-yellow-200">Backoff</div>
                         </div>
-                        <div class="flex-1 grid grid-rows-2 gap-3 relative z-10">
-                            <div class="bg-slate-900/50 rounded border border-slate-700 p-2 flex items-center justify-between">
-                                <span class="text-[10px] text-slate-400 font-bold">IN_PROGRESS</span>
-                                <div class="flex gap-1">
-                                    <div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>
-                                    <div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>
-                                </div>
-                            </div>
-                            <div class="bg-cyan-950/20 rounded border border-cyan-500/30 p-2 flex flex-col justify-center">
-                                <span class="text-[10px] text-cyan-400 font-bold mb-1">TTL MONITOR</span>
-                                <div class="text-[10px] text-slate-300 font-mono">codeq:lease:uuid</div>
-                                <div class="text-[10px] text-slate-300 font-mono">Heartbeats...</div>
-                            </div>
+                         <div class="flex-1 bg-red-900/20 p-2 rounded border border-red-500/20 opacity-50">
+                            <i class="fa-solid fa-skull text-red-500 mb-1"></i>
+                            <div class="text-[9px] text-red-200">Dead</div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 5. KVRocks (was Storage) -->
-                <div id="node-store" class="col-span-3 glass-panel rounded-xl p-3 mt-auto border-b-4 border-b-emerald-500 bg-[#0a0f1e] flex items-center justify-between">
-                    <div class="flex items-center gap-4">
-                        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
-                            <i class="fa-solid fa-hard-drive text-lg"></i>
-                        </div>
-                        <div>
-                            <h3 class="text-base font-bold text-white">KVROCKS STORE</h3>
-                            <div class="text-[10px] text-slate-500 font-mono">internal/kvrocks (RocksDB/SSD)</div>
-                        </div>
+                <!-- 3.2 KVRocks Storage -->
+                <div id="node-kvrocks" class="glass-panel rounded-xl p-5 border-b-4 border-b-white bg-slate-950">
+                    <div class="text-center">
+                        <div class="label-micro text-white">PERSISTENCE LAYER</div>
+                        <div class="text-xl font-bold text-white"><i class="fa-solid fa-database text-slate-400 mr-2"></i> KVROCKS</div>
                     </div>
-                    <div class="flex gap-3">
-                        <div class="px-3 py-1 bg-slate-900 rounded border border-slate-800 flex items-center gap-2">
-                            <i class="fa-regular fa-file-code text-slate-500 text-[10px]"></i>
-                            <div class="text-[10px] text-slate-300 font-mono">codeq:tasks (Hash)</div>
-                        </div>
-                        <div class="px-3 py-1 bg-slate-900 rounded border border-slate-800 flex items-center gap-2">
-                            <i class="fa-solid fa-list-ol text-slate-500 text-[10px]"></i>
-                            <div class="text-[10px] text-slate-300 font-mono">codeq:results (Hash)</div>
-                        </div>
-                        <div class="px-3 py-1 bg-slate-900 rounded border border-slate-800 flex items-center gap-2">
-                            <i class="fa-solid fa-clock text-slate-500 text-[10px]"></i>
-                            <div class="text-[10px] text-slate-300 font-mono">codeq:delayed (ZSet)</div>
+                    <div class="mt-4 flex justify-center gap-4">
+                         <div class="text-center">
+                             <div class="w-16 h-8 bg-slate-800 rounded border border-slate-700 mx-auto mb-1"></div>
+                             <div class="text-[9px] text-slate-500">SSD (RocksDB)</div>
+                         </div>
+                         <div class="text-center">
+                             <div class="w-16 h-8 bg-slate-800 rounded border border-slate-700 mx-auto mb-1"></div>
+                             <div class="text-[9px] text-slate-500">Lists/Hash</div>
+                         </div>
+                    </div>
+                </div>
+
+                <!-- 3.3 Results -->
+                <div id="node-results" class="glass-panel rounded-xl p-5 border-b-4 border-b-blue-500">
+                    <div class="text-right">
+                        <div class="label-micro text-blue-500">FINAL STATE</div>
+                        <div class="text-lg font-bold text-white">RESULTS</div>
+                    </div>
+                    <div class="mt-3 bg-blue-900/20 p-2 rounded border border-blue-500/20 flex items-center justify-between">
+                        <i class="fa-solid fa-file-code text-blue-400"></i>
+                        <div class="text-right">
+                            <div class="text-[10px] text-blue-200 font-mono">task_id.json</div>
+                            <div class="text-[8px] text-blue-400">COMPLETED</div>
                         </div>
                     </div>
                 </div>
@@ -485,128 +507,145 @@
         const stepCounter = document.getElementById("step-counter");
         const btnNext = document.getElementById("btn-next");
         const btnPrev = document.getElementById("btn-prev");
-        const allNodes = document.querySelectorAll(".glass-panel");
         const connectorLayer = document.getElementById("connector-layer");
 
+        // Helper to find connections
+        // We will define paths dynamically based on the step
         const steps = [
             {
-                title: "1. The Producer",
-                tag: "ENQUEUE",
-                content: "The workflow begins with an Agent or Service creating a task via the HTTP API (<code>POST /tasks</code>) or CLI. The payload contains the routing key (event type) and JSON data.",
-                activeNodes: ["node-cli"],
-                connections: []
+                title: "1. Task Creation",
+                tag: "PRODUCER",
+                content: "O <strong>Producer</strong> envia uma requisição POST com o payload da tarefa. O <strong>API Server</strong> recebe, autentica o token JWT e valida os parâmetros.",
+                nodes: ["node-producer", "node-api"],
+                links: [["node-producer", "node-api"]]
             },
             {
-                title: "2. Validation & Routing",
-                tag: "API SERVER",
-                content: "The API Server authenticates the producer token. It serializes the task into a JSON record and determines the priority tier (0-9).",
-                activeNodes: ["node-cli", "node-reasoner"],
-                connections: [["node-cli", "node-reasoner"]]
+                title: "2. Priority Enqueue",
+                tag: "SCHEDULING",
+                content: "O <strong>API Server</strong> determina a prioridade (0-9) e insere o ID da tarefa na fila <strong>Pending</strong> correta. O payload completo é persistido no <strong>KVRocks</strong>.",
+                nodes: ["node-api", "node-pending", "node-kvrocks"],
+                links: [["node-api", "node-pending"], ["node-api", "node-kvrocks"]]
             },
             {
-                title: "3. Persistence & Queuing",
-                tag: "WRITE OPS",
-                content: "The task is persisted to <strong>KVRocks</strong> (Disk). The Task ID is pushed to the appropriate <code>pending:N</code> list. This ensures <strong>O(1)</strong> enqueue time regardless of queue depth.",
-                activeNodes: ["node-reasoner", "node-store", "node-cot"],
-                connections: [["node-reasoner", "node-store"], ["node-reasoner", "node-cot"]]
+                title: "3. Worker Poll",
+                tag: "CLAIM",
+                content: "O <strong>Worker</strong> faz polling ou recebe um sinal de webhook. Ele solicita uma tarefa (Claim) ao <strong>API Server</strong>.",
+                nodes: ["node-worker", "node-api"],
+                links: [["node-worker", "node-api"]]
             },
             {
-                title: "4. The Claim (Pull)",
-                tag: "LEASE GRANT",
-                content: "A Worker polls <code>/claim</code>. The Scheduler atomically moves the ID from Pending to In-Progress (RPOPLPUSH). An exclusive <strong>Lease Key</strong> is created with a TTL (e.g., 60s).",
-                activeNodes: ["node-codex", "node-got", "node-cot"],
-                connections: [["node-cot", "node-got"], ["node-got", "node-codex"]]
+                title: "4. Atomic Lease",
+                tag: "LOGIC",
+                content: "O <strong>Scheduler</strong> executa `RPOPLPUSH` atômico. Move a tarefa de <strong>Pending</strong> para <strong>In-Progress</strong> e cria uma chave de Lease com TTL.",
+                nodes: ["node-api", "node-scheduler", "node-pending", "node-leases"],
+                links: [["node-api", "node-scheduler"], ["node-scheduler", "node-pending"], ["node-scheduler", "node-leases"]]
             },
             {
-                title: "5. Execution & Heartbeats",
+                title: "5. Execution",
                 tag: "PROCESSING",
-                content: "The Worker processes the payload. If the task takes longer than the lease, the worker sends <strong>Heartbeats</strong> to extend the TTL. If it crashes, the lease expires and the task is requeued.",
-                activeNodes: ["node-codex", "node-got"],
-                connections: [["node-codex", "node-got"]]
+                content: "O <strong>Worker</strong> recebe a tarefa e começa o processamento. Ele deve enviar <strong>Heartbeats</strong> periodicamente para renovar o TTL no <strong>In-Progress</strong>.",
+                nodes: ["node-worker", "node-leases"],
+                links: [["node-worker", "node-leases"]]
             },
             {
-                title: "6. Completion",
-                tag: "RESULT STORAGE",
-                content: "Upon success, the Worker submits the result. codeQ stores the output in the <code>results</code> hash, clears the lease, and triggers any configured Webhooks.",
-                activeNodes: ["node-codex", "node-store"],
-                connections: [["node-codex", "node-store"]]
+                title: "6. Failure / Nack",
+                tag: "RETRY",
+                content: "Se falhar, o worker envia Nack (ou o TTL expira). A tarefa move-se para <strong>Delayed</strong> com um backoff calculado. Após o tempo, volta para <strong>Pending</strong>.",
+                nodes: ["node-leases", "node-delayed", "node-pending"],
+                links: [["node-leases", "node-delayed"], ["node-delayed", "node-pending"]]
+            },
+            {
+                title: "7. Completion",
+                tag: "SUCCESS",
+                content: "No sucesso, o Worker envia o resultado. O sistema remove o Lease de <strong>In-Progress</strong> e grava o output em <strong>Results</strong>.",
+                nodes: ["node-worker", "node-results", "node-leases"],
+                links: [["node-worker", "node-results"], ["node-results", "node-leases"]]
+            },
+            {
+                title: "8. Persistence",
+                tag: "STORAGE",
+                content: "Todos os estados finais e payloads são garantidos no disco via <strong>KVRocks</strong> (SSD), liberando RAM e garantindo durabilidade.",
+                nodes: ["node-results", "node-kvrocks"],
+                links: [["node-results", "node-kvrocks"]]
             }
         ];
 
         let currentStep = -1;
 
-        function updateLines(connections) {
-            document.querySelectorAll(".connector-line").forEach(line => {
-                line.classList.remove("active");
-                line.setAttribute("d", "");
-            });
+        function drawLines(links) {
+            // Clear existing lines
+            connectorLayer.innerHTML = "";
 
-            connections.forEach(([sourceId, targetId]) => {
-                const source = document.getElementById(sourceId);
-                const target = document.getElementById(targetId);
-                const lineId = `line-${sourceId.replace("node-","")}-${targetId.replace("node-","")}`;
-                let path = document.getElementById(lineId);
+            links.forEach(([startId, endId]) => {
+                const startEl = document.getElementById(startId);
+                const endEl = document.getElementById(endId);
                 
-                if (!path) {
-                    path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-                    path.setAttribute("id", lineId);
-                    path.classList.add("connector-line");
-                    connectorLayer.appendChild(path);
+                if(!startEl || !endEl) return;
+
+                const startRect = startEl.getBoundingClientRect();
+                const endRect = endEl.getBoundingClientRect();
+                const containerRect = document.querySelector(".arch-grid").getBoundingClientRect();
+
+                // Calculate centers relative to SVG container
+                const x1 = startRect.left + startRect.width / 2 - containerRect.left;
+                const y1 = startRect.top + startRect.height / 2 - containerRect.top;
+                const x2 = endRect.left + endRect.width / 2 - containerRect.left;
+                const y2 = endRect.top + endRect.height / 2 - containerRect.top;
+
+                const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                
+                // Draw Curve
+                const deltaX = Math.abs(x2 - x1);
+                const deltaY = Math.abs(y2 - y1);
+                
+                let d = "";
+                // If vertical alignment is close
+                if (deltaX < 50) {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                } 
+                // If horizontal alignment is close
+                else if (deltaY < 50) {
+                    d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                } 
+                // Curve
+                else {
+                    const cp1x = x1; 
+                    const cp1y = y1 + (y2 - y1) * 0.5;
+                    const cp2x = x2;
+                    const cp2y = y2 - (y2 - y1) * 0.5;
+                    d = `M ${x1} ${y1} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${x2} ${y2}`;
                 }
 
-                if (source && target) {
-                    const srcRect = source.getBoundingClientRect();
-                    const tgtRect = target.getBoundingClientRect();
-                    const containerRect = document.querySelector(".arch-grid").getBoundingClientRect();
-
-                    const startX = srcRect.left + srcRect.width / 2 - containerRect.left;
-                    const startY = srcRect.top + srcRect.height / 2 - containerRect.top;
-                    const endX = tgtRect.left + tgtRect.width / 2 - containerRect.left;
-                    const endY = tgtRect.top + tgtRect.height / 2 - containerRect.top;
-
-                    let d = "";
-                    if (Math.abs(endX - startX) < 50) {
-                        d = `M ${startX} ${startY} L ${endX} ${endY}`;
-                    } else if (Math.abs(endY - startY) < 50) {
-                        d = `M ${startX} ${startY} L ${endX} ${endY}`;
-                    } else {
-                        const cp1x = startX;
-                        const cp1y = startY + (endY - startY) * 0.5;
-                        const cp2x = endX;
-                        const cp2y = endY - (endY - startY) * 0.5;
-                        d = `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`;
-                    }
-
-                    path.setAttribute("d", d);
-                    setTimeout(() => path.classList.add("active"), 10);
-                }
-            });
-        }
-
-        function resetView() {
-            allNodes.forEach(n => {
-                n.classList.remove("active");
-                n.classList.add("dimmed");
+                path.setAttribute("d", d);
+                path.classList.add("connector-line", "active");
+                connectorLayer.appendChild(path);
             });
         }
 
         function renderStep(index) {
-            resetView();
-            const data = steps[index];
+            const step = steps[index];
             
+            // Update Narrative
             narrativeBox.innerHTML = `
                 <div class="animate-[fade-in_0.4s_ease-out]">
-                    <div class="font-mono text-[10px] font-bold mb-4 px-2 py-1 rounded w-fit bg-cyan-900/30 text-cyan-400 border border-cyan-500/30 tracking-widest uppercase">
-                        // ${data.tag}
+                    <div class="font-mono text-[10px] font-bold mb-3 px-2 py-1 rounded w-fit bg-cyan-900/30 text-cyan-400 border border-cyan-500/30 tracking-widest uppercase">
+                        // ${step.tag}
                     </div>
-                    <h2 class="text-3xl font-display font-bold mb-6 text-white leading-tight">${data.title}</h2>
-                    <div class="text-base leading-7 text-slate-300 font-light border-l-2 border-cyan-500/50 pl-5">
-                        ${data.content}
+                    <h2 class="text-2xl font-display font-bold mb-4 text-white leading-tight">${step.title}</h2>
+                    <div class="text-sm leading-6 text-slate-300 font-light border-l-2 border-cyan-500/50 pl-4">
+                        ${step.content}
                     </div>
                 </div>
             `;
 
-            data.activeNodes.forEach(id => {
+            // Dim all nodes first
+            document.querySelectorAll(".glass-panel").forEach(el => {
+                el.classList.remove("active");
+                el.classList.add("dimmed");
+            });
+
+            // Highlight active nodes
+            step.nodes.forEach(id => {
                 const el = document.getElementById(id);
                 if(el) {
                     el.classList.remove("dimmed");
@@ -614,22 +653,22 @@
                 }
             });
 
-            updateLines(data.connections);
+            // Draw connections
+            drawLines(step.links);
 
+            // Update UI Controls
             stepCounter.innerText = `${index + 1} / ${steps.length}`;
             progressBar.style.width = `${((index + 1) / steps.length) * 100}%`;
             
             btnPrev.disabled = index === 0;
             
             if (index === steps.length - 1) {
-                btnNext.innerHTML = "<span>RESTART LOG</span><i class=\"fa-solid fa-rotate-left text-emerald-400\"></i>";
-                btnNext.className = "flex-1 px-6 py-3 rounded bg-emerald-900/30 text-emerald-400 border border-emerald-500/50 font-mono text-xs font-bold transition-all flex items-center justify-center gap-2 hover:bg-emerald-900/50";
+                btnNext.innerHTML = "<span>RESTART</span><i class=\"fa-solid fa-rotate-left text-emerald-400\"></i>";
                 btnNext.onclick = startTour;
             } else {
-                btnNext.innerHTML = "<span>NEXT STEP</span><i class=\"fa-solid fa-arrow-right text-cyan-400 group-hover:translate-x-1 transition-transform\"></i>";
-                btnNext.className = "flex-1 px-6 py-3 rounded bg-cyan-950/50 text-cyan-400 border border-cyan-500/30 font-mono text-xs font-bold transition-all flex items-center justify-center gap-2 hover:bg-cyan-900/50 group";
-                btnNext.disabled = false;
+                btnNext.innerHTML = "<span>NEXT</span><i class=\"fa-solid fa-chevron-right text-cyan-400\"></i>";
                 btnNext.onclick = nextStep;
+                btnNext.disabled = false;
             }
         }
 
@@ -652,13 +691,8 @@
             }
         }
 
-        window.addEventListener("resize", () => {
-            if (currentStep >= 0) {
-                updateLines(steps[currentStep].connections);
-            }
-        });
-
-        resetView();
+        // Initialize state
+        document.querySelectorAll(".glass-panel").forEach(el => el.classList.add("dimmed"));
     </script>
 </body>
 </html>' 
@@ -928,7 +962,9 @@
                     </ul>
                 </div>
             </div>
-
+            <div class="text-center text-[10px] text-brand-muted border-t border-brand-border pt-8 uppercase tracking-widest">
+                © 2026 codeQ Engineering. Tasks persist.
+            </div>
         </div>
     </footer>
 
