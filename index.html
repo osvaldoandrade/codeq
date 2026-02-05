@@ -4,10 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>codeQ | The Queue for Event-Driven Agents</title>
-    <meta name="description" content="Persistent task scheduling for agents and microservices. KVRocks backed. CLI included.">
-    
+    <meta name="description" content="codeQ is a reactive scheduling system backed by KVRocks. Persistent queues, strict leases, and O(1) operations on SSD.">
+    <meta name="theme-color" content="#020617">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="codeQ | The Queue for Event-Driven Agents">
+    <meta property="og:description" content="Reactive scheduling and completion system backed by persistent queues in KVRocks.">
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -26,19 +35,19 @@
                     },
                     colors: {
                         brand: {
-                            bg: '#0B0F19',       // Deep background
-                            surface: '#151B2B',  // Card background
-                            border: '#2D3748',   // Border
-                            primary: '#3B82F6',  // Blue 500
-                            accent: '#10B981',   // Emerald 500
-                            error: '#EF4444',    // Red 500
-                            text: '#E2E8F0',     // Slate 200
-                            muted: '#94A3B8'     // Slate 400
+                            bg: '#020617',       // Slate 950
+                            surface: '#0f172a',  // Slate 900
+                            border: '#1e293b',   // Slate 800
+                            primary: '#06b6d4',  // Cyan 500
+                            secondary: '#8b5cf6',// Violet 500
+                            success: '#10b981',  // Emerald 500
+                            error: '#f43f5e',    // Rose 500
+                            text: '#f8fafc',     // Slate 50
+                            muted: '#64748b'     // Slate 500
                         }
                     },
                     backgroundImage: {
                         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-                        'hero-glow': 'conic-gradient(from 90deg at 50% 50%, #0B0F19 0%, #172033 50%, #0B0F19 100%)',
                     }
                 }
             }
@@ -46,493 +55,1007 @@
     </script>
     <style>
         body {
-            background-color: #0B0F19;
-            color: #E2E8F0;
+            background-color: #020617;
+            color: #f8fafc;
         }
         
-        /* Custom Utilities */
         .glass-panel {
-            background: rgba(21, 27, 43, 0.7);
+            background: rgba(15, 23, 42, 0.8);
             backdrop-filter: blur(12px);
-            border: 1px solid rgba(45, 55, 72, 0.5);
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid #1e293b;
+            transition: all 0.3s ease;
         }
-
-        .code-block {
-            background: #0D1117;
-            border: 1px solid #30363D;
+        
+        .glass-panel:hover {
+            border-color: #06b6d4;
+            box-shadow: 0 4px 30px -5px rgba(6, 182, 212, 0.2);
         }
 
         .glow-text {
-            text-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
+            text-shadow: 0 0 20px rgba(6, 182, 212, 0.6);
         }
 
-        /* Animations */
-        @keyframes flowLine {
-            0% { stroke-dashoffset: 1000; }
-            100% { stroke-dashoffset: 0; }
-        }
-        
-        .animate-flow {
-            animation: flowLine 20s linear infinite;
+        .chart-container {
+            position: relative;
+            width: 100%;
+            height: 300px;
         }
 
-        .feature-card:hover {
-            transform: translateY(-4px);
-            border-color: #3B82F6;
-            box-shadow: 0 10px 40px -10px rgba(59, 130, 246, 0.2);
+        .reveal {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.8s cubic-bezier(0.5, 0, 0, 1);
+        }
+        .reveal.active {
+            opacity: 1;
+            transform: translateY(0);
         }
 
-        /* FAQ Details Animation */
-        details > summary {
-            list-style: none;
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #020617; }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+        .tree-line-v { width: 1px; background-color: #1e293b; margin: 0 auto; }
+        .tree-line-h { height: 1px; background-color: #1e293b; }
+
+        .blink {
+            animation: blinker 1s linear infinite;
         }
-        details > summary::-webkit-details-marker {
-            display: none;
+        @keyframes blinker {
+            50% { opacity: 0; }
+        }
+
+        code { font-family: 'JetBrains Mono', monospace; }
+
+        .stat-card {
+            border-left: 2px solid #06b6d4;
+            padding-left: 1rem;
         }
     </style>
 </head>
-<body class="antialiased selection:bg-brand-primary selection:text-white">
+<body class="antialiased selection:bg-brand-primary selection:text-white font-mono">
 
-    <!-- Navigation -->
-    <nav class="fixed top-0 w-full z-50 border-b border-brand-border/40 bg-brand-bg/80 backdrop-blur-md">
+    <!-- Navbar -->
+    <nav class="fixed top-0 w-full z-50 border-b border-brand-border bg-brand-bg/90 backdrop-blur-md">
         <div class="container mx-auto px-6 h-16 flex items-center justify-between">
             <div class="flex items-center gap-3">
-                <span class="font-display font-bold text-2xl tracking-tight text-white hover:text-brand-primary transition-colors cursor-pointer">codeQ</span>
+                <span class="font-display font-bold text-xl tracking-tight text-white hover:text-brand-primary transition-colors cursor-pointer uppercase">
+                    <span class="text-brand-primary">::</span> codeQ
+                </span>
             </div>
             
-            <div class="hidden md:flex items-center gap-8 text-sm font-medium text-brand-muted">
-                <a href="#agents" class="hover:text-white transition-colors">Agents</a>
-                <a href="#cli" class="hover:text-white transition-colors">CLI</a>
-                <a href="#architecture" class="hover:text-white transition-colors">Architecture</a>
-                <a href="#api" class="hover:text-white transition-colors">API</a>
-                <a href="#faq" class="hover:text-white transition-colors">FAQ</a>
+            <div class="hidden md:flex items-center gap-8 text-xs font-bold uppercase tracking-widest text-brand-muted">
+                <a href="#overview" class="hover:text-white transition-colors">[Overview]</a>
+                <a href="#architecture" class="hover:text-white transition-colors">[Architecture]</a>
+                <a href="#performance" class="hover:text-white transition-colors">[Performance]</a>
+                <a href="#faq" class="hover:text-white transition-colors">[FAQ]</a>
             </div>
 
             <div class="flex items-center gap-4">
-                <a href="https://github.com/osvaldoandrade/codeq" class="text-brand-muted hover:text-white transition-colors">
-                    <i class="fa-brands fa-github text-xl"></i>
-                </a>
-                <a href="#get-started" class="hidden sm:block px-4 py-2 bg-brand-primary hover:bg-blue-600 text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-blue-500/20">
+                <a href="#get-started" class="hidden sm:inline-flex items-center justify-center px-4 py-2 text-xs font-bold text-black bg-white uppercase tracking-wide hover:bg-gray-200 transition-colors">
                     Get Started
+                </a>
+                <a href="https://github.com/osvaldoandrade/codeq" target="_blank" class="text-brand-muted hover:text-white transition-colors">
+                    <i class="fa-brands fa-github text-lg"></i>
                 </a>
             </div>
         </div>
     </nav>
 
     <!-- Hero Section -->
-    <header class="relative pt-32 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
-        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[600px] bg-gradient-radial from-brand-primary/10 to-transparent opacity-50 pointer-events-none"></div>
-        
-        <div class="container mx-auto px-6 relative z-10">
-            <div class="max-w-4xl mx-auto text-center">
-                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-surface border border-brand-border mb-8 animate-fade-in-up">
-                    <span class="w-2 h-2 rounded-full bg-brand-accent animate-pulse"></span>
-                    <span class="text-xs font-mono text-brand-muted uppercase tracking-wider">v1.0 • Stable</span>
-                </div>
+    <header class="relative pt-32 lg:pt-48 pb-12 overflow-hidden">
+        <!-- Ambient Glow -->
+        <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full h-[600px] bg-gradient-radial from-brand-primary/10 to-transparent opacity-40 pointer-events-none"></div>
 
-                <h1 class="text-5xl md:text-7xl font-display font-bold leading-tight mb-6 bg-clip-text text-transparent bg-gradient-to-b from-white to-brand-muted glow-text">
-                    The Queue for <br>
-                    <span class="text-brand-primary">Event-Driven Agents.</span>
-                </h1>
-                
-                <p class="text-lg md:text-xl text-brand-muted leading-relaxed max-w-2xl mx-auto mb-10">
-                    Designed for autonomous systems. Agents can spawn tasks, 
-                    deploy workers, and manage queues programmatically via API or CLI.
-                    Backed by KVRocks persistence.
-                </p>
-
-                <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
-                    <a href="#cli" class="w-full sm:w-auto px-8 py-3.5 bg-white text-brand-bg font-bold rounded-xl hover:bg-gray-100 transition-colors flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-terminal"></i> Try the CLI
-                    </a>
-                    <a href="https://github.com/osvaldoandrade/codeq/tree/main/docs" class="w-full sm:w-auto px-8 py-3.5 border border-brand-border bg-brand-surface text-brand-text font-medium rounded-xl hover:border-brand-primary transition-colors">
-                        Documentation
-                    </a>
-                </div>
-
-                <!-- Tech Stack Badges -->
-                <div class="mt-12 flex flex-wrap justify-center gap-6 opacity-80 hover:opacity-100 transition-all duration-500">
-                    <div class="flex items-center gap-2 text-sm font-mono border border-brand-border px-3 py-1 rounded-full bg-brand-surface/50">
-                        <i class="fa-solid fa-robot text-cyan-400 text-lg"></i> Agent Ready
-                    </div>
-                    <div class="flex items-center gap-2 text-sm font-mono border border-brand-border px-3 py-1 rounded-full bg-brand-surface/50">
-                        <i class="fa-solid fa-terminal text-emerald-400 text-lg"></i> Native CLI
-                    </div>
-                    <div class="flex items-center gap-2 text-sm font-mono border border-brand-border px-3 py-1 rounded-full bg-brand-surface/50">
-                        <i class="fa-solid fa-database text-red-400 text-lg"></i> KVRocks
-                    </div>
-                </div>
-            </div>
+        <div class="container mx-auto px-4 text-center relative z-10">
+            <h1 class="text-4xl md:text-7xl font-display font-bold leading-none mb-6 text-white tracking-tight reveal">
+                The Queue for <span class="text-brand-primary glow-text">Agents</span>.
+            </h1>
+            
+            <p class="text-lg text-brand-muted max-w-2xl mx-auto mb-10 font-sans reveal" style="transition-delay: 100ms;">
+                Reactive task scheduling backed by KVRocks on SSDs. <br class="hidden md:block" />
+                Persistent queues, strict lease ownership, and O(1) operations at a fraction of the cost.
+            </p>
         </div>
     </header>
 
-    <!-- Features / Agentic Focus -->
-    <section id="agents" class="py-24 bg-brand-surface/30 border-y border-brand-border/30">
-        <div class="container mx-auto px-6">
-            <div class="grid md:grid-cols-3 gap-8">
-                <!-- Feature 1 -->
-                <div class="glass-panel p-8 rounded-2xl feature-card transition-all duration-300">
-                    <div class="w-12 h-12 bg-blue-500/10 rounded-lg flex items-center justify-center mb-6 border border-blue-500/20">
-                        <i class="fa-solid fa-network-wired text-blue-500 text-xl"></i>
-                    </div>
-                    <h3 class="text-xl font-display font-bold mb-3 text-white">Agent Orchestration</h3>
-                    <p class="text-brand-muted leading-relaxed">
-                        Agents aren't just workers. They can operate codeQ to spin up new queues, define event types, and trigger downstream flows autonomously.
-                    </p>
-                </div>
+    <main class="space-y-32 pb-32">
 
-                <!-- Feature 2 -->
-                <div class="glass-panel p-8 rounded-2xl feature-card transition-all duration-300">
-                    <div class="w-12 h-12 bg-emerald-500/10 rounded-lg flex items-center justify-center mb-6 border border-emerald-500/20">
-                        <i class="fa-solid fa-terminal text-emerald-500 text-xl"></i>
-                    </div>
-                    <h3 class="text-xl font-display font-bold mb-3 text-white">Powerful CLI</h3>
-                    <p class="text-brand-muted leading-relaxed">
-                        Full control from the terminal. Inspect queue depth, retry DLQ items, or provision new worker pools with simple commands.
-                    </p>
-                </div>
-
-                <!-- Feature 3 -->
-                <div class="glass-panel p-8 rounded-2xl feature-card transition-all duration-300">
-                    <div class="w-12 h-12 bg-purple-500/10 rounded-lg flex items-center justify-center mb-6 border border-purple-500/20">
-                        <i class="fa-solid fa-server text-purple-500 text-xl"></i>
-                    </div>
-                    <h3 class="text-xl font-display font-bold mb-3 text-white">Disk Persistence</h3>
-                    <p class="text-brand-muted leading-relaxed">
-                        codeQ leverages <strong>KVRocks</strong> on SSDs. Operations remain <strong>O(1)</strong>, with only a constant latency overhead (RAM vs SSD) compared to in-memory Redis.
-                    </p>
+        <!-- SECTION: VIDEO OVERVIEW (FIRST) -->
+        <section id="overview" class="container mx-auto px-4 reveal">
+            <div class="max-w-4xl mx-auto border border-brand-border bg-black shadow-2xl p-1 relative group">
+                <div class="relative w-full pb-[56.25%] h-0 bg-brand-surface flex items-center justify-center">
+                   <!-- Placeholder for codeQ video or demo -->
+                   <div class="absolute inset-0 flex flex-col items-center justify-center text-brand-muted">
+                        <i class="fa-solid fa-terminal text-6xl mb-4 text-brand-primary opacity-50"></i>
+                        <span class="font-display font-bold uppercase tracking-widest">codeQ CLI Demo</span>
+                   </div>
                 </div>
             </div>
-        </div>
-    </section>
+        </section>
 
-    <!-- Architecture / Workflow Section -->
-    <section id="architecture" class="py-24 relative overflow-hidden">
-        <div class="container mx-auto px-6">
-            <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-4xl font-display font-bold mb-4">The Lifecycle</h2>
-                <p class="text-brand-muted">Standard flow for tasks managed by humans or agents.</p>
+        <!-- SECTION: ARCHITECTURE INFOGRAM (SECOND) -->
+        <section id="architecture" class="container mx-auto px-4 reveal" style="transition-delay: 200ms;">
+            <div class="text-center mb-12">
+                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">System Architecture</h2>
+                <div class="h-1 w-10 bg-brand-secondary mx-auto"></div>
             </div>
-
-            <div class="relative max-w-5xl mx-auto">
-                <div class="hidden md:block absolute top-1/2 left-0 w-full h-0.5 bg-brand-border -z-10"></div>
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    <div class="glass-panel p-6 rounded-xl relative group">
-                        <div class="text-center">
-                            <i class="fa-solid fa-cloud-arrow-up text-3xl mb-4 text-brand-muted group-hover:text-white transition-colors"></i>
-                            <h4 class="font-bold text-white mb-2">Create</h4>
-                            <p class="text-xs text-brand-muted">Agent submits task via API/CLI.</p>
-                        </div>
-                    </div>
-                    <div class="glass-panel p-6 rounded-xl relative group">
-                        <div class="text-center">
-                            <i class="fa-solid fa-database text-3xl mb-4 text-brand-muted group-hover:text-white transition-colors"></i>
-                            <h4 class="font-bold text-white mb-2">Store</h4>
-                            <p class="text-xs text-brand-muted">Saved to KVRocks Hash & Queue.</p>
-                        </div>
-                    </div>
-                    <div class="glass-panel p-6 rounded-xl relative group">
-                        <div class="text-center">
-                            <i class="fa-solid fa-stopwatch text-3xl mb-4 text-brand-muted group-hover:text-white transition-colors"></i>
-                            <h4 class="font-bold text-white mb-2">Claim</h4>
-                            <p class="text-xs text-brand-muted">Worker gets exclusive lease.</p>
-                        </div>
-                    </div>
-                    <div class="glass-panel p-6 rounded-xl relative group">
-                        <div class="text-center">
-                            <i class="fa-solid fa-check-double text-3xl mb-4 text-brand-muted group-hover:text-white transition-colors"></i>
-                            <h4 class="font-bold text-white mb-2">Complete</h4>
-                            <p class="text-xs text-brand-muted">Result stored, lease cleared.</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    <!-- Operations / API / CLI Section -->
-    <section id="api" class="py-24 bg-brand-surface/30">
-        <div class="container mx-auto px-6">
-            <div class="grid lg:grid-cols-2 gap-12 items-center">
-                
-                <div>
-                    <h2 class="text-3xl md:text-4xl font-display font-bold mb-6">Designed for Automation</h2>
-                    <p class="text-brand-muted mb-8 leading-relaxed">
-                        Whether you are a human operator or an autonomous agent, codeQ provides the tools to manage workload. 
-                        Use the <strong>CLI</strong> for rapid management or the <strong>API</strong> for programmatic integration.
-                    </p>
-
-                    <div class="space-y-4">
-                        <div class="flex items-center gap-4">
-                            <div class="w-10 h-10 rounded bg-brand-bg border border-brand-border flex items-center justify-center text-emerald-400">
-                                <i class="fa-solid fa-terminal"></i>
-                            </div>
-                            <div>
-                                <h4 class="font-bold text-white">CLI First</h4>
-                                <p class="text-sm text-brand-muted"><code>codeq</code> for managing tasks, queues, and workers.</p>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-4">
-                            <div class="w-10 h-10 rounded bg-brand-bg border border-brand-border flex items-center justify-center text-blue-400">
-                                <i class="fa-solid fa-code"></i>
-                            </div>
-                            <div>
-                                <h4 class="font-bold text-white">Simple Loops</h4>
-                                <p class="text-sm text-brand-muted">Implement workers in 10 lines of code. Just poll, process, and complete.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Interactive Tabs -->
-                <div class="glass-panel rounded-xl overflow-hidden border border-brand-border shadow-2xl">
-                    <div class="flex border-b border-brand-border bg-brand-bg/50 overflow-x-auto">
-                        <button id="btn-cli" onclick="switchTab('cli')" class="px-4 py-3 text-sm font-medium text-white border-b-2 border-brand-primary bg-brand-surface/50 transition-all whitespace-nowrap">CLI</button>
-                        <button id="btn-code-go" onclick="switchTab('code-go')" class="px-4 py-3 text-sm font-medium text-brand-muted hover:text-white transition-all whitespace-nowrap">Go Worker Loop</button>
-                        <button id="btn-api-prod" onclick="switchTab('api-prod')" class="px-4 py-3 text-sm font-medium text-brand-muted hover:text-white transition-all whitespace-nowrap">Producer API</button>
-                    </div>
-                    
-                    <!-- CLI Content -->
-                    <div id="content-cli" class="p-6 bg-[#0D1117] font-mono text-sm overflow-x-auto h-[320px]">
-<pre><code class="language-bash"><span class="text-gray-500"># 1. Enqueue a task from the terminal</span>
-$ codeq task create \
-    --event render_video \
-    --priority 10 \
-    --payload '{"jobId": 500}'
-
-<span class="text-blue-400">✔ Task created: a5a4d2ad...</span>
-
-<span class="text-gray-500"># 2. Start a worker for this event type</span>
-$ codeq worker start \
-    --events render_video \
-    --concurrency 5
-
-<span class="text-emerald-400">ℹ Starting worker pool (5 threads)...</span>
-<span class="text-emerald-400">✔ Worker connected. Listening...</span>
-
-<span class="text-gray-500"># 3. Inspect queue depth</span>
-$ codeq queue inspect render_video
-
-<span class="text-blue-400">READY: 124 | DELAYED: 5 | IN_PROGRESS: 5</span></code></pre>
-                    </div>
-
-                    <!-- Go Worker Code Content -->
-                    <div id="content-code-go" class="p-6 bg-[#0D1117] font-mono text-sm overflow-x-auto h-[320px] hidden">
-<pre><code class="language-go"><span class="text-purple-400">package</span> main
-
-<span class="text-purple-400">func</span> <span class="text-blue-400">workerLoop</span>() {
-    client := codeq.NewClient(<span class="text-green-400">"http://localhost:8080"</span>)
-
-    <span class="text-gray-500">// The infinite loop pattern</span>
-    <span class="text-purple-400">for</span> {
-        <span class="text-gray-500">// 1. Claim (Pull with lease)</span>
-        task, err := client.Claim(
-            []<span class="text-purple-400">string</span>{<span class="text-green-400">"render_video"</span>}, <span class="text-orange-400">60</span>, <span class="text-gray-500">// leaseSeconds</span>
-        )
+            
+            <div class="w-full h-[750px] border border-brand-border bg-black shadow-2xl rounded-xl overflow-hidden relative group">
+                <iframe 
+                    srcdoc='<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>codeQ | Architecture Infogram</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: "Inter", sans-serif; background-color: #020617; color: #e2e8f0; overflow: hidden; }
+        .font-mono { font-family: "JetBrains Mono", monospace; }
         
-        <span class="text-purple-400">if</span> task == <span class="text-purple-400">nil</span> {
-            time.Sleep(<span class="text-orange-400">5</span> * time.Second) <span class="text-gray-500">// Backoff</span>
-            <span class="text-purple-400">continue</span>
+        /* Animations */
+        @keyframes flow-dash { to { stroke-dashoffset: -20; } }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 5px rgba(6, 182, 212, 0.2); border-color: rgba(6, 182, 212, 0.4); } 50% { box-shadow: 0 0 20px rgba(6, 182, 212, 0.4); border-color: rgba(6, 182, 212, 1); } }
+
+        /* UI Components */
+        .glass-panel { 
+            background: rgba(15, 23, 42, 0.6); 
+            backdrop-filter: blur(12px); 
+            border: 1px solid #1e293b; 
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            z-index: 10;
+        }
+        .glass-panel.active { 
+            background: rgba(30, 41, 59, 0.95); 
+            border-color: #06b6d4; 
+            box-shadow: 0 0 40px rgba(6, 182, 212, 0.2); 
+            transform: scale(1.03); 
+            z-index: 50; 
+        }
+        .glass-panel.dimmed {
+            opacity: 0.3;
+            filter: grayscale(0.8);
+            transform: scale(0.98);
+        }
+        
+        /* Connectors (SVG) */
+        .connector-line { 
+            stroke: #334155; 
+            stroke-width: 2; 
+            fill: none; 
+            transition: stroke 0.4s, opacity 0.4s; 
+            opacity: 0.2;
+        }
+        .connector-line.active { 
+            stroke: #06b6d4; 
+            stroke-width: 3; 
+            opacity: 1;
+            filter: drop-shadow(0 0 4px rgba(6, 182, 212, 0.5)); 
+            animation: flow-dash 1s linear infinite; 
+            stroke-dasharray: 8 4; 
         }
 
-        <span class="text-gray-500">// 2. Process Work</span>
-        <span class="text-blue-400">processVideo</span>(task.Payload)
+        /* Layout Grid */
+        .arch-grid {
+            display: grid;
+            grid-template-columns: 220px 1fr 220px; 
+            grid-template-rows: auto 1fr auto;
+            gap: 1.5rem;
+            height: 100%;
+            padding: 2rem;
+            max-width: 1920px;
+            margin: 0 auto;
+            position: relative;
+        }
 
-        <span class="text-gray-500">// 3. Complete (Ack)</span>
-        client.Complete(task.ID, Result{Status: <span class="text-green-400">"COMPLETED"</span>})
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col bg-[#020617]">
+    
+    <!-- Header -->
+    <header class="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-[#020617]/90 backdrop-blur z-50 shrink-0">
+        <div class="flex items-center gap-4">
+            <div class="w-3 h-3 rounded-full bg-cyan-500 animate-pulse shadow-[0_0_10px_#06b6d4]"></div>
+            <span class="font-display font-bold text-xl tracking-tight text-white">codeQ <span class="text-cyan-500 font-mono text-sm opacity-80 tracking-widest ml-2">// SYSTEM_VIEW</span></span>
+        </div>
+        <div class="flex items-center gap-8 text-xs font-mono text-slate-400">
+            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>pkg/app</div>
+            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>internal/kvrocks</div>
+            <div class="flex items-center gap-2"><div class="w-1.5 h-1.5 bg-pink-500 rounded-full"></div>pkg/worker</div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex overflow-hidden relative">
+        
+        <!-- Sidebar Narrative -->
+        <div class="w-[500px] h-full z-40 flex flex-col border-r border-slate-800 bg-[#0b1121]/95 backdrop-blur shadow-2xl shrink-0">
+            <div class="flex-1 p-10 overflow-y-auto" id="narrative-box">
+                <!-- Content injected via JS -->
+                <div class="flex flex-col items-center justify-center h-full text-center space-y-8 animate-[fade-in_0.5s_ease-out]">
+                    <div class="relative">
+                        <div class="absolute inset-0 bg-cyan-500/20 blur-xl rounded-full"></div>
+                        <div class="relative w-20 h-20 bg-[#0f172a] rounded-full flex items-center justify-center border border-cyan-500/50 text-cyan-400">
+                            <i class="fa-solid fa-server text-3xl ml-1"></i>
+                        </div>
+                    </div>
+                    <div>
+                        <h2 class="text-3xl font-bold text-white font-display mb-2">Queue Overview</h2>
+                        <p class="text-cyan-500 font-mono text-xs tracking-[0.2em] uppercase">Status: Online</p>
+                    </div>
+                    <p class="text-slate-400 text-base leading-relaxed max-w-xs mx-auto">
+                        Interactive walkthrough of the codeQ lifecycle, from producer enqueue to worker completion and persistence.
+                    </p>
+                    <button onclick="startTour()" class="group relative px-8 py-4 bg-cyan-950/50 text-cyan-400 font-mono text-sm font-bold tracking-widest rounded border border-cyan-500/30 hover:bg-cyan-500 hover:text-white hover:border-cyan-400 transition-all overflow-hidden">
+                        <span class="relative z-10">START TRACE</span>
+                        <div class="absolute inset-0 h-full w-full bg-cyan-500/10 scale-x-0 group-hover:scale-x-100 transition-transform origin-left duration-500"></div>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Navigation Controls -->
+            <div class="p-8 border-t border-slate-800 bg-[#020617]">
+                <div class="flex justify-between items-center text-[10px] font-mono text-slate-500 mb-3">
+                    <span class="tracking-widest">LIFECYCLE STEPS</span>
+                    <span id="step-counter" class="text-cyan-500">0 / 6</span>
+                </div>
+                <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mb-8">
+                    <div id="progress-bar" class="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 w-0 transition-all duration-500 ease-out shadow-[0_0_10px_#06b6d4]"></div>
+                </div>
+                <div class="flex gap-4">
+                    <button id="btn-prev" onclick="prevStep()" disabled class="px-6 py-3 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 disabled:opacity-30 disabled:hover:border-slate-700 transition-all text-xs font-mono font-bold">PREVIOUS</button>
+                    <button id="btn-next" onclick="nextStep()" disabled class="flex-1 px-6 py-3 rounded bg-slate-800 text-slate-500 font-mono text-xs font-bold transition-all border border-slate-700 flex items-center justify-center gap-2 group disabled:opacity-50">
+                        <span>WAITING...</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Architecture Canvas -->
+        <div class="flex-1 bg-[#020617] relative flex items-center justify-center overflow-hidden">
+            <!-- Grid Background -->
+            <div class="absolute inset-0 opacity-20 pointer-events-none" 
+                 style="background-image: radial-gradient(#1e293b 1px, transparent 1px); background-size: 30px 30px;">
+            </div>
+
+            <!-- SVG Connector Layer (Full Screen) -->
+            <svg class="absolute inset-0 w-full h-full pointer-events-none z-0" id="connector-layer">
+                <path id="line-cli-reasoner" class="connector-line" />
+                <path id="line-reasoner-got" class="connector-line" />
+                <path id="line-reasoner-cot" class="connector-line" />
+                <path id="line-got-codex" class="connector-line" />
+                <path id="line-cot-codex" class="connector-line" />
+                <path id="line-got-store" class="connector-line" />
+                <path id="line-cot-store" class="connector-line" />
+                <path id="line-reasoner-store" class="connector-line" />
+            </svg>
+
+            <!-- Architecture Diagram Grid -->
+            <div class="arch-grid w-full h-full relative z-10">
+                
+                <!-- 1. Producer (was CLI) -->
+                <div id="node-cli" class="glass-panel rounded-xl p-6 flex flex-col justify-center gap-4 h-[160px] self-start border-l-4 border-l-white">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <div class="text-[10px] font-mono text-slate-500 uppercase tracking-wider mb-1">Source</div>
+                            <div class="text-xl font-bold text-white"><i class="fa-solid fa-code-branch mr-2 text-slate-400"></i>Producer</div>
+                        </div>
+                        <div class="px-2 py-1 bg-slate-800 rounded text-[10px] font-mono text-slate-400">Agent/CLI</div>
+                    </div>
+                    <div class="text-xs text-slate-400 font-mono bg-black/40 p-3 rounded border border-slate-800/50">
+                        POST /v1/codeq/tasks<br>
+                        Bearer Token
+                    </div>
+                </div>
+
+                <!-- 2. API Server (was Reasoner) -->
+                <div id="node-reasoner" class="glass-panel rounded-xl p-6 h-[180px] self-start col-start-2 border-t-4 border-t-cyan-500 flex flex-col justify-between">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <div class="text-[10px] font-mono text-cyan-500 uppercase tracking-wider mb-1">Control Plane</div>
+                            <h3 class="text-2xl font-bold text-white tracking-tight">API SERVER</h3>
+                        </div>
+                        <div class="px-2 py-1 bg-cyan-950/30 border border-cyan-500/20 rounded text-[10px] font-mono text-cyan-400">pkg/app</div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-slate-900/50 p-2 rounded border border-slate-800 text-center">
+                            <div class="text-[9px] text-slate-500 font-bold uppercase">Validation</div>
+                            <div class="text-xs text-white font-mono mt-1">Identity/JWKS</div>
+                        </div>
+                        <div class="bg-slate-900/50 p-2 rounded border border-slate-800 text-center">
+                            <div class="text-[9px] text-slate-500 font-bold uppercase">Routing</div>
+                            <div class="text-xs text-white font-mono mt-1">Priority 0-9</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 3. Worker (was Codex) -->
+                <div id="node-codex" class="glass-panel rounded-xl p-4 h-[280px] flex flex-col gap-2 col-start-3 row-span-2 self-center border-r-4 border-r-pink-500">
+                    <div class="flex flex-col gap-1 mb-2">
+                        <div class="text-[10px] font-mono text-pink-500 uppercase tracking-wider">Consumer</div>
+                        <h3 class="text-xl font-bold text-white">Worker Pool</h3>
+                        <div class="text-[10px] font-mono text-slate-500">External Agent</div>
+                    </div>
+                    <div class="flex-1 flex flex-col gap-2 justify-center">
+                        <div class="p-2 bg-pink-950/10 border border-pink-500/20 rounded">
+                            <div class="flex items-center gap-2 text-pink-400 text-xs font-bold mb-1"><i class="fa-solid fa-download"></i> PULL (Claim)</div>
+                            <div class="text-[10px] text-slate-400">Lease: 60s</div>
+                        </div>
+                        <div class="flex justify-center text-slate-600"><i class="fa-solid fa-arrows-rotate fa-spin"></i></div>
+                        <div class="p-2 bg-pink-950/10 border border-pink-500/20 rounded">
+                            <div class="flex items-center gap-2 text-pink-400 text-xs font-bold mb-1"><i class="fa-solid fa-check"></i> RESULT</div>
+                            <div class="text-[10px] text-slate-400">Completed / Failed</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4. Queue Lists (was Execution Layer) -->
+                <div class="col-start-2 row-start-2 grid grid-cols-2 gap-6 h-[300px]">
+                    <!-- Priority/Pending Queue -->
+                    <div id="node-cot" class="glass-panel rounded-xl p-5 border-l-4 border-l-slate-600 flex flex-col">
+                        <div class="flex justify-between items-center mb-4">
+                            <h4 class="text-white font-bold"><i class="fa-solid fa-list-ol text-slate-500 mr-2"></i>Pending</h4>
+                            <span class="text-[9px] bg-slate-800 px-2 py-1 rounded text-slate-400 font-mono">Lists</span>
+                        </div>
+                        <div class="flex-1 bg-slate-900/30 rounded border border-slate-800/50 p-3 flex flex-col justify-center gap-2">
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 bg-emerald-500 rounded-full"></div>
+                                <span class="text-xs text-slate-400 font-mono">pending:9 (High)</span>
+                            </div>
+                            <div class="h-4 border-l border-slate-700 ml-1"></div>
+                            <div class="flex items-center gap-2">
+                                <div class="w-2 h-2 bg-slate-500 rounded-full"></div>
+                                <span class="text-xs text-slate-400 font-mono">pending:0 (Low)</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Lease/In-Progress -->
+                    <div id="node-got" class="glass-panel rounded-xl p-5 border-l-4 border-l-violet-500 flex flex-col relative overflow-hidden">
+                        <div class="absolute top-0 right-0 p-2 opacity-10"><i class="fa-solid fa-stopwatch text-6xl text-violet-500"></i></div>
+                        <div class="flex justify-between items-center mb-4 relative z-10">
+                            <h4 class="text-white font-bold"><i class="fa-solid fa-lock text-violet-400 mr-2"></i>Lease Mgr</h4>
+                            <span class="text-[9px] bg-violet-900/30 border border-violet-500/30 px-2 py-1 rounded text-violet-300 font-mono">RPOPLPUSH</span>
+                        </div>
+                        <div class="flex-1 grid grid-rows-2 gap-3 relative z-10">
+                            <div class="bg-slate-900/50 rounded border border-slate-700 p-2 flex items-center justify-between">
+                                <span class="text-[10px] text-slate-400 font-bold">IN_PROGRESS</span>
+                                <div class="flex gap-1">
+                                    <div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>
+                                    <div class="w-1.5 h-1.5 bg-violet-500 rounded-full"></div>
+                                </div>
+                            </div>
+                            <div class="bg-cyan-950/20 rounded border border-cyan-500/30 p-2 flex flex-col justify-center">
+                                <span class="text-[10px] text-cyan-400 font-bold mb-1">TTL MONITOR</span>
+                                <div class="text-[10px] text-slate-300 font-mono">codeq:lease:uuid</div>
+                                <div class="text-[10px] text-slate-300 font-mono">Heartbeats...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 5. KVRocks (was Storage) -->
+                <div id="node-store" class="col-span-3 glass-panel rounded-xl p-3 mt-auto border-b-4 border-b-emerald-500 bg-[#0a0f1e] flex items-center justify-between">
+                    <div class="flex items-center gap-4">
+                        <div class="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-400 border border-emerald-500/30">
+                            <i class="fa-solid fa-hard-drive text-lg"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-base font-bold text-white">KVROCKS STORE</h3>
+                            <div class="text-[10px] text-slate-500 font-mono">internal/kvrocks (RocksDB/SSD)</div>
+                        </div>
+                    </div>
+                    <div class="flex gap-3">
+                        <div class="px-3 py-1 bg-slate-900 rounded border border-slate-800 flex items-center gap-2">
+                            <i class="fa-regular fa-file-code text-slate-500 text-[10px]"></i>
+                            <div class="text-[10px] text-slate-300 font-mono">codeq:tasks (Hash)</div>
+                        </div>
+                        <div class="px-3 py-1 bg-slate-900 rounded border border-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-list-ol text-slate-500 text-[10px]"></i>
+                            <div class="text-[10px] text-slate-300 font-mono">codeq:results (Hash)</div>
+                        </div>
+                        <div class="px-3 py-1 bg-slate-900 rounded border border-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-clock text-slate-500 text-[10px]"></i>
+                            <div class="text-[10px] text-slate-300 font-mono">codeq:delayed (ZSet)</div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const narrativeBox = document.getElementById("narrative-box");
+        const progressBar = document.getElementById("progress-bar");
+        const stepCounter = document.getElementById("step-counter");
+        const btnNext = document.getElementById("btn-next");
+        const btnPrev = document.getElementById("btn-prev");
+        const allNodes = document.querySelectorAll(".glass-panel");
+        const connectorLayer = document.getElementById("connector-layer");
+
+        const steps = [
+            {
+                title: "1. The Producer",
+                tag: "ENQUEUE",
+                content: "The workflow begins with an Agent or Service creating a task via the HTTP API (<code>POST /tasks</code>) or CLI. The payload contains the routing key (event type) and JSON data.",
+                activeNodes: ["node-cli"],
+                connections: []
+            },
+            {
+                title: "2. Validation & Routing",
+                tag: "API SERVER",
+                content: "The API Server authenticates the producer token. It serializes the task into a JSON record and determines the priority tier (0-9).",
+                activeNodes: ["node-cli", "node-reasoner"],
+                connections: [["node-cli", "node-reasoner"]]
+            },
+            {
+                title: "3. Persistence & Queuing",
+                tag: "WRITE OPS",
+                content: "The task is persisted to <strong>KVRocks</strong> (Disk). The Task ID is pushed to the appropriate <code>pending:N</code> list. This ensures <strong>O(1)</strong> enqueue time regardless of queue depth.",
+                activeNodes: ["node-reasoner", "node-store", "node-cot"],
+                connections: [["node-reasoner", "node-store"], ["node-reasoner", "node-cot"]]
+            },
+            {
+                title: "4. The Claim (Pull)",
+                tag: "LEASE GRANT",
+                content: "A Worker polls <code>/claim</code>. The Scheduler atomically moves the ID from Pending to In-Progress (RPOPLPUSH). An exclusive <strong>Lease Key</strong> is created with a TTL (e.g., 60s).",
+                activeNodes: ["node-codex", "node-got", "node-cot"],
+                connections: [["node-cot", "node-got"], ["node-got", "node-codex"]]
+            },
+            {
+                title: "5. Execution & Heartbeats",
+                tag: "PROCESSING",
+                content: "The Worker processes the payload. If the task takes longer than the lease, the worker sends <strong>Heartbeats</strong> to extend the TTL. If it crashes, the lease expires and the task is requeued.",
+                activeNodes: ["node-codex", "node-got"],
+                connections: [["node-codex", "node-got"]]
+            },
+            {
+                title: "6. Completion",
+                tag: "RESULT STORAGE",
+                content: "Upon success, the Worker submits the result. codeQ stores the output in the <code>results</code> hash, clears the lease, and triggers any configured Webhooks.",
+                activeNodes: ["node-codex", "node-store"],
+                connections: [["node-codex", "node-store"]]
+            }
+        ];
+
+        let currentStep = -1;
+
+        function updateLines(connections) {
+            document.querySelectorAll(".connector-line").forEach(line => {
+                line.classList.remove("active");
+                line.setAttribute("d", "");
+            });
+
+            connections.forEach(([sourceId, targetId]) => {
+                const source = document.getElementById(sourceId);
+                const target = document.getElementById(targetId);
+                const lineId = `line-${sourceId.replace("node-","")}-${targetId.replace("node-","")}`;
+                let path = document.getElementById(lineId);
+                
+                if (!path) {
+                    path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    path.setAttribute("id", lineId);
+                    path.classList.add("connector-line");
+                    connectorLayer.appendChild(path);
+                }
+
+                if (source && target) {
+                    const srcRect = source.getBoundingClientRect();
+                    const tgtRect = target.getBoundingClientRect();
+                    const containerRect = document.querySelector(".arch-grid").getBoundingClientRect();
+
+                    const startX = srcRect.left + srcRect.width / 2 - containerRect.left;
+                    const startY = srcRect.top + srcRect.height / 2 - containerRect.top;
+                    const endX = tgtRect.left + tgtRect.width / 2 - containerRect.left;
+                    const endY = tgtRect.top + tgtRect.height / 2 - containerRect.top;
+
+                    let d = "";
+                    if (Math.abs(endX - startX) < 50) {
+                        d = `M ${startX} ${startY} L ${endX} ${endY}`;
+                    } else if (Math.abs(endY - startY) < 50) {
+                        d = `M ${startX} ${startY} L ${endX} ${endY}`;
+                    } else {
+                        const cp1x = startX;
+                        const cp1y = startY + (endY - startY) * 0.5;
+                        const cp2x = endX;
+                        const cp2y = endY - (endY - startY) * 0.5;
+                        d = `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`;
+                    }
+
+                    path.setAttribute("d", d);
+                    setTimeout(() => path.classList.add("active"), 10);
+                }
+            });
+        }
+
+        function resetView() {
+            allNodes.forEach(n => {
+                n.classList.remove("active");
+                n.classList.add("dimmed");
+            });
+        }
+
+        function renderStep(index) {
+            resetView();
+            const data = steps[index];
+            
+            narrativeBox.innerHTML = `
+                <div class="animate-[fade-in_0.4s_ease-out]">
+                    <div class="font-mono text-[10px] font-bold mb-4 px-2 py-1 rounded w-fit bg-cyan-900/30 text-cyan-400 border border-cyan-500/30 tracking-widest uppercase">
+                        // ${data.tag}
+                    </div>
+                    <h2 class="text-3xl font-display font-bold mb-6 text-white leading-tight">${data.title}</h2>
+                    <div class="text-base leading-7 text-slate-300 font-light border-l-2 border-cyan-500/50 pl-5">
+                        ${data.content}
+                    </div>
+                </div>
+            `;
+
+            data.activeNodes.forEach(id => {
+                const el = document.getElementById(id);
+                if(el) {
+                    el.classList.remove("dimmed");
+                    el.classList.add("active");
+                }
+            });
+
+            updateLines(data.connections);
+
+            stepCounter.innerText = `${index + 1} / ${steps.length}`;
+            progressBar.style.width = `${((index + 1) / steps.length) * 100}%`;
+            
+            btnPrev.disabled = index === 0;
+            
+            if (index === steps.length - 1) {
+                btnNext.innerHTML = "<span>RESTART LOG</span><i class=\"fa-solid fa-rotate-left text-emerald-400\"></i>";
+                btnNext.className = "flex-1 px-6 py-3 rounded bg-emerald-900/30 text-emerald-400 border border-emerald-500/50 font-mono text-xs font-bold transition-all flex items-center justify-center gap-2 hover:bg-emerald-900/50";
+                btnNext.onclick = startTour;
+            } else {
+                btnNext.innerHTML = "<span>NEXT STEP</span><i class=\"fa-solid fa-arrow-right text-cyan-400 group-hover:translate-x-1 transition-transform\"></i>";
+                btnNext.className = "flex-1 px-6 py-3 rounded bg-cyan-950/50 text-cyan-400 border border-cyan-500/30 font-mono text-xs font-bold transition-all flex items-center justify-center gap-2 hover:bg-cyan-900/50 group";
+                btnNext.disabled = false;
+                btnNext.onclick = nextStep;
+            }
+        }
+
+        function startTour() {
+            currentStep = 0;
+            renderStep(currentStep);
+        }
+
+        function nextStep() {
+            if (currentStep < steps.length - 1) {
+                currentStep++;
+                renderStep(currentStep);
+            }
+        }
+
+        function prevStep() {
+            if (currentStep > 0) {
+                currentStep--;
+                renderStep(currentStep);
+            }
+        }
+
+        window.addEventListener("resize", () => {
+            if (currentStep >= 0) {
+                updateLines(steps[currentStep].connections);
+            }
+        });
+
+        resetView();
+    </script>
+</body>
+</html>' 
+                    class="absolute top-0 left-0 w-full h-full"
+                    allowfullscreen
+                    frameborder="0">
+                </iframe>
+            </div>
+        </section>
+
+        <!-- SECTION: CORE FEATURES -->
+        <section id="features" class="container mx-auto px-4 reveal">
+            <div class="text-center mb-16">
+                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">CORE FEATURES</h2>
+                <div class="h-1 w-10 bg-brand-primary mx-auto"></div>
+            </div>
+
+            <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
+                <!-- Card 1 -->
+                <div class="glass-panel p-8 group hover:bg-brand-surface/50 transition-all duration-300">
+                    <div class="w-12 h-12 mb-6 flex items-center justify-center border border-brand-border bg-black group-hover:border-brand-primary/50 transition-colors">
+                        <i class="fa-solid fa-hard-drive text-2xl text-brand-primary"></i>
+                    </div>
+                    <h3 class="text-white font-bold uppercase mb-3 tracking-wide">Disk Persistence</h3>
+                    <p class="text-brand-muted text-sm leading-relaxed font-sans">
+                        Backed by KVRocks (RocksDB on SSD). Keeps list operations <strong>O(1)</strong> while storing massive datasets on disk, not RAM.
+                    </p>
+                </div>
+                <!-- Card 2 -->
+                <div class="glass-panel p-8 group hover:bg-brand-surface/50 transition-all duration-300">
+                    <div class="w-12 h-12 mb-6 flex items-center justify-center border border-brand-border bg-black group-hover:border-brand-secondary/50 transition-colors">
+                        <i class="fa-solid fa-lock text-2xl text-brand-secondary"></i>
+                    </div>
+                    <h3 class="text-white font-bold uppercase mb-3 tracking-wide">Strict Leases</h3>
+                    <p class="text-brand-muted text-sm leading-relaxed font-sans">
+                        Workers claim exclusive leases (TTL). Crashed workers automatically release tasks back to the pool, guaranteeing <strong>at-least-once</strong> delivery.
+                    </p>
+                </div>
+                <!-- Card 3 -->
+                <div class="glass-panel p-8 group hover:bg-brand-surface/50 transition-all duration-300">
+                    <div class="w-12 h-12 mb-6 flex items-center justify-center border border-brand-border bg-black group-hover:border-brand-success/50 transition-colors">
+                        <i class="fa-solid fa-layer-group text-2xl text-brand-success"></i>
+                    </div>
+                    <h3 class="text-white font-bold uppercase mb-3 tracking-wide">Priority Tiers</h3>
+                    <p class="text-brand-muted text-sm leading-relaxed font-sans">
+                        Supports 10 priority levels (0-9). High-priority tasks jump the queue, ensuring critical agent operations are processed first.
+                    </p>
+                </div>
+                <!-- Card 4 -->
+                <div class="glass-panel p-8 group hover:bg-brand-surface/50 transition-all duration-300">
+                    <div class="w-12 h-12 mb-6 flex items-center justify-center border border-brand-border bg-black group-hover:border-white/50 transition-colors">
+                        <i class="fa-solid fa-stopwatch text-2xl text-white"></i>
+                    </div>
+                    <h3 class="text-white font-bold uppercase mb-3 tracking-wide">Backoff & DLQ</h3>
+                    <p class="text-brand-muted text-sm leading-relaxed font-sans">
+                        Configurable exponential backoff with jitter. Tasks exceeding `maxAttempts` move to a Dead Letter Queue (DLQ) for inspection.
+                    </p>
+                </div>
+                <!-- Card 5 -->
+                <div class="glass-panel p-8 group hover:bg-brand-surface/50 transition-all duration-300">
+                    <div class="w-12 h-12 mb-6 flex items-center justify-center border border-brand-border bg-black group-hover:border-brand-primary/50 transition-colors">
+                        <i class="fa-solid fa-satellite-dish text-2xl text-brand-primary"></i>
+                    </div>
+                    <h3 class="text-white font-bold uppercase mb-3 tracking-wide">Reactive Signals</h3>
+                    <p class="text-brand-muted text-sm leading-relaxed font-sans">
+                        Pull-based consumption with advisory Webhook signals. Wakes up idle workers immediately when new priority tasks arrive.
+                    </p>
+                </div>
+                <!-- Card 6 -->
+                <div class="glass-panel p-8 group hover:bg-brand-surface/50 transition-all duration-300">
+                    <div class="w-12 h-12 mb-6 flex items-center justify-center border border-brand-border bg-black group-hover:border-brand-secondary/50 transition-colors">
+                        <i class="fa-solid fa-square-check text-2xl text-brand-secondary"></i>
+                    </div>
+                    <h3 class="text-white font-bold uppercase mb-3 tracking-wide">Result Storage</h3>
+                    <p class="text-brand-muted text-sm leading-relaxed font-sans">
+                        Task results are persisted and queryable. Supports result callbacks (Webhooks) to notify upstream agents upon completion.
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION: INITIALIZATION -->
+        <section id="get-started" class="container mx-auto px-4 reveal">
+            <div class="text-center mb-12">
+                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">Implementation</h2>
+                <div class="h-1 w-10 bg-brand-primary mx-auto"></div>
+            </div>
+
+            <div class="max-w-4xl mx-auto">
+                <div class="border border-brand-border bg-black shadow-2xl">
+                    <div class="flex border-b border-brand-border bg-brand-surface overflow-x-auto">
+                        <button onclick="switchTab('cli')" id="btn-cli" class="px-6 py-3 text-xs font-bold text-white bg-black border-t-2 border-brand-primary tracking-wider transition-all">CLI</button>
+                        <button onclick="switchTab('config')" id="btn-config" class="px-6 py-3 text-xs font-bold text-brand-muted hover:text-white hover:bg-black/50 tracking-wider transition-all">WORKER (GO)</button>
+                    </div>
+
+                    <div id="content-cli" class="p-6 bg-black font-mono text-xs overflow-x-auto h-[350px] text-brand-text">
+<pre><code class="language-bash"><span class="text-brand-muted"># 1. Start the codeQ server</span>
+<span class="text-brand-primary">$</span> helm install codeq ./helm/codeq --set kvrocks.enabled=true
+
+<span class="text-brand-muted"># 2. Enqueue a high-priority task for video rendering</span>
+<span class="text-brand-primary">$</span> codeq task create \
+    --event render_video \
+    --priority 9 \
+    --payload '{"jobId": 500, "codec": "h264"}'
+
+<span class="text-brand-muted"># 3. Inspect queue depth</span>
+<span class="text-brand-primary">$</span> codeq queue inspect render_video
+<span class="text-brand-muted">> PENDING: 1 | IN_PROGRESS: 0 | DELAYED: 0</span>
+
+<span class="text-brand-muted"># 4. Start a CLI worker pool (for testing)</span>
+<span class="text-brand-primary">$</span> codeq worker start --events render_video --concurrency 5
+
+<span class="text-brand-success">✔ Worker connected. Processing tasks...</span><span class="blink">_</span></code></pre>
+                    </div>
+
+                    <div id="content-config" class="p-6 bg-black font-mono text-xs overflow-x-auto h-[350px] text-brand-text hidden">
+<pre><code class="language-go"><span class="text-brand-secondary">package</span> main
+
+<span class="text-brand-secondary">func</span> <span class="text-brand-primary">workerLoop</span>() {
+    client := codeq.NewClient(<span class="text-brand-success">"http://codeq-api:8080"</span>)
+    
+    <span class="text-brand-secondary">for</span> {
+        <span class="text-brand-muted">// 1. Claim a task with a 60s lease</span>
+        task, err := client.Claim([]<span class="text-brand-secondary">string</span>{<span class="text-brand-success">"render_video"</span>}, <span class="text-brand-secondary">60</span>)
+        
+        <span class="text-brand-secondary">if</span> task == <span class="text-brand-secondary">nil</span> {
+            time.Sleep(<span class="text-brand-secondary">5</span> * time.Second) <span class="text-brand-muted">// Backoff</span>
+            <span class="text-brand-secondary">continue</span>
+        }
+
+        <span class="text-brand-muted">// 2. Process work (Execute Agent logic)</span>
+        result, err := processVideo(task.Payload)
+
+        <span class="text-brand-muted">// 3. Submit Result (Atomic Completion)</span>
+        <span class="text-brand-secondary">if</span> err != <span class="text-brand-secondary">nil</span> {
+            client.Nack(task.ID, err.Error()) <span class="text-brand-muted">// Trigger Retry</span>
+        } <span class="text-brand-secondary">else</span> {
+            client.Complete(task.ID, result)  <span class="text-brand-muted">// Clear Lease</span>
+        }
     }
 }</code></pre>
                     </div>
+                </div>
+            </div>
+        </section>
 
-                    <!-- Producer API Content -->
-                    <div id="content-api-prod" class="p-6 bg-[#0D1117] font-mono text-sm overflow-x-auto h-[320px] hidden">
-<pre><code class="language-bash"><span class="text-gray-500"># POST /tasks (Agent Integration)</span>
-curl -X POST http://localhost:8080/v1/codeq/tasks \
-  -H <span class="text-green-400">'Authorization: Bearer <agent-token>'</span> \
-  -H <span class="text-green-400">'Content-Type: application/json'</span> \
-  -d <span class="text-yellow-300">'{
-    "eventType": "analysis_job",
-    "payload": {"target": "dataset_v2"},
-    "priority": 10,
-    "maxAttempts": 5
-  }'</span>
+        <!-- SECTION: PERFORMANCE -->
+        <section id="performance" class="container mx-auto px-4 reveal">
+            <div class="text-center mb-16">
+                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">KVRocks Advantage</h2>
+                <div class="h-1 w-10 bg-brand-primary mx-auto"></div>
+                <p class="text-brand-muted mt-4 font-sans text-sm max-w-2xl mx-auto">
+                    Why store queue data in RAM? codeQ leverages SSDs via KVRocks to provide massive capacity at a fraction of the cost of Redis.
+                </p>
+            </div>
 
-<span class="text-gray-500"># Response 202 Accepted</span>
-<span class="text-blue-400">{
-  "id": "782b-...",
-  "status": "PENDING"
-}</span></code></pre>
+            <div class="grid lg:grid-cols-2 gap-8 max-w-6xl mx-auto">
+                
+                <!-- Chart 1: Cost Efficiency -->
+                <div class="glass-panel p-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-sm font-bold uppercase tracking-widest text-white">Storage Cost vs Capacity</h3>
+                        <span class="text-[10px] bg-brand-primary/20 text-brand-primary px-2 py-1 border border-brand-primary/30">INFRASTRUCTURE</span>
                     </div>
+                    <div class="chart-container">
+                        <canvas id="latencyVolumeChart"></canvas>
+                    </div>
+                    <p class="text-[10px] text-brand-muted mt-4 font-sans italic text-center">
+                        codeQ (SSD) scales linearly in cost, whereas standard Redis (RAM) hits a vertical cost wall as queue depth increases.
+                    </p>
+                </div>
 
-                     <!-- Worker API Content -->
-                     <div id="content-api-work" class="p-6 bg-[#0D1117] font-mono text-sm overflow-x-auto h-[320px] hidden">
-<pre><code class="language-bash"><span class="text-gray-500"># 1. Claim a Task (Lease)</span>
-curl -X POST http://localhost:8080/v1/codeq/tasks/claim \
-  -H <span class="text-green-400">'Authorization: Bearer <worker-token>'</span> \
-  -d <span class="text-yellow-300">'{
-    "eventTypes": ["analysis_job"],
-    "leaseSeconds": 60
-  }'</span>
-
-<span class="text-gray-500"># Response 200 OK</span>
-<span class="text-blue-400">{
-  "id": "782b-...",
-  "payload": "{\"target\": \"dataset_v2\"}",
-  "leaseUntil": "2026-01-25T15:00:00Z"
-}</span>
-
-<span class="text-gray-500"># 2. Submit Result (Complete)</span>
-curl -X POST http://localhost:8080/v1/codeq/tasks/782b.../result \
-  -H <span class="text-green-400">'Authorization: Bearer <worker-token>'</span> \
-  -d <span class="text-yellow-300">'{"status": "COMPLETED", "result": {"ok": true}}'</span></code></pre>
+                <!-- Chart 2: Latency Stability -->
+                <div class="glass-panel p-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h3 class="text-sm font-bold uppercase tracking-widest text-white">Latency vs Queue Depth</h3>
+                        <span class="text-[10px] bg-brand-success/20 text-brand-success px-2 py-1 border border-brand-success/30">STABILITY</span>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="accuracyCostChart"></canvas>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4 mt-4">
+                        <div class="stat-card">
+                            <div class="text-brand-primary font-bold text-lg">O(1)</div>
+                            <div class="text-[9px] text-brand-muted uppercase">Enqueue/Dequeue Time</div>
+                        </div>
+                        <div class="stat-card border-brand-success">
+                            <div class="text-brand-success font-bold text-lg">~1ms</div>
+                            <div class="text-[9px] text-brand-muted uppercase">Added Latency (vs RAM)</div>
+                        </div>
                     </div>
                 </div>
 
             </div>
-        </div>
-    </section>
+        </section>
 
-    <!-- FAQ Section -->
-    <section id="faq" class="py-24 relative overflow-hidden border-t border-brand-border/30">
-        <div class="container mx-auto px-6">
-            <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-4xl font-display font-bold mb-4">Frequently Asked Questions</h2>
-                <p class="text-brand-muted">Deep dive into design decisions and operational models.</p>
-            </div>
-
-            <div class="max-w-3xl mx-auto space-y-4">
+        <!-- SECTION: FAQ -->
+        <section id="faq" class="container mx-auto px-4 reveal">
+            <div class="max-w-4xl mx-auto space-y-4">
+                <div class="text-center mb-12">
+                    <h2 class="text-2xl font-display font-bold mb-2 uppercase tracking-tight">Technical FAQ</h2>
+                    <div class="h-1 w-10 bg-brand-muted mx-auto"></div>
+                </div>
                 
-                <!-- Q1 -->
-                <details class="group glass-panel rounded-xl">
-                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-6 text-white">
-                        <span>Why codeQ and what problem does it address?</span>
+                <details class="group bg-brand-surface border border-brand-border">
+                    <summary class="flex justify-between items-center font-bold cursor-pointer list-none p-5 text-white text-sm uppercase tracking-wide hover:bg-brand-border/50 transition-colors">
+                        <span>Why use KVRocks instead of Redis?</span>
                         <span class="transition group-open:rotate-180"><i class="fa-solid fa-chevron-down text-brand-primary"></i></span>
                     </summary>
-                    <div class="text-brand-muted text-sm leading-relaxed px-6 pb-6 pt-0 border-t border-brand-border/30 mt-4">
-                        codeQ is a reactive task scheduler designed to bridge the gap between simple in-memory queues and complex message brokers. It addresses the need for <strong>persistence, delayed delivery, and strict ownership</strong> (leases) in distributed systems, without the operational overhead of managing heavy clusters like Kafka or RabbitMQ. It is specifically optimized for agentic workflows where tasks might be long-running or require reliable retries.
+                    <div class="text-brand-muted text-sm leading-relaxed px-5 pb-5 pt-0 border-t border-brand-border font-sans mt-4">
+                        Redis stores everything in RAM, which is expensive for large queues or historical result data. KVRocks implements the Redis protocol but stores data on SSD (via RocksDB). This allows terabytes of queue data at a fraction of the cost, with only a negligible (~1ms) latency penalty.
                     </div>
                 </details>
 
-                <!-- Q2 -->
-                <details class="group glass-panel rounded-xl">
-                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-6 text-white">
-                        <span>Why KVRocks instead of Redis?</span>
+                <details class="group bg-brand-surface border border-brand-border">
+                    <summary class="flex justify-between items-center font-bold cursor-pointer list-none p-5 text-white text-sm uppercase tracking-wide hover:bg-brand-border/50 transition-colors">
+                        <span>How does the Lease system work?</span>
                         <span class="transition group-open:rotate-180"><i class="fa-solid fa-chevron-down text-brand-primary"></i></span>
                     </summary>
-                    <div class="text-brand-muted text-sm leading-relaxed px-6 pb-6 pt-0 border-t border-brand-border/30 mt-4">
-                        While Redis is excellent for speed, it stores everything in RAM. <strong>KVRocks</strong> implements the Redis protocol but stores data on SSDs (RocksDB). List operations <strong>remain O(1)</strong>, with only a constant latency overhead (RAM vs SSD) compared to Redis. This means you get the same algorithmic efficiency at a fraction of the cost, with full disk persistence.
+                    <div class="text-brand-muted text-sm leading-relaxed px-5 pb-5 pt-0 border-t border-brand-border font-sans mt-4">
+                        Unlike "fire-and-forget" systems, codeQ requires workers to <code>Claim</code> a task. This grants an exclusive lease (e.g., 60s). If the worker crashes or fails to heartbeat, codeQ automatically returns the task to the pending queue when the lease expires, guaranteeing reliability.
                     </div>
                 </details>
 
-                <!-- Q3 -->
-                <details class="group glass-panel rounded-xl">
-                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-6 text-white">
-                        <span>How does the Lease/Claim model work?</span>
-                        <span class="transition group-open:rotate-180"><i class="fa-solid fa-chevron-down text-brand-primary"></i></span>
-                    </summary>
-                    <div class="text-brand-muted text-sm leading-relaxed px-6 pb-6 pt-0 border-t border-brand-border/30 mt-4">
-                        Unlike "fire-and-forget" systems, codeQ requires workers to <strong>claim</strong> a task, which grants an exclusive lease for a specific duration (e.g., 60s). If the worker crashes or fails to complete the task before the lease expires, codeQ automatically returns the task to the ready queue. This guarantees <strong>at-least-once processing</strong> and prevents tasks from being lost in limbo.
-                    </div>
-                </details>
-
-                <!-- Q4 -->
-                <details class="group glass-panel rounded-xl">
-                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-6 text-white">
+                <details class="group bg-brand-surface border border-brand-border">
+                    <summary class="flex justify-between items-center font-bold cursor-pointer list-none p-5 text-white text-sm uppercase tracking-wide hover:bg-brand-border/50 transition-colors">
                         <span>Is delivery strictly FIFO?</span>
                         <span class="transition group-open:rotate-180"><i class="fa-solid fa-chevron-down text-brand-primary"></i></span>
                     </summary>
-                    <div class="text-brand-muted text-sm leading-relaxed px-6 pb-6 pt-0 border-t border-brand-border/30 mt-4">
-                        codeQ prioritizes <strong>availability and throughput</strong> over global ordering. Tasks are FIFO within a specific shard and priority tier, but strict global ordering is not guaranteed across shards. This design decision allows the system to scale horizontally without being bottlenecked by a single locking mechanism.
+                    <div class="text-brand-muted text-sm leading-relaxed px-5 pb-5 pt-0 border-t border-brand-border font-sans mt-4">
+                        codeQ favors availability and throughput over global ordering. Tasks are FIFO within a specific shard and priority tier (0-9), but strict global ordering is not guaranteed across shards in distributed setups.
                     </div>
                 </details>
-
-                <!-- Q5 -->
-                <details class="group glass-panel rounded-xl">
-                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-6 text-white">
-                        <span>How does it handle retries and failures?</span>
-                        <span class="transition group-open:rotate-180"><i class="fa-solid fa-chevron-down text-brand-primary"></i></span>
-                    </summary>
-                    <div class="text-brand-muted text-sm leading-relaxed px-6 pb-6 pt-0 border-t border-brand-border/30 mt-4">
-                        If a task fails, workers can send a <code>NACK</code> signal. codeQ then calculates a backoff delay (Linear, Exponential, or Jittered) and moves the task to a <strong>Delayed Queue</strong>. If the number of attempts exceeds the configured limit, the task is moved to a Dead Letter Queue (DLQ) for manual inspection, ensuring bad tasks don't clog the system.
-                    </div>
-                </details>
-
-                <!-- Q6 -->
-                <details class="group glass-panel rounded-xl">
-                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-6 text-white">
-                        <span>How do Agents authenticate?</span>
-                        <span class="transition group-open:rotate-180"><i class="fa-solid fa-chevron-down text-brand-primary"></i></span>
-                    </summary>
-                    <div class="text-brand-muted text-sm leading-relaxed px-6 pb-6 pt-0 border-t border-brand-border/30 mt-4">
-                        codeQ enforces a strict security model. Producers (Agents creating tasks) use Bearer tokens validated against an Identity Provider. Workers use <strong>JWTs</strong> with specific scopes (e.g., <code>codeq:claim</code>) validated against a JWKS endpoint. This ensures that only authorized entities can access specific queues or event types.
-                    </div>
-                </details>
-
             </div>
-        </div>
-    </section>
+        </section>
+
+    </main>
 
     <!-- Footer -->
-    <footer class="border-t border-brand-border bg-[#05080F] py-12">
+    <footer class="border-t border-brand-border bg-[#000000] py-12 font-mono text-xs">
         <div class="container mx-auto px-6">
             <div class="grid md:grid-cols-4 gap-8 mb-12">
                 <div class="col-span-2">
                     <div class="flex items-center gap-2 mb-4">
-                        <span class="font-display font-bold text-lg text-white">codeQ</span>
+                        <span class="font-bold text-lg text-white tracking-widest uppercase">:: codeQ</span>
                     </div>
-                    <p class="text-brand-muted max-w-sm">
-                        High-throughput task scheduling. 
-                        Built for the era of autonomous agents.
+                    <p class="text-brand-muted max-w-sm mb-4">
+                        The persistent queue for autonomous agents. Built for scale, durability, and cost-efficiency.
                     </p>
+                    <p class="text-brand-primary">Supported by code|company</p>
                 </div>
                 
                 <div>
-                    <h5 class="font-bold text-white mb-4">Resources</h5>
-                    <ul class="space-y-2 text-sm text-brand-muted">
-                        <li><a href="https://github.com/osvaldoandrade/codeq/tree/main/docs" class="hover:text-brand-primary">Documentation</a></li>
-                        <li><a href="https://github.com/osvaldoandrade/codeq/blob/main/docs/13-examples.md" class="hover:text-brand-primary">CLI Reference</a></li>
-                        <li><a href="https://github.com/osvaldoandrade/codeq/blob/main/docs/04-http-api.md" class="hover:text-brand-primary">API Spec</a></li>
+                    <h5 class="font-bold text-white mb-4 uppercase tracking-widest">Related Projects</h5>
+                    <ul class="space-y-2 text-brand-muted">
+                        <li><a href="https://github.com/osvaldoandrade/neuron" target="_blank" class="hover:text-brand-primary hover:underline">Neuron</a></li>
+                        <li><a href="https://osvaldoandrade.github.com/tikti" target="_blank" class="hover:text-brand-primary hover:underline">Tikti</a></li>
+                        <li><a href="https://github.com/osvaldoandrade/ledgerdb" target="_blank" class="hover:text-brand-primary hover:underline">LedgerDB</a></li>
                     </ul>
                 </div>
                 
                 <div>
-                    <h5 class="font-bold text-white mb-4">Community</h5>
-                    <ul class="space-y-2 text-sm text-brand-muted">
-                        <li><a href="https://github.com/osvaldoandrade/codeq" class="hover:text-brand-primary">GitHub</a></li>
-                        <li><a href="https://github.com/osvaldoandrade/codeq/issues" class="hover:text-brand-primary">Issues</a></li>
-                        <li><a href="https://github.com/osvaldoandrade/codeq/blob/main/LICENSE" class="hover:text-brand-primary">License (MIT)</a></li>
+                    <h5 class="font-bold text-white mb-4 uppercase tracking-widest">System</h5>
+                    <ul class="space-y-2 text-brand-muted">
+                        <li><a href="https://github.com/osvaldoandrade/codeq" target="_blank" class="hover:text-brand-primary hover:underline">GitHub</a></li>
+                        <li><a href="#" class="hover:text-brand-primary hover:underline">Docs</a></li>
                     </ul>
                 </div>
             </div>
-            
-            <div class="border-t border-brand-border pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                <p class="text-xs text-brand-muted">&copy; 2026 codeQ Project. All rights reserved.</p>
-                <div class="flex gap-4">
-                    <i class="fa-brands fa-golang text-brand-muted hover:text-white cursor-pointer transition-colors"></i>
-                </div>
+            <div class="text-center text-[10px] text-brand-muted border-t border-brand-border pt-8 uppercase tracking-widest">
+                © 2026 codeQ Engineering. Tasks persist.
             </div>
         </div>
     </footer>
 
-    <!-- Tab Logic -->
     <script>
-        function switchTab(tabName) {
-            const tabs = ['cli', 'code-go', 'api-prod'];
-            
-            tabs.forEach(t => {
-                const btn = document.getElementById(`btn-${t}`);
-                const content = document.getElementById(`content-${t}`);
-                
-                if (t === tabName) {
-                    content.classList.remove('hidden');
-                    btn.className = 'px-4 py-3 text-sm font-medium text-white border-b-2 border-brand-primary bg-brand-surface/50 transition-all whitespace-nowrap';
-                } else {
-                    content.classList.add('hidden');
-                    btn.className = 'px-4 py-3 text-sm font-medium text-brand-muted hover:text-white transition-all whitespace-nowrap';
-                }
+        (function() {
+            const colors = {
+                primary: '#06b6d4',
+                secondary: '#8b5cf6',
+                success: '#10b981',
+                muted: '#64748b',
+                white: '#f8fafc'
+            };
+
+            Chart.defaults.color = colors.muted;
+            Chart.defaults.borderColor = '#1e293b';
+            Chart.defaults.font.family = "'JetBrains Mono', monospace";
+
+            // Scroll Reveal
+            document.addEventListener('DOMContentLoaded', () => {
+                const reveals = document.querySelectorAll('.reveal');
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if(entry.isIntersecting) {
+                            entry.target.classList.add('active');
+                        }
+                    });
+                }, { threshold: 0.1 });
+                reveals.forEach(el => observer.observe(el));
+                initCharts();
             });
-        }
+
+            // Tabs
+            window.switchTab = function(tabName) {
+                const tabs = ['cli', 'config'];
+                tabs.forEach(t => {
+                    const btn = document.getElementById(`btn-${t}`);
+                    const content = document.getElementById(`content-${t}`);
+                    if (t === tabName) {
+                        content.classList.remove('hidden');
+                        btn.className = 'px-6 py-3 text-xs font-bold text-white bg-black border-t-2 border-brand-primary tracking-wider transition-all';
+                    } else {
+                        content.classList.add('hidden');
+                        btn.className = 'px-6 py-3 text-xs font-bold text-brand-muted hover:text-white hover:bg-black/50 tracking-wider transition-all';
+                    }
+                });
+            }
+
+            function initCharts() {
+                // Chart 1: Cost vs Volume (RAM vs SSD)
+                const ctxLV = document.getElementById('latencyVolumeChart').getContext('2d');
+                new Chart(ctxLV, {
+                    type: 'line',
+                    data: {
+                        labels: ['10k', '100k', '1M', '10M', '100M'],
+                        datasets: [
+                            {
+                                label: 'Redis (RAM Cost)',
+                                data: [10, 50, 400, 3000, 25000],
+                                borderColor: colors.secondary,
+                                backgroundColor: colors.secondary,
+                                borderWidth: 2,
+                                tension: 0.4
+                            },
+                            {
+                                label: 'codeQ (SSD Cost)',
+                                data: [2, 5, 15, 40, 100],
+                                borderColor: colors.primary,
+                                backgroundColor: colors.primary,
+                                borderWidth: 2,
+                                tension: 0.4,
+                                fill: true
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: { title: { display: true, text: 'Monthly Cost ($)', font: { size: 10 } }, type: 'logarithmic' }
+                        },
+                        plugins: {
+                            legend: { display: true, position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } }
+                        }
+                    }
+                });
+
+                // Chart 2: Latency vs Queue Depth
+                const ctxAC = document.getElementById('accuracyCostChart').getContext('2d');
+                new Chart(ctxAC, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [
+                            {
+                                label: 'Redis (RAM)',
+                                data: [{x: 1000, y: 0.2}, {x: 10000, y: 0.3}, {x: 100000, y: 0.5}],
+                                borderColor: colors.secondary,
+                                backgroundColor: colors.secondary,
+                                pointRadius: 5
+                            },
+                            {
+                                label: 'codeQ (SSD)',
+                                data: [{x: 1000, y: 1.2}, {x: 10000, y: 1.3}, {x: 100000, y: 1.4}, {x: 1000000, y: 1.5}],
+                                borderColor: colors.primary,
+                                backgroundColor: colors.primary,
+                                pointRadius: 5
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: { title: { display: true, text: 'Queue Depth (Items)', font: { size: 10 } }, type: 'logarithmic' },
+                            y: { title: { display: true, text: 'Op Latency (ms)', font: { size: 10 } }, min: 0 }
+                        },
+                        plugins: {
+                            legend: { display: true, position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}ms @ ${ctx.parsed.x} items`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+        })();
     </script>
 </body>
 </html>
