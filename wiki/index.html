@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codeQ | Docs Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="wiki.css">
+</head>
+<body>
+  <div class="bg-glow bg-a"></div>
+  <div class="bg-glow bg-b"></div>
+
+  <header class="topbar">
+    <div class="brand-wrap">
+      <span class="brand-mark">::</span>
+      <div>
+        <p class="brand-title">codeQ Docs</p>
+        <p class="brand-subtitle">Persistent queues for event-driven agents</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <a class="btn ghost" href="../">Back to Home</a>
+      <a class="btn" href="https://github.com/osvaldoandrade/codeq/wiki" target="_blank" rel="noreferrer">Open GitHub Wiki</a>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <label class="search-label" for="search">Find page</label>
+      <input id="search" type="search" placeholder="Search docs...">
+      <nav id="nav"></nav>
+    </aside>
+
+    <section class="content-area">
+      <div class="page-meta">
+        <p id="current-page">Home</p>
+      </div>
+      <article id="content" class="content"></article>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/lib/marked.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+  <script src="wiki.js"></script>
+</body>
+</html>

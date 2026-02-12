@@ -1,5 +1,4 @@
-# Simple workflow for deploying static content to GitHub Pages
-name: Deploy static content to Pages
+name: Deploy static docs to Pages
 
 on:
   # Runs on pushes targeting the default branch
@@ -19,25 +18,44 @@ permissions:
 # However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
 concurrency:
   group: "pages"
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
-  # Single deploy job since we're just deploying
   deploy:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Pages
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
         uses: actions/configure-pages@v5
+
+      - name: Build static site (safe subset)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf public
+          mkdir -p public/wiki
+
+          cp index.html public/index.html
+
+          # Publish only wiki portal assets + markdown.
+          rsync -a wiki/ public/wiki/ \
+            --exclude='.git/' \
+            --exclude='.DS_Store' \
+            --exclude='publish.sh'
+
+          # Ensure Mermaid + SPA routing works without Jekyll interference.
+          touch public/.nojekyll
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Upload entire repository
-          path: '.'
+          path: public
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
