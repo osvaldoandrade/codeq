@@ -1,4 +1,4 @@
-# Use Case: Lease Expiry Repair
+# Lease Expiry Repair
 
 This flow shows how codeQ recovers from worker crashes and other lease-loss events.
 

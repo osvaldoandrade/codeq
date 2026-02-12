@@ -1,4 +1,4 @@
-# Use Case: Worker Availability Webhook
+# Worker Availability Webhook
 
 This flow uses webhook notifications to reduce idle worker polling.
 

@@ -1,4 +1,4 @@
-# Use Case: Result Callbacks
+# Result Callbacks
 
 This flow uses task-level webhooks to avoid polling `GET /tasks/:id/result`.
 

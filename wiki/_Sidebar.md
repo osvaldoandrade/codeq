@@ -28,10 +28,10 @@
 
 ## Use Cases
 - [Use Cases](Use-Cases)
-- [Use Case: Enqueue, Claim, Complete](Use-Cases-Enqueue-Claim-Complete)
-- [Use Case: Long-Poll Claim](Use-Cases-Long-Poll-Claim)
-- [Use Case: NACK + Retry Backoff](Use-Cases-NACK-Retry-Backoff)
-- [Use Case: Lease Expiry Repair](Use-Cases-Lease-Expiry-Repair)
-- [Use Case: Worker Availability Webhook](Use-Cases-Worker-Availability-Webhook)
-- [Use Case: Result Callbacks](Use-Cases-Result-Callbacks)
-- [Use Case: Admin Cleanup](Use-Cases-Admin-Cleanup)
+- [Enqueue, Claim, Complete](Use-Cases-Enqueue-Claim-Complete)
+- [Long-Poll Claim](Use-Cases-Long-Poll-Claim)
+- [NACK + Retry Backoff](Use-Cases-NACK-Retry-Backoff)
+- [Lease Expiry Repair](Use-Cases-Lease-Expiry-Repair)
+- [Worker Availability Webhook](Use-Cases-Worker-Availability-Webhook)
+- [Result Callbacks](Use-Cases-Result-Callbacks)
+- [Admin Cleanup](Use-Cases-Admin-Cleanup)

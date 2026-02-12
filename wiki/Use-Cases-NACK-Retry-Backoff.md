@@ -1,4 +1,4 @@
-# Use Case: NACK + Retry Backoff
+# NACK + Retry Backoff
 
 This flow retries a task after a failure without marking it terminal.
 

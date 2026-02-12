@@ -1,4 +1,4 @@
-# Use Case: Admin Cleanup
+# Admin Cleanup
 
 This flow removes expired tasks and associated records from KVRocks.
 

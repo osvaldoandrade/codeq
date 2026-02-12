@@ -1,4 +1,4 @@
-# Use Case: Enqueue, Claim, Complete
+# Enqueue, Claim, Complete
 
 This is the default pull-based execution flow.
 

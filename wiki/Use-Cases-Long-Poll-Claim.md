@@ -1,4 +1,4 @@
-# Use Case: Long-Poll Claim
+# Long-Poll Claim
 
 This flow reduces idle polling by letting workers wait briefly for work to become available.
 
