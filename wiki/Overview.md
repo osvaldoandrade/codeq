@@ -1,46 +1,60 @@
 # Overview
 
-codeQ is a queueing and completion service for event-driven systems.
+codeQ is a queueing and completion service for event-driven systems that need one thing above all: work must survive.
 
-A producer enqueues a task under a `command` (event type). A worker claims work by asking for one or more commands it is willing to execute. Claiming creates a lease and records ownership (`workerId`). The worker then heartbeats the lease while it is executing, and eventually submits a terminal result (`COMPLETED` or `FAILED`).
+If you have producers emitting events like `render_video`, `generate_master`, or `send_email`, and you have a fleet of workers that comes and goes with deploys, crashes, and autoscaling, you want a small set of semantics you can build systems on: enqueue work, claim ownership, keep a lease alive while you execute, and write down a terminal outcome.
 
-The system is reactive and pull-first: workers pull tasks. Push exists only to reduce latency and idle polling. When enabled, codeQ sends advisory webhook notifications that work is available, but it never assigns tasks through webhooks.
+That is the story codeQ implements.
 
-## What codeQ Optimizes For
+## The Story: From Event to Result
 
-codeQ is designed to be operationally small and predictable:
+A producer creates a task under a `command` (an event type). The payload is stored as a JSON string, because the queue should not care about business objects, only about durable transport and scheduling metadata.
 
-- The API surface is intentionally narrow: enqueue, claim, heartbeat, abandon, result, nack.
-- Scheduling metadata is persisted in KVRocks with simple Redis primitives (lists, hashes, sorted sets, TTL keys).
-- The hot-path operations are O(1) for enqueue and for a successful claim.
+Workers do not register, and codeQ does not schedule them. A worker simply asks: "do you have any tasks for commands I am allowed to execute?" When a claim succeeds, codeQ records ownership (`workerId`) and creates a lease with a TTL enforced by KVRocks. While the worker is executing, it may heartbeat the lease. When it finishes, it submits a terminal result:
 
-## Goals and Non-Goals
+- `COMPLETED` with an application-specific result object, or
+- `FAILED` with a string error.
 
-Goals:
+Terminal means terminal. If you want to retry, you do not complete and then retry; you `nack` the task before it becomes terminal. NACK transitions the task back into the delayed queue and applies a backoff policy. If the task exceeds `maxAttempts`, codeQ moves it to DLQ and records `MAX_ATTEMPTS` as the terminal failure reason.
 
-- Stable HTTP APIs for enqueue, claim, and completion.
-- Persistence on SSD via KVRocks.
-- Delayed retries, priority tiers, and a dead-letter policy (`maxAttempts`).
-- Workers can pull by event type without a worker registry.
-- Optional push signals and result callbacks to reduce GET polling.
+If a worker disappears mid-flight, the lease expires. codeQ intentionally does not depend on a background scanner to detect that. Instead, it performs bounded repair during claim operations: when workers claim, codeQ opportunistically scans a limited window of in-progress tasks and requeues the ones whose leases are missing or expired. This keeps the system operationally small while still converging to "stuck tasks become claimable again."
 
-Non-goals:
+## Push Exists, But It Never Assigns
 
-- Exactly-once processing.
-- Global FIFO across commands.
-- Automatic worker discovery or active task assignment.
+codeQ is pull-first. Push is an optimization for latency and idle polling, not a correctness mechanism.
 
-## Core Entities
+There are two push paths:
 
-- **Task**: the unit of work (UUID), with status and ownership.
-- **Message**: the scheduling view of a task (command, priority, payload as string).
-- **Result**: terminal completion record stored independently of task body.
-- **Command**: routing key (event type) used by both producers and workers.
+1. Worker availability notifications: advisory webhook signals that a command has work available. The worker must still claim. The notification does not change ownership.
+2. Result callbacks: task-level webhooks that fire on terminal completion so producers can avoid polling `GET /tasks/:id/result`.
 
-## Delivery Semantics
+Both are intentionally best-effort and should be treated as at-least-once delivery. Consumers must deduplicate by `taskId` when it matters. See [Webhooks](Webhooks).
 
-codeQ provides at-least-once delivery.
+## What You Can Rely On (Invariants)
 
-A lease is authoritative by KVRocks TTL. If a worker crashes, loses the lease, or explicitly nacks, the task is eligible to be retried. As a result, duplicate processing is possible and consumers must make task handlers idempotent when side effects matter.
+codeQ is designed so you can reason about it without reading the implementation:
 
-If you need push behavior, use [Webhooks](Webhooks) as a latency optimization, not as a correctness mechanism.
+- At-least-once delivery: duplicate processing is possible, so task handlers must be idempotent when side effects matter.
+- Lease is authoritative: the lease TTL in KVRocks is the source of truth. Derived timestamps in task records are advisory.
+- Ownership is explicit: `task.workerId` is derived from the worker token `sub`. A different `sub` cannot heartbeat/complete a task it does not own.
+- Queues are durable: task records, results, and scheduling metadata persist on disk through KVRocks.
+
+These invariants are the foundation for the rest of the spec: [Queueing Model](Queueing-Model), [Consistency](Consistency), and [Retry and Backoff](Retry-and-Backoff).
+
+## How This Stays Fast
+
+Most operations map to a small number of Redis/KVRocks primitives (lists, hashes, sorted sets, TTL keys). Enqueue and successful claim are constant-time. The only scanning is bounded (for example by `requeueInspectLimit`) and happens during claim so the system converges without requiring a separate repair service. See [Storage (KVRocks)](Storage-KVRocks).
+
+## Security in One Sentence
+
+Producers authenticate via an Identity lookup and workers authenticate via JWT (JWKS). The worker token carries two independent allowlists: `eventTypes` (which commands it may claim) and `scope` (which endpoints it may call). See [Security](Security).
+
+## Reading Path
+
+If you want to understand codeQ end-to-end, read in this order:
+
+1. [Architecture](Architecture)
+2. [HTTP API](HTTP-API)
+3. [Queueing Model](Queueing-Model)
+4. [Webhooks](Webhooks)
+5. [Security](Security)
