@@ -1,7 +1,6 @@
 # codeQ Docs
 
 ## Start Here
-- [Home](Home)
 - [Get Started](Get-Started)
 - [Overview](Overview)
 - [Architecture](Architecture)

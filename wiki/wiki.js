@@ -2,7 +2,6 @@ const NAV = [
   {
     section: "Start Here",
     pages: [
-      ["Home", "Home"],
       ["Get Started", "Get-Started"],
       ["Overview", "Overview"],
       ["Architecture", "Architecture"],
@@ -52,7 +51,7 @@ const NAV = [
   },
 ];
 
-const DEFAULT_PAGE = "Home";
+const DEFAULT_PAGE = "Get-Started";
 const navEl = document.getElementById("nav");
 const contentEl = document.getElementById("content");
 const searchEl = document.getElementById("search");
@@ -69,7 +68,8 @@ marked.setOptions({
 });
 
 function getPageFromUrl() {
-  const page = new URLSearchParams(window.location.search).get("page");
+  const raw = new URLSearchParams(window.location.search).get("page") || "";
+  const page = raw === "Home" ? "Get-Started" : raw;
   if (page && ALL_PAGE_SLUGS.includes(page)) {
     return page;
   }
@@ -293,7 +293,8 @@ document.addEventListener("click", (event) => {
 
   event.preventDefault();
   const url = new URL(href, window.location.href);
-  const page = url.searchParams.get("page");
+  const raw = url.searchParams.get("page");
+  const page = raw === "Home" ? "Get-Started" : raw;
   if (!page || !ALL_PAGE_SLUGS.includes(page)) {
     return;
   }
