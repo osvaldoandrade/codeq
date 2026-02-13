@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/alicebob/miniredis/v2 v2.33.0
+	github.com/codecompany/identity-middleware v0.0.0-20260128234923-434704b39e7e
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0

@@ -128,12 +128,16 @@
             
             <div class="hidden md:flex items-center gap-8 text-xs font-bold uppercase tracking-widest text-brand-muted">
                 <a href="#overview" class="hover:text-white transition-colors">[Overview]</a>
-                <a href="#architecture" class="hover:text-white transition-colors">[Architecture]</a>
-                <a href="#performance" class="hover:text-white transition-colors">[Performance]</a>
+                <a href="#architecture" class="hover:text-white transition-colors">[How it works]</a>
+                <a href="#features" class="hover:text-white transition-colors">[Features]</a>
+                <a href="#performance" class="hover:text-white transition-colors">[Benchmark]</a>
                 <a href="#faq" class="hover:text-white transition-colors">[FAQ]</a>
             </div>
 
             <div class="flex items-center gap-4">
+                <a href="https://github.com/osvaldoandrade/codeq/wiki" target="_blank" class="hidden sm:inline-flex items-center justify-center px-4 py-2 text-xs font-bold text-brand-muted uppercase tracking-wide hover:text-white transition-colors">
+                    Docs
+                </a>
                 <a href="#get-started" class="hidden sm:inline-flex items-center justify-center px-4 py-2 text-xs font-bold text-black bg-white uppercase tracking-wide hover:bg-gray-200 transition-colors">
                     Get Started
                 </a>
@@ -777,18 +781,31 @@
         <!-- SECTION: INITIALIZATION -->
         <section id="get-started" class="container mx-auto px-4 reveal">
             <div class="text-center mb-12">
-                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">Implementation</h2>
+                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">Get started</h2>
                 <div class="h-1 w-10 bg-brand-primary mx-auto"></div>
             </div>
 
-            <div class="max-w-4xl mx-auto">
+            <div class="max-w-6xl mx-auto">
                 <div class="border border-brand-border bg-black shadow-2xl">
                     <div class="flex border-b border-brand-border bg-brand-surface overflow-x-auto">
-                        <button onclick="switchTab('cli')" id="btn-cli" class="px-6 py-3 text-xs font-bold text-white bg-black border-t-2 border-brand-primary tracking-wider transition-all">CLI</button>
+                        <button onclick="switchTab('cli-install')" id="btn-cli-install" class="px-6 py-3 text-xs font-bold text-white bg-black border-t-2 border-brand-primary tracking-wider transition-all">CLI</button>
+                        <button onclick="switchTab('cli')" id="btn-cli" class="px-6 py-3 text-xs font-bold text-brand-muted hover:text-white hover:bg-black/50 tracking-wider transition-all">SERVER</button>
                         <button onclick="switchTab('config')" id="btn-config" class="px-6 py-3 text-xs font-bold text-brand-muted hover:text-white hover:bg-black/50 tracking-wider transition-all">WORKER (GO)</button>
                     </div>
 
-                    <div id="content-cli" class="p-6 bg-black font-mono text-xs overflow-x-auto h-[350px] text-brand-text">
+                    <div id="content-cli-install" class="p-6 bg-black font-mono text-xs overflow-x-auto h-[350px] text-brand-text">
+<pre><code class="language-bash"><span class="text-brand-muted"># 1. Install codeQ CLI via npm</span>
+<span class="text-brand-primary">$</span> npm install -g @codeq/cli
+
+<span class="text-brand-muted"># 2. Verify installation</span>
+<span class="text-brand-primary">$</span> codeq --version
+<span class="text-brand-success">codeq version 1.2.4</span>
+
+<span class="text-brand-muted"># 3. Configure connection (optional)</span>
+<span class="text-brand-primary">$</span> codeq config set endpoint http://localhost:8080</code></pre>
+                    </div>
+
+                    <div id="content-cli" class="p-6 bg-black font-mono text-xs overflow-x-auto h-[350px] text-brand-text hidden">
 <pre><code class="language-bash"><span class="text-brand-muted"># 1. Start the codeQ server</span>
 <span class="text-brand-primary">$</span> helm install codeq ./helm/codeq --set kvrocks.enabled=true
 
@@ -842,7 +859,7 @@
         <!-- SECTION: PERFORMANCE -->
         <section id="performance" class="container mx-auto px-4 reveal">
             <div class="text-center mb-16">
-                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">KVRocks Advantage</h2>
+                <h2 class="text-2xl md:text-3xl font-display font-bold mb-2 text-white uppercase tracking-tight">Benchmark</h2>
                 <div class="h-1 w-10 bg-brand-primary mx-auto"></div>
                 <p class="text-brand-muted mt-4 font-sans text-sm max-w-2xl mx-auto">
                     Why store queue data in RAM? codeQ leverages SSDs via KVRocks to provide massive capacity at a fraction of the cost of Redis.
@@ -891,7 +908,7 @@
 
         <!-- SECTION: FAQ -->
         <section id="faq" class="container mx-auto px-4 reveal">
-            <div class="max-w-4xl mx-auto space-y-4">
+            <div class="max-w-6xl mx-auto space-y-4">
                 <div class="text-center mb-12">
                     <h2 class="text-2xl font-display font-bold mb-2 uppercase tracking-tight">Technical FAQ</h2>
                     <div class="h-1 w-10 bg-brand-muted mx-auto"></div>
@@ -948,9 +965,10 @@
                 <div>
                     <h5 class="font-bold text-white mb-4 uppercase tracking-widest">Related Projects</h5>
                     <ul class="space-y-2 text-brand-muted">
-                        <li><a href="https://github.com/osvaldoandrade/neuron" target="_blank" class="hover:text-brand-primary hover:underline">Neuron</a></li>
-                        <li><a href="https://osvaldoandrade.github.com/tikti" target="_blank" class="hover:text-brand-primary hover:underline">Tikti</a></li>
-                        <li><a href="https://github.com/osvaldoandrade/ledgerdb" target="_blank" class="hover:text-brand-primary hover:underline">LedgerDB</a></li>
+                        <li><a href="https://osvaldoandrade.github.io/neuron" target="_blank" class="hover:text-brand-primary hover:underline">Neuron</a></li>
+                        <li><a href="https://osvaldoandrade.github.io/tikti" target="_blank" class="hover:text-brand-primary hover:underline">Tikti</a></li>
+                        <li><a href="https://osvaldoandrade.github.io/ledgerdb" target="_blank" class="hover:text-brand-primary hover:underline">LedgerDB</a></li>
+                        <li><a href="https://osvaldoandrade.github.io/sous" target="_blank" class="hover:text-brand-primary hover:underline">Sous</a></li>
                     </ul>
                 </div>
                 
@@ -998,7 +1016,7 @@
 
             // Tabs
             window.switchTab = function(tabName) {
-                const tabs = ['cli', 'config'];
+                const tabs = ['cli-install', 'cli', 'config'];
                 tabs.forEach(t => {
                     const btn = document.getElementById(`btn-${t}`);
                     const content = document.getElementById(`content-${t}`);

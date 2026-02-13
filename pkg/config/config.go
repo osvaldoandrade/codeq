@@ -17,6 +17,9 @@ type Config struct {
 	RedisPassword                      string `yaml:"redisPassword"`
 	IdentityServiceURL                 string `yaml:"identityServiceUrl"`
 	IdentityServiceApiKey              string `yaml:"identityServiceApiKey"`
+	IdentityJwksURL                    string `yaml:"identityJwksUrl"`
+	IdentityIssuer                     string `yaml:"identityIssuer"`
+	IdentityAudience                   string `yaml:"identityAudience"`
 	Timezone                           string `yaml:"timezone"`
 	LogLevel                           string `yaml:"logLevel"`
 	LogFormat                          string `yaml:"logFormat"`
@@ -68,6 +71,15 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if v := os.Getenv("IDENTITY_SERVICE_API_KEY"); v != "" {
 		c.IdentityServiceApiKey = v
+	}
+	if v := os.Getenv("IDENTITY_JWKS_URL"); v != "" {
+		c.IdentityJwksURL = v
+	}
+	if v := os.Getenv("IDENTITY_ISSUER"); v != "" {
+		c.IdentityIssuer = v
+	}
+	if v := os.Getenv("IDENTITY_AUDIENCE"); v != "" {
+		c.IdentityAudience = v
 	}
 	if v := os.Getenv("LOCAL_ARTIFACTS_DIR"); v != "" {
 		c.LocalArtifactsDir = v
@@ -149,6 +161,12 @@ func LoadConfig(filePath string) (*Config, error) {
 	if c.IdentityServiceApiKey == "" {
 		log.Println("Warning: IdentityServiceApiKey not set (dev only)")
 	}
+	if c.IdentityJwksURL == "" && c.IdentityServiceURL != "" {
+		c.IdentityJwksURL = strings.TrimRight(c.IdentityServiceURL, "/") + "/v1/.well-known/jwks.json"
+	}
+	if c.IdentityIssuer == "" && c.IdentityServiceURL != "" {
+		c.IdentityIssuer = strings.TrimRight(c.IdentityServiceURL, "/")
+	}
 	if c.Timezone == "" {
 		c.Timezone = "America/Sao_Paulo"
 	}
@@ -229,6 +247,9 @@ func (c *Config) Validate() error {
 	}
 	if c.WorkerAudience == "" {
 		errs = append(errs, "workerAudience is required")
+	}
+	if c.IdentityJwksURL == "" && !dev {
+		errs = append(errs, "identityJwksUrl is required in non-dev")
 	}
 
 	webhooksEnabled := c.SubscriptionMinIntervalSeconds > 0 || c.ResultWebhookMaxAttempts > 0

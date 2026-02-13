@@ -1,80 +1,75 @@
 package middleware
 
 import (
-	"bytes"
-	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"strings"
+	"time"
 
+	identitymw "github.com/codecompany/identity-middleware/pkg/identitymiddleware"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
 )
 
-type lookupReq struct {
-	IdToken string `json:"idToken"`
-}
-type lookupUser struct {
-	LocalId string `json:"localId"`
-	Email   string `json:"email"`
-	Role    string `json:"role,omitempty"`
-}
-type lookupResp struct {
-	Users []lookupUser `json:"users"`
-}
+const adminScope = "codeq:admin"
 
 func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
+	validator, err := newProducerValidator(cfg)
+	if err != nil {
+		return func(c *gin.Context) {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "identity validator not configured"})
+		}
+	}
 	return func(c *gin.Context) {
-		user, err := validateProducerToken(c.Request.Context(), cfg, c.GetHeader("Authorization"))
+		claims, err := validateBearer(validator, c.GetHeader("Authorization"))
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-		c.Set("userEmail", user.Email)
-		role := strings.ToUpper(strings.TrimSpace(user.Role))
-		if role == "" && cfg.Env == "dev" {
-			role = strings.ToUpper(strings.TrimSpace(c.GetHeader("X-Role")))
-		}
-		if role == "" {
-			role = "USER"
-		}
-		c.Set("userRole", role)
+		setProducerContext(c, cfg, claims)
 		c.Next()
 	}
 }
 
-func validateProducerToken(ctx context.Context, cfg *config.Config, authHeader string) (*lookupUser, error) {
-	if authHeader == "" {
+func newProducerValidator(cfg *config.Config) (*identitymw.Validator, error) {
+	return identitymw.NewValidator(identitymw.Config{
+		JwksURL:     cfg.IdentityJwksURL,
+		Issuer:      cfg.IdentityIssuer,
+		Audience:    cfg.IdentityAudience,
+		ClockSkew:   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		HTTPTimeout: 5 * time.Second,
+	})
+}
+
+func validateBearer(validator *identitymw.Validator, authHeader string) (*identitymw.Claims, error) {
+	if strings.TrimSpace(authHeader) == "" {
 		return nil, fmt.Errorf("missing Authorization header")
 	}
 	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return nil, fmt.Errorf("invalid Authorization format")
 	}
-	idToken := parts[1]
+	return validator.Validate(parts[1])
+}
 
-	url := fmt.Sprintf("%s/v1/accounts/lookup?key=%s", cfg.IdentityServiceURL, cfg.IdentityServiceApiKey)
-	body, _ := json.Marshal(lookupReq{IdToken: idToken})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("identity lookup error")
+func setProducerContext(c *gin.Context, cfg *config.Config, claims *identitymw.Claims) {
+	c.Set("userClaims", claims)
+	email := strings.TrimSpace(claims.Email)
+	if email == "" {
+		email = strings.TrimSpace(claims.Subject)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		log.Printf("[Auth] identity non-200: %d %s", resp.StatusCode, string(b))
-		return nil, fmt.Errorf("invalid token")
+	c.Set("userEmail", email)
+
+	role := ""
+	if v, ok := claims.Raw["role"].(string); ok {
+		role = strings.ToUpper(strings.TrimSpace(v))
 	}
-	var lr lookupResp
-	if err := json.NewDecoder(resp.Body).Decode(&lr); err != nil || len(lr.Users) == 0 {
-		return nil, fmt.Errorf("user not found")
+	if role == "" && cfg.Env == "dev" {
+		role = strings.ToUpper(strings.TrimSpace(c.GetHeader("X-Role")))
 	}
-	user := lr.Users[0]
-	return &user, nil
+	if role == "" {
+		role = "USER"
+	}
+	c.Set("userRole", role)
 }

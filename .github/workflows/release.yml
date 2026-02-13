@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BIN_NAME: codeq
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for GOOS in linux darwin windows; do
+            for GOARCH in amd64 arm64; do
+              ext=""
+              if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+              echo "Building $GOOS/$GOARCH"
+              CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+                go build -trimpath -ldflags "-s -w" \
+                -o "dist/${BIN_NAME}-${GOOS}-${GOARCH}${ext}" \
+                ./cmd/codeq
+            done
+          done
+
+      - name: Checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          shasum -a 256 dist/* > dist/SHA256SUMS.txt
+
+      - name: GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*
+

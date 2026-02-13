@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -22,7 +21,6 @@ import (
 type testEnv struct {
 	cfg     *config.Config
 	jwksSrv *httptest.Server
-	idSrv   *httptest.Server
 	privKey *rsa.PrivateKey
 }
 
@@ -34,21 +32,9 @@ func setupEnv(t *testing.T) *testEnv {
 	}
 	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := base64.RawURLEncoding.EncodeToString(privKey.PublicKey.N.Bytes())
-		eBytes := []byte{0x01, 0x00, 0x01}
-		e := base64.RawURLEncoding.EncodeToString(eBytes)
-		w.Header().Set("Content-Type", "application/json")
+		e := base64.RawURLEncoding.EncodeToString([]byte{0x01, 0x00, 0x01})
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"keys": []map[string]any{{"kty": "RSA", "kid": "kid-1", "n": n, "e": e}},
-		})
-	}))
-	idSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/accounts/lookup" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"users": []map[string]any{{"localId": "u1", "email": "u@codeq.local", "role": "ADMIN"}},
 		})
 	}))
 	cfg := &config.Config{
@@ -57,37 +43,26 @@ func setupEnv(t *testing.T) *testEnv {
 		WorkerAudience:          "codeq-worker",
 		WorkerIssuer:            "codeq-test",
 		AllowedClockSkewSeconds: 60,
-		IdentityServiceURL:      idSrv.URL,
-		IdentityServiceApiKey:   "k",
+		IdentityJwksURL:         jwksSrv.URL,
+		IdentityIssuer:          "codeq-test",
+		IdentityAudience:        "codeq-producer",
 	}
-	return &testEnv{cfg: cfg, jwksSrv: jwksSrv, idSrv: idSrv, privKey: privKey}
+	return &testEnv{cfg: cfg, jwksSrv: jwksSrv, privKey: privKey}
 }
 
 func (e *testEnv) close() {
 	e.jwksSrv.Close()
-	e.idSrv.Close()
 }
 
-func signWorkerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub string, scopes string, eventTypes []string) string {
+func signJWT(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
 	t.Helper()
 	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
-	now := time.Now().Unix()
-	payload := map[string]any{
-		"iss":        iss,
-		"aud":        aud,
-		"sub":        sub,
-		"exp":        now + 3600,
-		"iat":        now - 10,
-		"jti":        "jid-1",
-		"eventTypes": eventTypes,
-		"scope":      scopes,
-	}
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)
 		return base64.RawURLEncoding.EncodeToString(b)
 	}
 	h := enc(header)
-	p := enc(payload)
+	p := enc(claims)
 	signingInput := h + "." + p
 	hashed := sha256.Sum256([]byte(signingInput))
 	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
@@ -101,84 +76,110 @@ func signWorkerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub string,
 func TestWorkerAuthValid(t *testing.T) {
 	env := setupEnv(t)
 	defer env.close()
-	cache := &jwksCache{}
-	tok := signWorkerJWT(t, env.privKey, "kid-1", env.cfg.WorkerIssuer, env.cfg.WorkerAudience, "w1", "codeq:claim", []string{"GENERATE_MASTER"})
-	claims, err := validateWorkerJWT(context.Background(), env.cfg, cache, "Bearer "+tok)
+	now := time.Now().Unix()
+	tok := signJWT(t, env.privKey, "kid-1", map[string]any{
+		"iss":        env.cfg.WorkerIssuer,
+		"aud":        env.cfg.WorkerAudience,
+		"sub":        "w1",
+		"exp":        now + 3600,
+		"iat":        now - 10,
+		"jti":        "jid-1",
+		"eventTypes": []string{"GENERATE_MASTER"},
+		"scope":      "codeq:claim",
+	})
+
+	validator, err := newWorkerValidator(env.cfg)
+	if err != nil {
+		t.Fatalf("validator init: %v", err)
+	}
+	claims, err := validateBearer(validator, "Bearer "+tok)
 	if err != nil {
 		t.Fatalf("expected valid token: %v", err)
 	}
 	if claims.Subject != "w1" {
 		t.Fatalf("subject mismatch: %s", claims.Subject)
 	}
+	if len(claims.EventTypes) == 0 {
+		t.Fatalf("expected eventTypes")
+	}
 }
 
 func TestWorkerAuthMissingScope(t *testing.T) {
 	env := setupEnv(t)
 	defer env.close()
-	cache := &jwksCache{}
-	tok := signWorkerJWT(t, env.privKey, "kid-1", env.cfg.WorkerIssuer, env.cfg.WorkerAudience, "w1", "", []string{"GENERATE_MASTER"})
-	_, err := validateWorkerJWT(context.Background(), env.cfg, cache, "Bearer "+tok)
-	if err == nil {
-		t.Fatalf("expected error for missing scope")
+	now := time.Now().Unix()
+	tok := signJWT(t, env.privKey, "kid-1", map[string]any{
+		"iss":        env.cfg.WorkerIssuer,
+		"aud":        env.cfg.WorkerAudience,
+		"sub":        "w1",
+		"exp":        now + 3600,
+		"iat":        now - 10,
+		"jti":        "jid-1",
+		"eventTypes": []string{"GENERATE_MASTER"},
+		"scope":      "",
+	})
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBuffer(nil))
+	ctx.Request.Header.Set("Authorization", "Bearer "+tok)
+
+	WorkerAuthMiddleware(env.cfg)(ctx)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized for missing scope, got %d", rec.Code)
 	}
 }
 
 func TestWorkerAuthInvalidAudience(t *testing.T) {
 	env := setupEnv(t)
 	defer env.close()
-	cache := &jwksCache{}
-	tok := signWorkerJWT(t, env.privKey, "kid-1", env.cfg.WorkerIssuer, "wrong", "w1", "codeq:claim", []string{"GENERATE_MASTER"})
-	_, err := validateWorkerJWT(context.Background(), env.cfg, cache, "Bearer "+tok)
+	now := time.Now().Unix()
+	tok := signJWT(t, env.privKey, "kid-1", map[string]any{
+		"iss":        env.cfg.WorkerIssuer,
+		"aud":        "wrong",
+		"sub":        "w1",
+		"exp":        now + 3600,
+		"iat":        now - 10,
+		"jti":        "jid-1",
+		"eventTypes": []string{"GENERATE_MASTER"},
+		"scope":      "codeq:claim",
+	})
+
+	validator, err := newWorkerValidator(env.cfg)
+	if err != nil {
+		t.Fatalf("validator init: %v", err)
+	}
+	_, err = validateBearer(validator, "Bearer "+tok)
 	if err == nil {
 		t.Fatalf("expected error for invalid audience")
 	}
 }
 
-func TestProducerAuthLookup(t *testing.T) {
+func TestProducerAuthValid(t *testing.T) {
 	env := setupEnv(t)
 	defer env.close()
-	user, err := validateProducerToken(context.Background(), env.cfg, "Bearer token")
-	if err != nil {
-		t.Fatalf("expected valid producer token: %v", err)
-	}
-	if user.Role != "ADMIN" {
-		t.Fatalf("expected role ADMIN, got %s", user.Role)
-	}
-}
-
-func TestProducerAuthLookupFailure(t *testing.T) {
-	env := setupEnv(t)
-	env.idSrv.Close()
-	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte("invalid"))
-	}))
-	defer failSrv.Close()
-	env.cfg.IdentityServiceURL = failSrv.URL
-	_, err := validateProducerToken(context.Background(), env.cfg, "Bearer token")
-	if err == nil {
-		t.Fatalf("expected error for invalid token lookup")
-	}
-}
-
-func TestRequireWorkerScopeMiddleware(t *testing.T) {
-	env := setupEnv(t)
-	defer env.close()
-	cache := &jwksCache{}
-	tok := signWorkerJWT(t, env.privKey, "kid-1", env.cfg.WorkerIssuer, env.cfg.WorkerAudience, "w1", "codeq:claim", []string{"GENERATE_MASTER"})
-	claims, err := validateWorkerJWT(context.Background(), env.cfg, cache, "Bearer "+tok)
-	if err != nil {
-		t.Fatalf("token invalid: %v", err)
-	}
+	now := time.Now().Unix()
+	tok := signJWT(t, env.privKey, "kid-1", map[string]any{
+		"iss":   env.cfg.IdentityIssuer,
+		"aud":   env.cfg.IdentityAudience,
+		"sub":   "u1",
+		"exp":   now + 3600,
+		"iat":   now - 10,
+		"jti":   "jid-1",
+		"email": "u@codeq.local",
+		"role":  "ADMIN",
+	})
 
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/", bytes.NewBuffer(nil))
-	ctx.Set("workerClaims", claims)
+	ctx.Request.Header.Set("Authorization", "Bearer "+tok)
 
-	mw := RequireWorkerScope("codeq:claim")
-	mw(ctx)
-	if rec.Code != 0 && rec.Code != http.StatusOK {
-		t.Fatalf("unexpected status: %d", rec.Code)
+	AuthMiddleware(env.cfg)(ctx)
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("expected producer auth to pass")
+	}
+	if v, ok := ctx.Get("userEmail"); !ok || v.(string) == "" {
+		t.Fatalf("expected userEmail in context")
 	}
 }
