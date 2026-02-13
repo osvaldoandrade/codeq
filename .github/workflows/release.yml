@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -62,3 +63,20 @@ jobs:
           files: |
             dist/*
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@osvaldoandrade"
+
+      - name: Publish npm package (GitHub Packages)
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd npm
+          npm version --no-git-tag-version "$VERSION"
+          npm publish

@@ -13,3 +13,6 @@ go.work.sum
 .idea
 .env
 .DS_Store
+
+# npm installer output (native binaries downloaded at install time)
+npm/native/

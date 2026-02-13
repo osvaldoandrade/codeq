@@ -1,0 +1,31 @@
+{
+  "name": "@osvaldoandrade/codeq",
+  "version": "0.0.0-development",
+  "description": "codeQ CLI (installs a native binary from GitHub Releases)",
+  "license": "MIT",
+  "homepage": "https://github.com/osvaldoandrade/codeq",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/osvaldoandrade/codeq.git"
+  },
+  "bugs": {
+    "url": "https://github.com/osvaldoandrade/codeq/issues"
+  },
+  "bin": {
+    "codeq": "bin/codeq.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md"
+  ]
+}

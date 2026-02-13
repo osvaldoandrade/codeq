@@ -33,6 +33,21 @@ curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.s
 
 Requires `git` and `go`.
 
+### Install CLI via npm (GitHub Packages)
+
+```bash
+echo '@osvaldoandrade:registry=https://npm.pkg.github.com' >> ~/.npmrc
+echo '//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN' >> ~/.npmrc
+npm i -g @osvaldoandrade/codeq
+codeq --help
+```
+
+Upgrade:
+
+```bash
+npm i -g @osvaldoandrade/codeq@latest
+```
+
 ### 1) Helm (small cluster)
 
 The chart in this repo deploys codeQ and, by default, a single-node KVRocks instance.
