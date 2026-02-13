@@ -19,7 +19,7 @@ go run ./cmd/codeq --help
 Or install a local binary:
 
 ```bash
-go install ./cmd/codeq@latest
+go install ./cmd/codeq
 ```
 
 ## Config
@@ -44,6 +44,7 @@ The CLI can store:
 - `workerToken` (JWT) for worker endpoints
 
 There is also an optional login helper (`codeq auth login`) that can fetch a producer token from an external IAM endpoint (template-driven).
+For Tikti, the login helper fetches an `idToken` and then exchanges it for an `accessToken` via `/v1/accounts/token/exchange`.
 
 ## Examples
 

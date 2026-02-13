@@ -78,7 +78,8 @@ type cliConfig struct {
 }
 
 type authConfig struct {
-	Login loginConfig `yaml:"login"`
+	Login    loginConfig    `yaml:"login"`
+	Exchange exchangeConfig `yaml:"exchange"`
 }
 
 type loginConfig struct {
@@ -88,6 +89,19 @@ type loginConfig struct {
 	BodyTemplate string            `yaml:"bodyTemplate"`
 	ContentType  string            `yaml:"contentType"`
 	TokenPath    string            `yaml:"tokenPath"`
+}
+
+type exchangeConfig struct {
+	URLTemplate string            `yaml:"urlTemplate"`
+	Method      string            `yaml:"method"`
+	Headers     map[string]string `yaml:"headers"`
+	ContentType string            `yaml:"contentType"`
+	TokenPath   string            `yaml:"tokenPath"`
+
+	// Request fields for Tikti token exchange.
+	Audience string   `yaml:"audience"`
+	TenantID string   `yaml:"tenantId"`
+	Scopes   []string `yaml:"scopes"`
 }
 
 func newUI() *ui {
@@ -190,22 +204,25 @@ func main() {
 		if prof.Auth.Login.URLTemplate == "" {
 			prof.Auth.Login = defaultLoginConfig(prof.IAMBaseURL, prof.IAMAPIKey)
 		}
+		if prof.Auth.Exchange.URLTemplate == "" {
+			prof.Auth.Exchange = defaultExchangeConfig(prof.IAMBaseURL, prof.IAMAPIKey)
+		}
 		if !flags.Changed("producer-token") {
 			if v := strings.TrimSpace(os.Getenv("CODEQ_PRODUCER_TOKEN")); v != "" {
 				producerToken = v
-			} else if prof.Token != "" {
-				producerToken = prof.Token
 			} else if prof.ProducerToken != "" {
 				producerToken = prof.ProducerToken
+			} else if prof.Token != "" {
+				producerToken = prof.Token
 			}
 		}
 		if !flags.Changed("worker-token") {
 			if v := strings.TrimSpace(os.Getenv("CODEQ_WORKER_TOKEN")); v != "" {
 				workerToken = v
-			} else if prof.Token != "" {
-				workerToken = prof.Token
 			} else if prof.WorkerToken != "" {
 				workerToken = prof.WorkerToken
+			} else if prof.Token != "" {
+				workerToken = prof.Token
 			}
 		}
 		if !flags.Changed("admin") {
@@ -296,6 +313,9 @@ func initCmd(profileName *string, iamBaseURL *string, iamAPIKey *string, ui *ui)
 			prof.IAMAPIKey = strings.TrimSpace(iamKey)
 			if prof.Auth.Login.URLTemplate == "" {
 				prof.Auth.Login = defaultLoginConfig(prof.IAMBaseURL, prof.IAMAPIKey)
+			}
+			if prof.Auth.Exchange.URLTemplate == "" {
+				prof.Auth.Exchange = defaultExchangeConfig(prof.IAMBaseURL, prof.IAMAPIKey)
 			}
 			if producerToken != "" {
 				prof.ProducerToken = strings.TrimSpace(producerToken)
@@ -392,21 +412,30 @@ func authCmd(profileName *string, iamBaseURL *string, iamAPIKey *string, ui *ui)
 	set.Flags().BoolVar(&admin, "admin", false, "Set admin for profile")
 
 	var (
-		loginEmail       string
-		loginPassword    string
-		loginURL         string
-		loginMethod      string
-		loginCT          string
-		loginPayload     string
-		loginPayloadFile string
-		loginTokenPath   string
-		saveLoginConfig  bool
-		headerKVs        []string
-		noPrompt         bool
+		loginEmail        string
+		loginPassword     string
+		loginURL          string
+		loginMethod       string
+		loginCT           string
+		loginPayload      string
+		loginPayloadFile  string
+		loginTokenPath    string
+		saveLoginConfig   bool
+		headerKVs         []string
+		exchangeURL       string
+		exchangeMethod    string
+		exchangeCT        string
+		exchangeTokenPath string
+		exchangeAudience  string
+		exchangeTenantID  string
+		exchangeScopes    []string
+		exchangeHeaderKVs []string
+		noExchange        bool
+		noPrompt          bool
 	)
 	login := &cobra.Command{
 		Use:   "login",
-		Short: "Login via IAM and store token",
+		Short: "Login via IAM, exchange idToken for accessToken, and store it",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			email := strings.TrimSpace(loginEmail)
 			password := strings.TrimSpace(loginPassword)
@@ -480,19 +509,66 @@ func authCmd(profileName *string, iamBaseURL *string, iamAPIKey *string, ui *ui)
 				}
 			}
 
-			token, err := iamLoginGeneric(loginCfg, prof.IAMBaseURL, prof.IAMAPIKey, email, password)
+			exchangeCfg := prof.Auth.Exchange
+			if exchangeCfg.URLTemplate == "" {
+				exchangeCfg = defaultExchangeConfig(prof.IAMBaseURL, prof.IAMAPIKey)
+			}
+			if strings.TrimSpace(exchangeURL) != "" {
+				exchangeCfg.URLTemplate = exchangeURL
+			}
+			if strings.TrimSpace(exchangeMethod) != "" {
+				exchangeCfg.Method = exchangeMethod
+			}
+			if strings.TrimSpace(exchangeCT) != "" {
+				exchangeCfg.ContentType = exchangeCT
+			}
+			if strings.TrimSpace(exchangeTokenPath) != "" {
+				exchangeCfg.TokenPath = exchangeTokenPath
+			}
+			if strings.TrimSpace(exchangeAudience) != "" {
+				exchangeCfg.Audience = exchangeAudience
+			}
+			if strings.TrimSpace(exchangeTenantID) != "" {
+				exchangeCfg.TenantID = exchangeTenantID
+			}
+			if len(exchangeScopes) > 0 {
+				exchangeCfg.Scopes = exchangeScopes
+			}
+			if len(exchangeHeaderKVs) > 0 {
+				if exchangeCfg.Headers == nil {
+					exchangeCfg.Headers = map[string]string{}
+				}
+				for _, kv := range exchangeHeaderKVs {
+					k, v, ok := strings.Cut(kv, ":")
+					if !ok {
+						return fmt.Errorf("invalid exchange header: %s (expected Key: Value)", kv)
+					}
+					exchangeCfg.Headers[strings.TrimSpace(k)] = strings.TrimSpace(v)
+				}
+			}
+
+			idToken, err := iamLoginGeneric(loginCfg, prof.IAMBaseURL, prof.IAMAPIKey, email, password)
 			if err != nil {
 				return err
 			}
+			token := idToken
+			if !noExchange {
+				accessToken, err := iamExchange(exchangeCfg, prof.IAMBaseURL, prof.IAMAPIKey, idToken)
+				if err != nil {
+					return err
+				}
+				token = accessToken
+			}
+
 			prof.Token = token
 			prof.ProducerToken = token
-			prof.WorkerToken = token
 
 			if cfg.Profiles == nil {
 				cfg.Profiles = map[string]profile{}
 			}
 			if saveLoginConfig {
 				prof.Auth.Login = loginCfg
+				prof.Auth.Exchange = exchangeCfg
 			}
 			cfg.Profiles[active] = prof
 			cfg.CurrentProfile = active
@@ -512,7 +588,16 @@ func authCmd(profileName *string, iamBaseURL *string, iamAPIKey *string, ui *ui)
 	login.Flags().StringVar(&loginPayloadFile, "payload-file", "", "Login payload file (template allowed)")
 	login.Flags().StringVar(&loginTokenPath, "token-path", "", "JSON token path (default idToken)")
 	login.Flags().StringArrayVar(&headerKVs, "header", nil, "Extra headers (Key: Value)")
-	login.Flags().BoolVar(&saveLoginConfig, "save", true, "Save login config for this profile")
+	login.Flags().StringVar(&exchangeURL, "exchange-url", "", "Override IAM token exchange URL (template allowed)")
+	login.Flags().StringVar(&exchangeMethod, "exchange-method", "", "Token exchange HTTP method (default POST)")
+	login.Flags().StringVar(&exchangeCT, "exchange-content-type", "", "Token exchange Content-Type override")
+	login.Flags().StringVar(&exchangeTokenPath, "exchange-token-path", "", "Token exchange JSON token path (default accessToken)")
+	login.Flags().StringVar(&exchangeAudience, "audience", "", "Access token audience for exchange")
+	login.Flags().StringVar(&exchangeTenantID, "tenant-id", "", "Tenant ID for exchange (optional)")
+	login.Flags().StringArrayVar(&exchangeScopes, "scope", nil, "Requested scopes for exchange (repeatable)")
+	login.Flags().StringArrayVar(&exchangeHeaderKVs, "exchange-header", nil, "Extra token exchange headers (Key: Value)")
+	login.Flags().BoolVar(&noExchange, "no-exchange", false, "Skip token exchange and store idToken (dev only)")
+	login.Flags().BoolVar(&saveLoginConfig, "save", true, "Save login/exchange config for this profile")
 	login.Flags().BoolVar(&noPrompt, "no-prompt", false, "Disable interactive prompts")
 
 	show := &cobra.Command{
@@ -525,12 +610,24 @@ func authCmd(profileName *string, iamBaseURL *string, iamAPIKey *string, ui *ui)
 			}
 			active := resolveProfileName(*profileName, cfg)
 			prof := cfg.Profiles[active]
+			loginCfg := prof.Auth.Login
+			if loginCfg.URLTemplate == "" {
+				loginCfg = defaultLoginConfig(prof.IAMBaseURL, prof.IAMAPIKey)
+			}
+			exchangeCfg := prof.Auth.Exchange
+			if exchangeCfg.URLTemplate == "" {
+				exchangeCfg = defaultExchangeConfig(prof.IAMBaseURL, prof.IAMAPIKey)
+			}
+
 			fmt.Printf("%s Profile: %s\n", ui.title("codeq"), active)
 			fmt.Printf("%s Base URL: %s\n", ui.info("•"), emptyOr(prof.BaseURL, "<unset>"))
 			fmt.Printf("%s IAM URL:  %s\n", ui.info("•"), emptyOr(prof.IAMBaseURL, "<unset>"))
 			fmt.Printf("%s API Key:  %s\n", ui.info("•"), maskToken(prof.IAMAPIKey))
-			fmt.Printf("%s Login URL: %s\n", ui.info("•"), emptyOr(prof.Auth.Login.URLTemplate, "<unset>"))
-			fmt.Printf("%s Token Path: %s\n", ui.info("•"), emptyOr(prof.Auth.Login.TokenPath, "<unset>"))
+			fmt.Printf("%s Login URL: %s\n", ui.info("•"), emptyOr(loginCfg.URLTemplate, "<unset>"))
+			fmt.Printf("%s Token Path: %s\n", ui.info("•"), emptyOr(loginCfg.TokenPath, "<unset>"))
+			fmt.Printf("%s Exchange URL: %s\n", ui.info("•"), emptyOr(exchangeCfg.URLTemplate, "<unset>"))
+			fmt.Printf("%s Exchange Token Path: %s\n", ui.info("•"), emptyOr(exchangeCfg.TokenPath, "<unset>"))
+			fmt.Printf("%s Audience: %s\n", ui.info("•"), emptyOr(exchangeCfg.Audience, "<unset>"))
 			fmt.Printf("%s Token:    %s\n", ui.info("•"), maskToken(firstNonEmpty(prof.Token, prof.ProducerToken, prof.WorkerToken)))
 			fmt.Printf("%s Admin:    %v\n", ui.info("•"), prof.Admin)
 			return nil
@@ -731,7 +828,7 @@ func workerCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui)
 		RunE: func(cmd *cobra.Command, args []string) error {
 			tokenSource := "worker"
 			token := strings.TrimSpace(*workerToken)
-			if strings.TrimSpace(*producerToken) != "" {
+			if token == "" && strings.TrimSpace(*producerToken) != "" {
 				tokenSource = "producer"
 				token = strings.TrimSpace(*producerToken)
 			}
@@ -955,11 +1052,11 @@ func producerAuthToken(producer, worker string) string {
 }
 
 func workerAuthToken(worker, producer string) string {
-	if strings.TrimSpace(producer) != "" {
-		return producer
-	}
 	if strings.TrimSpace(worker) != "" {
 		return worker
+	}
+	if strings.TrimSpace(producer) != "" {
+		return producer
 	}
 	return ""
 }
@@ -1031,6 +1128,21 @@ func defaultLoginConfig(iamBaseURL, apiKey string) loginConfig {
 	}
 }
 
+func defaultExchangeConfig(iamBaseURL, apiKey string) exchangeConfig {
+	base := strings.TrimRight(iamBaseURL, "/")
+	if base == "" {
+		base = defaultIAMBaseURL
+	}
+	return exchangeConfig{
+		URLTemplate: base + "/token/exchange?key={{apiKey}}",
+		Method:      "POST",
+		ContentType: "application/json",
+		TokenPath:   "accessToken",
+		Audience:    "codeq-producer",
+		Headers:     map[string]string{},
+	}
+}
+
 func iamLoginGeneric(cfg loginConfig, iamBaseURL, apiKey, email, password string) (string, error) {
 	if strings.TrimSpace(cfg.URLTemplate) == "" {
 		cfg = defaultLoginConfig(iamBaseURL, apiKey)
@@ -1079,6 +1191,79 @@ func iamLoginGeneric(cfg loginConfig, iamBaseURL, apiKey, email, password string
 	if resp.StatusCode != http.StatusOK {
 		out, _ := io.ReadAll(resp.Body)
 		return "", fmt.Errorf("login failed (%d): %s", resp.StatusCode, string(out))
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	token, err := extractToken(raw, cfg.TokenPath)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func iamExchange(cfg exchangeConfig, iamBaseURL, apiKey, idToken string) (string, error) {
+	if strings.TrimSpace(cfg.URLTemplate) == "" {
+		cfg = defaultExchangeConfig(iamBaseURL, apiKey)
+	}
+	if cfg.Method == "" {
+		cfg.Method = "POST"
+	}
+	if cfg.ContentType == "" {
+		cfg.ContentType = "application/json"
+	}
+	if cfg.TokenPath == "" {
+		cfg.TokenPath = "accessToken"
+	}
+
+	vars := map[string]string{
+		"apiKey":     apiKey,
+		"iamBaseUrl": strings.TrimRight(iamBaseURL, "/"),
+	}
+	exchangeURL, err := renderTemplate(cfg.URLTemplate, vars)
+	if err != nil {
+		return "", err
+	}
+
+	body := map[string]any{
+		"idToken": idToken,
+	}
+	if strings.TrimSpace(cfg.Audience) != "" {
+		body["audience"] = strings.TrimSpace(cfg.Audience)
+	}
+	if strings.TrimSpace(cfg.TenantID) != "" {
+		body["tenantId"] = strings.TrimSpace(cfg.TenantID)
+	}
+	if len(cfg.Scopes) > 0 {
+		var scopes []string
+		for _, s := range cfg.Scopes {
+			if v := strings.TrimSpace(s); v != "" {
+				scopes = append(scopes, v)
+			}
+		}
+		if len(scopes) > 0 {
+			body["scopes"] = scopes
+		}
+	}
+	b, _ := json.Marshal(body)
+
+	req, err := http.NewRequest(cfg.Method, exchangeURL, bytes.NewReader(b))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", cfg.ContentType)
+	for k, v := range cfg.Headers {
+		if strings.TrimSpace(k) != "" {
+			req.Header.Set(k, v)
+		}
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		out, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, string(out))
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	token, err := extractToken(raw, cfg.TokenPath)

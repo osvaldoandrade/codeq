@@ -32,18 +32,6 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	identitySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/accounts/lookup" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"users": []map[string]any{{"localId": "u1", "email": "test@codeq.local", "role": "USER"}},
-		})
-	}))
-	t.Cleanup(identitySrv.Close)
-
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa key gen: %v", err)
@@ -74,31 +62,32 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 	t.Cleanup(hookSrv.Close)
 
 	cfg := &config.Config{
-		Port:                            0,
-		RedisAddr:                       mr.Addr(),
-		IdentityServiceURL:              identitySrv.URL,
-		IdentityServiceApiKey:           "test-key",
-		Timezone:                        "UTC",
-		LogLevel:                        "error",
-		LogFormat:                       "json",
-		Env:                             "test",
-		DefaultLeaseSeconds:             60,
-		RequeueInspectLimit:             50,
-		LocalArtifactsDir:               "/tmp/codeq-artifacts-test",
-		MaxAttemptsDefault:              5,
-		BackoffPolicy:                   "fixed",
-		BackoffBaseSeconds:              1,
-		BackoffMaxSeconds:               3,
-		WorkerJwksURL:                   jwksSrv.URL,
-		WorkerAudience:                  "codeq-worker",
-		WorkerIssuer:                    "codeq-test",
-		AllowedClockSkewSeconds:         60,
-		WebhookHmacSecret:               "secret",
-		SubscriptionMinIntervalSeconds:  5,
+		Port:                               0,
+		RedisAddr:                          mr.Addr(),
+		IdentityJwksURL:                    jwksSrv.URL,
+		IdentityIssuer:                     "codeq-test",
+		IdentityAudience:                   "codeq-producer",
+		Timezone:                           "UTC",
+		LogLevel:                           "error",
+		LogFormat:                          "json",
+		Env:                                "test",
+		DefaultLeaseSeconds:                60,
+		RequeueInspectLimit:                50,
+		LocalArtifactsDir:                  "/tmp/codeq-artifacts-test",
+		MaxAttemptsDefault:                 5,
+		BackoffPolicy:                      "fixed",
+		BackoffBaseSeconds:                 1,
+		BackoffMaxSeconds:                  3,
+		WorkerJwksURL:                      jwksSrv.URL,
+		WorkerAudience:                     "codeq-worker",
+		WorkerIssuer:                       "codeq-test",
+		AllowedClockSkewSeconds:            60,
+		WebhookHmacSecret:                  "secret",
+		SubscriptionMinIntervalSeconds:     5,
 		SubscriptionCleanupIntervalSeconds: 60,
-		ResultWebhookMaxAttempts:        3,
-		ResultWebhookBaseBackoffSeconds: 1,
-		ResultWebhookMaxBackoffSeconds:  2,
+		ResultWebhookMaxAttempts:           3,
+		ResultWebhookBaseBackoffSeconds:    1,
+		ResultWebhookMaxBackoffSeconds:     2,
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config validate: %v", err)
@@ -110,7 +99,7 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	workerToken := signWorkerJWT(t, privKey, kid, "codeq-test", "codeq-worker", "worker-1")
-	producerToken := "producer-token"
+	producerToken := signProducerJWT(t, privKey, kid, "codeq-test", "codeq-producer", "user-1")
 
 	taskID := createTask(t, ctx, server.URL, producerToken, hookSrv.URL)
 	claimTask(t, ctx, server.URL, workerToken, taskID)
@@ -146,6 +135,35 @@ func signWorkerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub string)
 		"jti":        "jid-1",
 		"eventTypes": []string{string(domain.CmdGenerateMaster)},
 		"scope":      "codeq:claim codeq:heartbeat codeq:abandon codeq:nack codeq:result codeq:subscribe",
+	}
+	enc := func(v any) string {
+		b, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	h := enc(header)
+	p := enc(payload)
+	signingInput := h + "." + p
+	hashed := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	s := base64.RawURLEncoding.EncodeToString(sig)
+	return signingInput + "." + s
+}
+
+func signProducerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub string) string {
+	t.Helper()
+	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
+	now := time.Now().Unix()
+	payload := map[string]any{
+		"iss":   iss,
+		"aud":   aud,
+		"sub":   sub,
+		"exp":   now + 3600,
+		"iat":   now - 10,
+		"jti":   "jid-1",
+		"email": "test@codeq.local",
 	}
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)

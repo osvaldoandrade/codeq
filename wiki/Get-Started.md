@@ -14,8 +14,8 @@ cd codeq
 
 helm install codeq ./helm/codeq \
   --set secrets.enabled=true \
-  --set secrets.identityServiceApiKey=YOUR_KEY \
   --set secrets.webhookHmacSecret=YOUR_SECRET \
+  --set config.identityServiceUrl=https://api.storifly.ai \
   --set config.workerJwksUrl=https://your-jwks \
   --set config.workerIssuer=https://issuer
 ```

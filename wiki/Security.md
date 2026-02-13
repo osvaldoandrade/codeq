@@ -2,7 +2,15 @@
 
 ## Producer auth
 
-Producers use `Authorization: Bearer <idToken>` validated against the Identity service. The service calls `POST {identityServiceUrl}/v1/accounts/lookup?key={identityServiceApiKey}` with the id token. A non-200 response or empty user list returns `401`.
+Producers must call the API using an **access token (RS256)** minted by Tikti:
+
+- Request header: `Authorization: Bearer <accessToken>`
+- Services validate access tokens locally using Tikti's JWKS (`identityJwksUrl`), not via lookup.
+- Clients obtain an `idToken` (HS256) via login and then exchange it for an access token:
+
+  - `POST /v1/accounts/token/exchange?key=API_KEY`
+  - Body: `{ idToken, audience, scopes, tenantId }`
+  - Response: `{ accessToken }`
 
 ## Worker auth
 

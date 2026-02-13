@@ -5,6 +5,7 @@ CODEQ_BIN="${CODEQ_BIN:-./codeq}"
 BASE_URL="${CODEQ_BASE_URL:-https://api.storifly.ai}"
 IAM_BASE_URL="${CODEQ_IAM_BASE_URL:-https://api.storifly.ai/v1/accounts}"
 IAM_API_KEY="${CODEQ_IAM_API_KEY:-}"
+IAM_AUDIENCE="${CODEQ_IAM_AUDIENCE:-codeq-producer}"
 EMAIL="${CODEQ_EMAIL:-}"
 PASSWORD="${CODEQ_PASSWORD:-}"
 EVENT="${CODEQ_EVENT:-render_video}"
@@ -42,7 +43,7 @@ echo "[codeq] init"
   --iam-api-key "$IAM_API_KEY"
 
 echo "[codeq] auth login"
-"$CODEQ_BIN" auth login --no-prompt --email "$EMAIL" --password "$PASSWORD"
+"$CODEQ_BIN" auth login --no-prompt --email "$EMAIL" --password "$PASSWORD" --audience "$IAM_AUDIENCE"
 
 echo "[codeq] task create"
 create_out=$("$CODEQ_BIN" task create --event "$EVENT" --priority "$PRIORITY" --payload "$PAYLOAD")

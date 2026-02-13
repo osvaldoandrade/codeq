@@ -24,8 +24,11 @@
 
 ## Producer auth
 
-- `identityServiceUrl` (string)
-- `identityServiceApiKey` (string)
+- `identityServiceUrl` (string): Tikti base URL / issuer (example: `https://api.storifly.ai`)
+- `identityJwksUrl` (string): JWKS URL for producer access tokens (default: `{identityServiceUrl}/v1/.well-known/jwks.json`)
+- `identityIssuer` (string): expected `iss` for producer access tokens (default: `{identityServiceUrl}`)
+- `identityAudience` (string, optional): expected `aud` for producer access tokens
+- `identityServiceApiKey` (string, legacy): API key used by clients when calling `/v1/accounts/token/exchange?key=...` (not required for server-side JWT validation)
 
 ## Worker auth
 

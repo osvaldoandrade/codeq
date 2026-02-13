@@ -36,7 +36,7 @@ Most operations map to a small number of Redis/KVRocks primitives (lists, hashes
 
 ## Security in One Sentence
 
-Producers authenticate via an Identity lookup and workers authenticate via JWT (JWKS). The worker token carries two independent allowlists: `eventTypes` (which commands it may claim) and `scope` (which endpoints it may call). See [Security](Security).
+Producers authenticate via Tikti access tokens (JWKS) and workers authenticate via JWT (JWKS). The worker token carries two independent allowlists: `eventTypes` (which commands it may claim) and `scope` (which endpoints it may call). See [Security](Security).
 
 ## Reading Path
 

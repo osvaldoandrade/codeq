@@ -5,7 +5,7 @@ This document defines a safe migration path from the legacy scheduler/results st
 ## Compatibility notes
 
 - API base path changes from `/v1/scheduler` to `/v1/codeq`.
-- Worker auth moves from producer tokens to worker JWTs (JWKS validation). Producer auth remains Identity lookup.
+- Worker auth moves from producer tokens to worker JWTs (JWKS validation). Producer auth uses Tikti access tokens (JWKS validation).
 - Storage prefix changes from `legacy:` to `codeq:`.
 - Pending queue keys now include priority tier: `pending:<priority>`.
 - Result records are stored in `codeq:results` (new).

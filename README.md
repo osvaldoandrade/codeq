@@ -21,9 +21,17 @@ codeQ provides:
 - NACK + backoff + delayed queues.
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
-- Worker auth via JWT (JWKS), producer auth via Identity lookup.
+- Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
 
 ## Get started
+
+### Install CLI (macOS/Linux/Windows via Git Bash)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.sh | sh
+```
+
+Requires `git` and `go`.
 
 ### 1) Helm (small cluster)
 
@@ -35,8 +43,8 @@ cd codeq
 
 helm install codeq ./helm/codeq \
   --set secrets.enabled=true \
-  --set secrets.identityServiceApiKey=YOUR_KEY \
   --set secrets.webhookHmacSecret=YOUR_SECRET \
+  --set config.identityServiceUrl=https://api.storifly.ai \
   --set config.workerJwksUrl=https://your-jwks \
   --set config.workerIssuer=https://issuer
 ```

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	identitymw "github.com/codecompany/identity-middleware/pkg/identitymiddleware"
+	identitymw "github.com/codecompany/identity-middleware"
 	"github.com/gin-gonic/gin"
 )
 
