@@ -31,15 +31,82 @@ function goarchFromArch(arch) {
   }
 }
 
+function githubToken() {
+  const t = (process.env.CODEQ_GITHUB_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+  return t || null;
+}
+
+function githubAPIHeaders(extra) {
+  const headers = {
+    "User-Agent": "codeq-npm-installer",
+    ...extra,
+  };
+  const tok = githubToken();
+  if (tok) {
+    headers.Authorization = `Bearer ${tok}`;
+  }
+  return headers;
+}
+
+function getJSON(url, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      url,
+      {
+        headers: githubAPIHeaders({ Accept: "application/vnd.github+json" }),
+      },
+      (res) => {
+        const code = res.statusCode || 0;
+        if (code >= 300 && code < 400 && res.headers.location) {
+          if (redirectsLeft <= 0) {
+            reject(new Error(`too many redirects while fetching ${url}`));
+            res.resume();
+            return;
+          }
+          const next = res.headers.location.startsWith("http")
+            ? res.headers.location
+            : new URL(res.headers.location, url).toString();
+          res.resume();
+          getJSON(next, redirectsLeft - 1).then(resolve, reject);
+          return;
+        }
+        if (code !== 200) {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (d) => {
+            body += d;
+          });
+          res.on("end", () => {
+            const msg = body.trim() ? `: ${body.trim()}` : "";
+            reject(new Error(`HTTP ${code} fetching ${url}${msg}`));
+          });
+          return;
+        }
+
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (d) => {
+          body += d;
+        });
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch (err) {
+            reject(new Error(`invalid JSON from ${url}`));
+          }
+        });
+      }
+    );
+    req.on("error", reject);
+  });
+}
+
 function downloadToFile(url, filePath, redirectsLeft) {
   return new Promise((resolve, reject) => {
     const req = https.get(
       url,
       {
-        headers: {
-          "User-Agent": "codeq-npm-installer",
-          Accept: "application/octet-stream",
-        },
+        headers: githubAPIHeaders({ Accept: "application/octet-stream" }),
       },
       (res) => {
         const code = res.statusCode || 0;
@@ -105,8 +172,22 @@ async function main() {
   const outPath = path.join(__dirname, "..", "native", `codeq${exe}`);
   const tmpPath = `${outPath}.tmp`;
 
-  console.log(`[codeq] Downloading ${assetName} from ${tag}`);
-  await downloadToFile(url, tmpPath, 5);
+  console.log(`[codeq] Installing ${assetName} (${tag})`);
+
+  // Prefer GitHub API when token is available (required for private repos).
+  const tok = githubToken();
+  if (tok) {
+    const release = await getJSON(`https://api.github.com/repos/${repo}/releases/tags/${tag}`, 5);
+    const assets = Array.isArray(release.assets) ? release.assets : [];
+    const asset = assets.find((a) => a && a.name === assetName);
+    if (!asset || !asset.url) {
+      throw new Error(`asset not found in release ${tag}: ${assetName}`);
+    }
+    await downloadToFile(asset.url, tmpPath, 5);
+  } else {
+    console.log(`[codeq] Downloading from ${url}`);
+    await downloadToFile(url, tmpPath, 5);
+  }
 
   try {
     fs.renameSync(tmpPath, outPath);
@@ -131,4 +212,3 @@ main().catch((err) => {
   console.error(`[codeq] Install failed: ${err && err.message ? err.message : String(err)}`);
   process.exit(1);
 });
-

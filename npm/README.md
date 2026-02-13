@@ -36,4 +36,4 @@ npm update -g @osvaldoandrade/codeq
 
 - `CODEQ_GITHUB_REPO` (default `osvaldoandrade/codeq`): download binaries from another repo/fork.
 - `CODEQ_RELEASE_TAG` (default `v<packageVersion>`): download from a specific tag.
-
+- `CODEQ_GITHUB_TOKEN`: required when downloading binaries from a private repo release.
