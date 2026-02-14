@@ -106,26 +106,35 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
   -d '{"status":"COMPLETED","result":{"ok":true}}'
 ```
 
-## Specs and docs
+## Documentation
 
-Start here: `docs/README.md`
+### For Users
 
-Key references:
+- **Quick start**: See installation sections above
+- **HTTP API**: [docs/04-http-api.md](docs/04-http-api.md)
+- **Queue model**: [docs/05-queueing-model.md](docs/05-queueing-model.md)
+- **Webhooks**: [docs/12-webhooks.md](docs/12-webhooks.md)
+- **Configuration**: [docs/14-configuration.md](docs/14-configuration.md)
+- **Troubleshooting**: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 
-- HTTP API: `docs/04-http-api.md`
-- Queue model: `docs/05-queueing-model.md`
-- Storage layout: `docs/07-storage-kvrocks.md`
-- Backoff and retries: `docs/11-backoff.md`
-- Webhooks: `docs/12-webhooks.md`
-- Configuration: `docs/14-configuration.md`
-- Migration: `docs/migration.md`
+### For Contributors
+
+- **Contributing guide**: [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Development setup**: [DEVELOPMENT.md](DEVELOPMENT.md)
+- **Full specification**: [docs/README.md](docs/README.md)
+
+### Key References
+
+- Storage layout: [docs/07-storage-kvrocks.md](docs/07-storage-kvrocks.md)
+- Backoff and retries: [docs/11-backoff.md](docs/11-backoff.md)
+- Migration guide: [docs/migration.md](docs/migration.md)
 
 ## Repo layout
 
 - `pkg/`: public packages (`app`, `config`, `domain`)
 - `internal/`: controllers, middleware, services, repositories, providers
 - `helm/codeq`: Helm chart
-- `docs/`: full specification
+- `docs/`: technical specifications and design documentation
 
 ## License
 
