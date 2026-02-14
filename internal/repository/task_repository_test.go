@@ -28,11 +28,11 @@ func setupRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redis.Clie
 func TestEnqueueIdempotent(t *testing.T) {
 	ctx, _, rdb, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	task1, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123")
+	task1, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue 1: %v", err)
 	}
-	task2, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123")
+	task2, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue 2: %v", err)
 	}
@@ -48,11 +48,11 @@ func TestEnqueueIdempotent(t *testing.T) {
 func TestPriorityClaim(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	low, err := repo.Enqueue(ctx, cmd, `{"p":0}`, 0, "", 5, "")
+	low, err := repo.Enqueue(ctx, cmd, `{"p":0}`, 0, "", 5, "", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue low: %v", err)
 	}
-	high, err := repo.Enqueue(ctx, cmd, `{"p":9}`, 9, "", 5, "")
+	high, err := repo.Enqueue(ctx, cmd, `{"p":9}`, 9, "", 5, "", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue high: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestPriorityClaim(t *testing.T) {
 func TestNackDelayedAndDLQ(t *testing.T) {
 	ctx, _, rdb, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 3, "")
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 3, "", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -129,11 +129,11 @@ func TestNackDelayedAndDLQ(t *testing.T) {
 func TestCleanupExpired(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	task1, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "")
+	task1, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue 1: %v", err)
 	}
-	task2, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 0, "", 5, "")
+	task2, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 0, "", 5, "", time.Time{})
 	if err != nil {
 		t.Fatalf("enqueue 2: %v", err)
 	}
@@ -149,5 +149,31 @@ func TestCleanupExpired(t *testing.T) {
 	}
 	if _, err := repo.Get(ctx, task2.ID); err == nil {
 		t.Fatalf("expected task2 to be deleted")
+	}
+}
+
+func TestEnqueueScheduledGoesToDelayed(t *testing.T) {
+	ctx, _, rdb, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+	runAt := time.Now().UTC().Add(1 * time.Hour)
+
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", runAt)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Should not be visible in pending yet.
+	pendingKey := "codeq:q:" + strings.ToLower(string(cmd)) + ":pending:0"
+	if n, _ := rdb.LLen(ctx, pendingKey).Result(); n != 0 {
+		t.Fatalf("expected 0 pending items, got %d", n)
+	}
+
+	delayedKey := "codeq:q:" + strings.ToLower(string(cmd)) + ":delayed"
+	score, err := rdb.ZScore(ctx, delayedKey, task.ID).Result()
+	if err != nil {
+		t.Fatalf("expected task in delayed zset: %v", err)
+	}
+	if int64(score) != runAt.UTC().Unix() {
+		t.Fatalf("expected delayed score=%d, got %d", runAt.UTC().Unix(), int64(score))
 	}
 }

@@ -14,7 +14,7 @@ import (
 )
 
 type SchedulerService interface {
-	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string) (*domain.Task, error)
+	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int) (*domain.Task, error)
 	ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int) (*domain.Task, bool, error)
 	Heartbeat(ctx context.Context, taskID, workerID string, extendSeconds int) error
 	Abandon(ctx context.Context, taskID, workerID string) error
@@ -69,7 +69,7 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 	}
 }
 
-func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string) (*domain.Task, error) {
+func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int) (*domain.Task, error) {
 	if strings.TrimSpace(string(cmd)) == "" {
 		return nil, errors.New("invalid command")
 	}
@@ -82,13 +82,24 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 	if maxAttempts <= 0 {
 		maxAttempts = s.maxAttemptsDefault
 	}
-	task, err := s.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey)
+
+	visibleAt := time.Time{}
+	if !runAt.IsZero() {
+		visibleAt = runAt
+	} else if delaySeconds > 0 {
+		visibleAt = s.now().Add(time.Duration(delaySeconds) * time.Second)
+	}
+
+	task, err := s.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt)
 	if err != nil {
 		return nil, err
 	}
 	if s.notifier != nil {
-		if depth, err := s.repo.PendingLength(ctx, cmd); err == nil && depth == 1 {
-			s.notifier.NotifyQueueReady(ctx, cmd)
+		// Only notify for immediate tasks (scheduled tasks are placed into delayed ZSET).
+		if visibleAt.IsZero() || !visibleAt.After(s.now()) {
+			if depth, err := s.repo.PendingLength(ctx, cmd); err == nil && depth == 1 {
+				s.notifier.NotifyQueueReady(ctx, cmd)
+			}
 		}
 	}
 	return task, nil

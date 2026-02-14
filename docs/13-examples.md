@@ -9,6 +9,15 @@ curl -X POST http://localhost:8080/v1/codeq/tasks \
   -d '{"command":"GENERATE_MASTER","payload":{"jobId":"j-123"},"priority":3}'
 ```
 
+## Producer: create scheduled task
+
+```bash
+curl -X POST http://localhost:8080/v1/codeq/tasks \
+  -H 'Authorization: Bearer <producer-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"GENERATE_MASTER","payload":{"jobId":"j-123"},"runAt":"2026-01-25T13:10:00Z"}'
+```
+
 ## Worker: claim task
 
 ```bash

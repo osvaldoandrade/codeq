@@ -688,6 +688,8 @@ func taskCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui) *
 		webhook        string
 		maxAttempts    int
 		idempotencyKey string
+		runAt          string
+		delaySeconds   int
 	)
 
 	create := &cobra.Command{
@@ -725,6 +727,12 @@ func taskCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui) *
 			if idempotencyKey != "" {
 				body["idempotencyKey"] = idempotencyKey
 			}
+			if runAt != "" {
+				body["runAt"] = runAt
+			}
+			if delaySeconds > 0 {
+				body["delaySeconds"] = delaySeconds
+			}
 
 			spin := spinner.New(spinner.CharSets[14], 120*time.Millisecond)
 			spin.Suffix = " Enqueueing task..."
@@ -752,6 +760,8 @@ func taskCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui) *
 	create.Flags().StringVar(&webhook, "webhook", "", "Result webhook URL")
 	create.Flags().IntVar(&maxAttempts, "max-attempts", 0, "Max attempts")
 	create.Flags().StringVar(&idempotencyKey, "idempotency-key", "", "Idempotency key")
+	create.Flags().StringVar(&runAt, "run-at", "", "RFC3339 timestamp when the task becomes visible to workers")
+	create.Flags().IntVar(&delaySeconds, "delay-seconds", 0, "Delay in seconds before the task becomes visible to workers")
 
 	get := &cobra.Command{
 		Use:   "get <id>",

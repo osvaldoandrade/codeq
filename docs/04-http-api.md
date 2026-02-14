@@ -22,6 +22,8 @@ Request body:
 - `maxAttempts` (int, optional, default 5)
 - `webhook` (string, optional): result callback URL invoked on `COMPLETED` or `FAILED`
 - `idempotencyKey` (string, optional)
+- `runAt` (string, optional): RFC3339 timestamp when the task becomes visible to workers. If `runAt` is in the past, the task is enqueued immediately.
+- `delaySeconds` (int, optional): convenience alternative to `runAt` (relative to server time). If both are provided, `runAt` wins.
 
 Example:
 
@@ -30,6 +32,7 @@ Example:
   "command": "GENERATE_MASTER",
   "payload": {"jobId": "j-123"},
   "priority": 5,
+  "runAt": "2026-01-25T13:10:00Z",
   "maxAttempts": 8,
   "webhook": "https://example.org/codeq/hook",
   "idempotencyKey": "job-j-123"
