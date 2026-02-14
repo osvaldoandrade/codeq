@@ -1,0 +1,73 @@
+name: Test Coverage
+
+on:
+  push:
+    branches:
+      - main
+      - copilot/**
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run Tests with Coverage
+        run: |
+          # Test only packages without private dependencies
+          go test -v -coverprofile=coverage.out -covermode=atomic \
+            ./internal/backoff \
+            ./internal/repository \
+            ./internal/services \
+            ./pkg/domain \
+            ./pkg/config
+
+      - name: Generate Coverage Report
+        run: |
+          go tool cover -func=coverage.out > coverage-report.txt
+          echo "## Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          tail -20 coverage-report.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Extract total coverage
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Total Coverage: $COVERAGE**" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if coverage meets threshold
+          COVERAGE_NUM=$(echo $COVERAGE | sed 's/%//')
+          if (( $(echo "$COVERAGE_NUM >= 70" | bc -l) )); then
+            echo "✅ Coverage threshold met (≥70%)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️  Coverage below threshold: $COVERAGE (target: ≥70%)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Coverage to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.out
+            coverage-report.txt
+          retention-days: 30
+
+      - name: Coverage Badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "Coverage: $COVERAGE"
+          # You can add a badge generation tool here if desired
