@@ -4,17 +4,25 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ## Index
 
-1. `docs/01-overview.md`
-2. `docs/02-domain-model.md`
-3. `docs/03-architecture.md`
-4. `docs/04-http-api.md`
-5. `docs/05-queueing-model.md`
-6. `docs/06-sharding.md`
-7. `docs/07-storage-kvrocks.md`
-8. `docs/08-consistency.md`
-9. `docs/09-security.md`
-10. `docs/10-operations.md`
-11. `docs/11-backoff.md`
-12. `docs/12-webhooks.md`
-13. `docs/13-examples.md`
-14. `docs/14-configuration.md`
+### Core Specification
+
+1. `docs/01-overview.md` - System overview and goals
+2. `docs/02-domain-model.md` - Core entities and relationships
+3. `docs/03-architecture.md` - System architecture and components
+4. `docs/04-http-api.md` - HTTP API reference
+5. `docs/05-queueing-model.md` - Queue semantics and behavior
+6. `docs/06-sharding.md` - Sharding strategy (future)
+7. `docs/07-storage-kvrocks.md` - KVRocks storage layout
+8. `docs/08-consistency.md` - Consistency guarantees
+9. `docs/09-security.md` - Authentication and authorization
+10. `docs/10-operations.md` - Operational procedures
+11. `docs/11-backoff.md` - Retry and backoff logic
+12. `docs/12-webhooks.md` - Webhook notifications
+13. `docs/13-examples.md` - Usage examples
+14. `docs/14-configuration.md` - Configuration reference
+
+### Additional Resources
+
+15. `docs/15-cli-reference.md` - Complete CLI command reference
+16. `docs/16-workflows.md` - GitHub Actions workflows guide
+17. `docs/migration.md` - Migration guide

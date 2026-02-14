@@ -112,13 +112,17 @@ Start here: `docs/README.md`
 
 Key references:
 
-- HTTP API: `docs/04-http-api.md`
-- Queue model: `docs/05-queueing-model.md`
-- Storage layout: `docs/07-storage-kvrocks.md`
-- Backoff and retries: `docs/11-backoff.md`
-- Webhooks: `docs/12-webhooks.md`
-- Configuration: `docs/14-configuration.md`
-- Migration: `docs/migration.md`
+- **Getting Started**: `docs/01-overview.md`
+- **HTTP API**: `docs/04-http-api.md`
+- **CLI Reference**: `docs/15-cli-reference.md`
+- **Queue model**: `docs/05-queueing-model.md`
+- **Storage layout**: `docs/07-storage-kvrocks.md`
+- **Backoff and retries**: `docs/11-backoff.md`
+- **Webhooks**: `docs/12-webhooks.md`
+- **Configuration**: `docs/14-configuration.md`
+- **Workflows**: `docs/16-workflows.md`
+- **Migration**: `docs/migration.md`
+- **Contributing**: `CONTRIBUTING.md`
 
 ## Repo layout
 
