@@ -116,13 +116,15 @@ Key references:
 - **Overview**: `docs/01-overview.md` - System goals and design principles
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
-- **Developer Guide**: `docs/18-developer-guide.md` - Contributing and internal architecture
+- **Developer Guide**: `docs/19-developer-guide.md` - Contributing and internal architecture
 - **Queue model**: `docs/05-queueing-model.md` - Queue semantics
 - **Storage layout**: `docs/07-storage-kvrocks.md` - KVRocks data structures
 - **Backoff and retries**: `docs/11-backoff.md` - Retry logic
 - **Webhooks**: `docs/12-webhooks.md` - Push notifications
 - **Configuration**: `docs/14-configuration.md` - Config reference
 - **Performance**: `docs/17-performance-tuning.md` - Optimization guide
+- **Testing**: `docs/18-testing.md` - Test coverage documentation
+- **Package Reference**: `docs/20-package-reference.md` - Codebase structure
 - **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
 - **Migration**: `docs/migration.md` - Upgrade guide
 - **Contributing**: `CONTRIBUTING.md` - Contribution guidelines
