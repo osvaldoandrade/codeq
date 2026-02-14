@@ -4,7 +4,7 @@ description: |
   It builds the project and analyzes performance metrics to find optimization opportunities.
   Operates in three phases: research performance landscape and create plan, infer build steps
   and create performance engineering guides, then implement optimizations and measure impact.
-  Creates discussions to coordinate and draft PRs with improvements.
+  Creates issues to coordinate and draft PRs with improvements.
 
 on:
   schedule: daily
@@ -18,11 +18,16 @@ permissions:
 network: defaults
 
 safe-outputs:
-  create-discussion:
+  # create-discussion:
+  #   title-prefix: "${{ github.workflow }}"
+  #   category: "ideas"
+  #   max: 5
+  create-issue:
     title-prefix: "${{ github.workflow }}"
-    category: "ideas"
+    labels: [planning, performance]
     max: 5
   add-comment:
+    issue: true
     discussion: true
     target: "*" # can add a comment to any one single issue or pull request
   create-pull-request:
@@ -69,7 +74,7 @@ You are doing your work in phases. Right now you will perform just one of the fo
 
 To decide which phase to perform:
 
-1. First check for existing open discussion titled "${{ github.workflow }}" using `list_discussions`. Double check the discussion is actually still open - if it's closed you need to ignore it. If found, and open, read it and maintainer comments. If not found, then perform Phase 1 and nothing else.
+1. First check for existing open issue titled "${{ github.workflow }} - Research and Plan" using `list_issues`. Double check the issue is actually still open - if it's closed you need to ignore it. If found, and open, read it and maintainer comments. If not found, then perform Phase 1 and nothing else.
 
 2. Next check if `.github/actions/daily-perf-improver/build-steps/action.yml` exists. If yes then read it. If not then perform Phase 2 and nothing else.
 
@@ -94,10 +99,10 @@ To decide which phase to perform:
 
   **Goal:** Enable engineers to quickly measure performance impact across different dimensions using appropriate tools - from quick synthetic tests to realistic user scenarios.
 
-2. Use this research to create a discussion with title "${{ github.workflow }} - Research and Plan"
+2. Use this research to create an issue with title "${{ github.workflow }} - Research and Plan"
 
-   **Include a "How to Control this Workflow" section at the end of the discussion that explains:**
-   - The user can add comments to the discussion to provide feedback or adjustments to the plan
+   **Include a "How to Control this Workflow" section at the end of the issue that explains:**
+   - The user can add comments to the issue to provide feedback or adjustments to the plan
    - The user can use these commands:
 
       gh aw disable daily-perf-improver --repo ${{ github.repository }}
@@ -105,7 +110,7 @@ To decide which phase to perform:
       gh aw run daily-perf-improver --repo ${{ github.repository }} --repeat <number-of-repeats>
       gh aw logs daily-perf-improver --repo ${{ github.repository }}
 
-   **Include a "What Happens Next" section at the end of the discussion that explains:**
+   **Include a "What Happens Next" section at the end of the issue that explains:**
    - The next time this workflow runs, Phase 2 will be performed, which will analyze the codebase to create build steps configuration and performance engineering guides
    - After Phase 2 completes, Phase 3 will begin on subsequent runs to implement actual performance improvements
    - If running in "repeat" mode, the workflow will automatically run again to proceed to the next phase
@@ -139,7 +144,7 @@ To decide which phase to perform:
 
 6. Test build steps manually. If fixes needed then update the PR branch. If unable to resolve then create issue and exit.
 
-7. Add brief comment (1 or 2 sentences) to the discussion identified at the start of the workflow stating progress made and giving links to the PR created.
+7. Add brief comment (1 or 2 sentences) to the issue identified at the start of the workflow stating progress made and giving links to the PR created.
 
 8. Exit this entire workflow, do not proceed to Phase 3 on this run. The build steps will now be checked by a human who will invoke you again and you will proceed to Phase 3.
 
@@ -149,11 +154,11 @@ To decide which phase to perform:
 
    a. Repository is now performance-ready. Review `build-steps/action.yml` and `build-steps.log` to understand setup. If build failed then create fix PR and exit.
    
-   b. Read the plan in the discussion mentioned earlier, along with comments.
+   b. Read the plan in the issue mentioned earlier, along with comments.
 
    c. Check for existing performance PRs (especially yours with "${{ github.workflow }}" prefix). Avoid duplicate work.
    
-   d. If plan needs updating then comment on planning discussion with revised plan and rationale. Consider maintainer feedback.
+   d. If plan needs updating then comment on planning issue with revised plan and rationale. Consider maintainer feedback.
   
    e. Select a performance improvement goal to pursue from the plan. Ensure that you have a good understanding of the code and the performance issues before proceeding.
 
@@ -208,4 +213,4 @@ To decide which phase to perform:
 
    b. If failed or lessons learned then add more files to the PR branch to update relevant performance guide in `.github/copilot/instructions/` with insights. Create a new guide if needed, or split, merge or delete existing guides as appropriate. This is your chance to improve the performance engineering documentation for next time, so you and your team don't make the same mistakes again! Make the most of it!
 
-5. **Final update**: Add brief comment (1 or 2 sentences) to the discussion identified at the start of the workflow stating goal worked on, PR links, and progress made.
+5. **Final update**: Add brief comment (1 or 2 sentences) to the issue identified at the start of the workflow stating goal worked on, PR links, and progress made.
