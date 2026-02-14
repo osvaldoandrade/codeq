@@ -190,7 +190,7 @@ func TestComputeJitterVariation(t *testing.T) {
 	}
 }
 
-func TestMinInt(t *testing.T) {
+func TestMin(t *testing.T) {
 	tests := []struct {
 		a, b int
 		want int
@@ -203,14 +203,14 @@ func TestMinInt(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := minInt(tt.a, tt.b)
+		got := min(tt.a, tt.b)
 		if got != tt.want {
-			t.Errorf("minInt(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+			t.Errorf("min(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
 		}
 	}
 }
 
-func TestMaxInt(t *testing.T) {
+func TestMax(t *testing.T) {
 	tests := []struct {
 		a, b int
 		want int
@@ -223,9 +223,9 @@ func TestMaxInt(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := maxInt(tt.a, tt.b)
+		got := max(tt.a, tt.b)
 		if got != tt.want {
-			t.Errorf("maxInt(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
+			t.Errorf("max(%d, %d) = %d, want %d", tt.a, tt.b, got, tt.want)
 		}
 	}
 }
@@ -233,7 +233,7 @@ func TestMaxInt(t *testing.T) {
 func TestComputeZeroMaxDelay(t *testing.T) {
 	// Edge case: when maxDelay calculation results in 0 or negative
 	rng := rand.New(rand.NewSource(42))
-	
+
 	// With zero base and max, it defaults base to 1, so result should be 0 or 1
 	got := Compute("exp_full_jitter", 0, 0, 0, rng)
 	if got < 0 || got > 1 {

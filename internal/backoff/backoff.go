@@ -22,34 +22,20 @@ func Compute(policy string, baseSeconds int, maxSeconds int, attempts int, rng *
 	}
 	switch policy {
 	case "fixed":
-		return minInt(baseSeconds, maxSeconds)
+		return min(baseSeconds, maxSeconds)
 	case "linear":
-		return minInt(baseSeconds*maxInt(1, attempts), maxSeconds)
+		return min(baseSeconds*max(1, attempts), maxSeconds)
 	case "exponential":
-		return minInt(int(float64(baseSeconds)*math.Pow(2, float64(attempts))), maxSeconds)
+		return min(int(float64(baseSeconds)*math.Pow(2, float64(attempts))), maxSeconds)
 	case "exp_equal_jitter":
-		maxDelay := minInt(int(float64(baseSeconds)*math.Pow(2, float64(attempts))), maxSeconds)
+		maxDelay := min(int(float64(baseSeconds)*math.Pow(2, float64(attempts))), maxSeconds)
 		half := maxDelay / 2
 		return half + rng.Intn(half+1)
 	default: // exp_full_jitter
-		maxDelay := minInt(int(float64(baseSeconds)*math.Pow(2, float64(attempts))), maxSeconds)
+		maxDelay := min(int(float64(baseSeconds)*math.Pow(2, float64(attempts))), maxSeconds)
 		if maxDelay <= 0 {
 			return 0
 		}
 		return rng.Intn(maxDelay + 1)
 	}
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

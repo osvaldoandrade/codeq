@@ -3,9 +3,9 @@ package controllers
 import (
 	"net/http"
 
-	"github.com/osvaldoandrade/codeq/pkg/domain"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/gin-gonic/gin"
 )
