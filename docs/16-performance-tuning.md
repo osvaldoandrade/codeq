@@ -391,7 +391,7 @@ Performance varies based on workload, infrastructure, and configuration. These b
 
 - KVRocks: 4 vCPUs, 8 GB RAM, SSD storage
 - codeQ API: 4 instances, 2 vCPUs each, poolSize=10
-- Network: internal cluster network, < 1ms RTM
+- Network: internal cluster network, < 1ms RTT
 
 ### Throughput vs latency tradeoffs
 
