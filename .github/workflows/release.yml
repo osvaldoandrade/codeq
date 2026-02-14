@@ -15,6 +15,8 @@ concurrency:
 
 env:
   BIN_NAME: codeq
+  GOPRIVATE: github.com/codecompany/*
+  GONOSUMDB: github.com/codecompany/*
 
 jobs:
   release:
@@ -22,6 +24,18 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure git for private Go modules
+        shell: bash
+        env:
+          CODEQ_PRIVATE_MODULES_TOKEN: ${{ secrets.CODEQ_PRIVATE_MODULES_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CODEQ_PRIVATE_MODULES_TOKEN:-}" ]; then
+            echo "Missing secret CODEQ_PRIVATE_MODULES_TOKEN (required to fetch github.com/codecompany/* modules)." >&2
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${CODEQ_PRIVATE_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Set up Go
         uses: actions/setup-go@v5
