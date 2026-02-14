@@ -2,18 +2,7 @@
 
 This package installs the `codeq` native CLI from GitHub Releases and exposes it on your PATH via npm.
 
-## Install (GitHub Packages)
-
-1) Configure npm to use GitHub Packages for this scope:
-
-```bash
-echo '@osvaldoandrade:registry=https://npm.pkg.github.com' >> ~/.npmrc
-echo '//npm.pkg.github.com/:_authToken=YOUR_GITHUB_TOKEN' >> ~/.npmrc
-```
-
-The token needs `read:packages` to install.
-
-2) Install:
+## Install (npmjs)
 
 ```bash
 npm i -g @osvaldoandrade/codeq

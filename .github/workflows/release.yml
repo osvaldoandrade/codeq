@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -15,8 +14,6 @@ concurrency:
 
 env:
   BIN_NAME: codeq
-  GOPRIVATE: github.com/codecompany/*
-  GONOSUMDB: github.com/codecompany/*
 
 jobs:
   release:
@@ -25,25 +22,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure git for private Go modules
-        shell: bash
-        env:
-          CODEQ_PRIVATE_MODULES_TOKEN: ${{ secrets.CODEQ_PRIVATE_MODULES_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${CODEQ_PRIVATE_MODULES_TOKEN:-}" ]; then
-            echo "Missing secret CODEQ_PRIVATE_MODULES_TOKEN (required to fetch github.com/codecompany/* modules)." >&2
-            exit 1
-          fi
-          git config --global url."https://x-access-token:${CODEQ_PRIVATE_MODULES_TOKEN}@github.com/".insteadOf "https://github.com/"
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
       - name: Test
-        run: go test ./...
+        # Only test/build the CLI so the release pipeline doesn't depend on any private server-side modules.
+        run: go test ./cmd/codeq/...
 
       - name: Build binaries
         shell: bash
@@ -81,16 +67,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          registry-url: "https://npm.pkg.github.com"
-          scope: "@osvaldoandrade"
+          registry-url: "https://registry.npmjs.org"
 
-      - name: Publish npm package (GitHub Packages)
+      - name: Publish npm package (npmjs)
         shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "Missing secret NPM_TOKEN (required to publish to registry.npmjs.org)." >&2
+            exit 1
+          fi
           VERSION="${GITHUB_REF_NAME#v}"
           cd npm
           npm version --no-git-tag-version "$VERSION"
-          npm publish
+          npm publish --access public

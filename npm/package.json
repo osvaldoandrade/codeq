@@ -17,9 +17,6 @@
   "scripts": {
     "postinstall": "node scripts/postinstall.js"
   },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
-  },
   "engines": {
     "node": ">=18"
   },
