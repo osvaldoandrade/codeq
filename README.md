@@ -120,7 +120,9 @@ Key references:
 - **Backoff and retries**: `docs/11-backoff.md`
 - **Webhooks**: `docs/12-webhooks.md`
 - **Configuration**: `docs/14-configuration.md`
-- **Workflows**: `docs/16-workflows.md`
+- **Performance Tuning**: `docs/16-performance-tuning.md`
+- **Workflows**: `docs/17-workflows.md`
+- **Testing**: `docs/19-testing.md`
 - **Migration**: `docs/migration.md`
 - **Contributing**: `CONTRIBUTING.md`
 
