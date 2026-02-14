@@ -18,3 +18,4 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 12. `docs/12-webhooks.md`
 13. `docs/13-examples.md`
 14. `docs/14-configuration.md`
+15. `docs/16-performance-tuning.md`

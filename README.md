@@ -118,6 +118,7 @@ Key references:
 - Backoff and retries: `docs/11-backoff.md`
 - Webhooks: `docs/12-webhooks.md`
 - Configuration: `docs/14-configuration.md`
+- Performance tuning: `docs/16-performance-tuning.md`
 - Migration: `docs/migration.md`
 
 ## Repo layout
