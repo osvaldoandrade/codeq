@@ -202,20 +202,16 @@ jobs:
           cat > /opt/gh-aw/safeoutputs/tools.json << 'GH_AW_SAFE_OUTPUTS_TOOLS_EOF'
           [
             {
-              "description": "Create a GitHub discussion for announcements, Q\u0026A, reports, status updates, or community conversations. Use this for content that benefits from threaded replies, doesn't require task tracking, or serves as documentation. For actionable work items that need assignment and status tracking, use create_issue instead. CONSTRAINTS: Maximum 1 discussion(s) can be created. Title will be prefixed with \"${{ github.workflow }}\". Discussions will be created in category \"q-a\".",
+              "description": "Create a GitHub issue to track work, report problems, or discuss tasks. Use this for actionable items that need assignment and status tracking. Issues support labels, assignees, and milestones. CONSTRAINTS: Maximum 1 issue(s) can be created. Title will be prefixed with \"${{ github.workflow }}\". Issues will be labeled with planning, qa.",
               "inputSchema": {
                 "additionalProperties": false,
                 "properties": {
                   "body": {
-                    "description": "Discussion content in Markdown. Do NOT repeat the title as a heading since it already appears as the discussion's h1. Include all relevant context, findings, or questions.",
-                    "type": "string"
-                  },
-                  "category": {
-                    "description": "Discussion category by name (e.g., 'General'), slug (e.g., 'general'), or ID. If omitted, uses the first available category. Category must exist in the repository.",
+                    "description": "Issue content in Markdown. Do NOT repeat the title as a heading since it already appears as the issue's h1. Include all relevant context, steps to reproduce, or requirements.",
                     "type": "string"
                   },
                   "title": {
-                    "description": "Concise discussion title summarizing the topic. The title appears as the main heading, so keep it brief and descriptive.",
+                    "description": "Concise issue title summarizing the task or problem. The title appears as the main heading, so keep it brief and descriptive.",
                     "type": "string"
                   }
                 },
@@ -225,7 +221,7 @@ jobs:
                 ],
                 "type": "object"
               },
-              "name": "create_discussion"
+              "name": "create_issue"
             },
             {
               "description": "Add a comment to an existing GitHub issue, pull request, or discussion. Use this to provide feedback, answer questions, or add information to an existing conversation. For creating new items, use create_issue, create_discussion, or create_pull_request instead. CONSTRAINTS: Maximum 5 comment(s) can be added. Target: *.",
@@ -1159,7 +1155,7 @@ jobs:
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           GH_AW_AGENT_OUTPUT: ${{ env.GH_AW_AGENT_OUTPUT }}
-          GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "{\"add_comment\":{\"max\":5,\"target\":\"*\"},\"create_discussion\":{\"category\":\"q-a\",\"expires\":168,\"fallback_to_issue\":true,\"max\":1,\"title_prefix\":\"${{ github.workflow }}\"},\"create_pull_request\":{\"base_branch\":\"${{ github.ref_name }}\",\"draft\":true,\"labels\":[\"automation\",\"qa\"],\"max\":1,\"max_patch_size\":1024},\"missing_data\":{},\"missing_tool\":{}}"
+          GH_AW_SAFE_OUTPUTS_HANDLER_CONFIG: "{\"add_comment\":{\"max\":5,\"target\":\"*\"},\"create_issue\":{\"expires\":168,\"labels\":[\"planning\",\"qa\"],\"max\":1,\"title_prefix\":\"${{ github.workflow }}\"},\"create_pull_request\":{\"base_branch\":\"${{ github.ref_name }}\",\"draft\":true,\"labels\":[\"automation\",\"qa\"],\"max\":1,\"max_patch_size\":1024},\"missing_data\":{},\"missing_tool\":{}}"
         with:
           github-token: ${{ secrets.GH_AW_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           script: |
