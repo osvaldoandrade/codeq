@@ -4,7 +4,17 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ## Index
 
-### Core Specification
+### Tutorials (Learning-Oriented)
+
+0. `docs/00-getting-started.md` - Step-by-step tutorial for first-time users
+
+### How-To Guides (Problem-Oriented)
+
+13. `docs/13-examples.md` - Usage examples and common patterns
+14. `docs/14-configuration.md` - Configuration reference
+15. `docs/15-cli-reference.md` - Complete CLI command reference
+
+### Technical Reference (Information-Oriented)
 
 1. `docs/01-overview.md` - System overview and goals
 2. `docs/02-domain-model.md` - Core entities and relationships
@@ -18,10 +28,10 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 10. `docs/10-operations.md` - Operational procedures
 11. `docs/11-backoff.md` - Retry and backoff logic
 12. `docs/12-webhooks.md` - Webhook notifications
-13. `docs/13-examples.md` - Usage examples
-14. `docs/14-configuration.md` - Configuration reference
+16. `docs/16-workflows.md` - GitHub Actions workflows guide
+17. `docs/17-performance-tuning.md` - Performance optimization guide
 
-### Additional Resources
+### Explanation (Understanding-Oriented)
 
 15. `docs/15-cli-reference.md` - Complete CLI command reference
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
