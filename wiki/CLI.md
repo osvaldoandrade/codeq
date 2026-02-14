@@ -2,27 +2,38 @@
 
 This repo ships a `codeq` CLI that targets the HTTP API.
 
+> **📚 For complete CLI documentation, see [docs/15-cli-reference.md](../docs/15-cli-reference.md)**
+
 It is designed for three workflows:
 
 - producer operations (create tasks, query status)
 - worker operations (claim, heartbeat, submit results)
 - operator operations (inspect queues, run admin cleanup)
 
-## Run
+## Quick Start
 
-From this repository:
+### Install
 
-```bash
-go run ./cmd/codeq --help
-```
+Via npm:
 
-Or install a local binary:
+````bash
+npm i -g @osvaldoandrade/codeq
+codeq --help
+````
 
-```bash
-go install ./cmd/codeq
-```
+Via install script:
 
-## Config
+````bash
+curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.sh | sh
+````
+
+### Initialize
+
+````bash
+codeq init
+````
+
+### Configuration
 
 The CLI stores configuration under:
 
@@ -30,38 +41,78 @@ The CLI stores configuration under:
 
 It supports profiles so you can switch between clusters.
 
-Initialize an empty config:
+## Common Commands
 
-```bash
-codeq init
-```
+### Producer
 
-## Tokens
+Create a task:
+
+````bash
+codeq task create --event render_video --priority 10 --payload '{"jobId":500}'
+````
+
+Check task status:
+
+````bash
+codeq task get <task-id>
+````
+
+Get result:
+
+````bash
+codeq task result <task-id>
+````
+
+### Worker
+
+Start a local worker loop:
+
+````bash
+codeq worker start --events render_video --concurrency 5
+````
+
+### Operator
+
+Inspect queue depth:
+
+````bash
+codeq queue inspect render_video
+````
+
+## Authentication
 
 The CLI can store:
 
 - `producerToken` for `POST /tasks`
 - `workerToken` (JWT) for worker endpoints
 
-There is also an optional login helper (`codeq auth login`) that can fetch a producer token from an external IAM endpoint (template-driven).
+### Via Configuration
+
+````bash
+codeq auth set --producer <token>
+codeq auth set --worker <token>
+````
+
+### Via IAM Login
+
+There is an optional login helper (`codeq auth login`) that can fetch a producer token from an external IAM endpoint (template-driven).
+
 For Tikti, the login helper fetches an `idToken` and then exchanges it for an `accessToken` via `/v1/accounts/token/exchange`.
 
-## Examples
+````bash
+codeq auth login
+````
 
-Create a task:
+### Via Environment Variables
 
-```bash
-codeq task create --event render_video --priority 10 --payload '{"jobId":500}'
-```
+````bash
+export CODEQ_PRODUCER_TOKEN=your-token
+export CODEQ_WORKER_TOKEN=your-jwt
+codeq task create --event TEST
+````
 
-Start a local worker loop (pull):
+## Complete Reference
 
-```bash
-codeq worker start --events render_video --concurrency 5
-```
+For detailed documentation including all commands, options, and examples, see:
 
-Inspect queue depth:
-
-```bash
-codeq queue inspect render_video
-```
+**[docs/15-cli-reference.md](../docs/15-cli-reference.md)**
