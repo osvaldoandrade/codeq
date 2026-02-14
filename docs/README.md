@@ -34,7 +34,8 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 ### Explanation (Understanding-Oriented)
 
 15. `docs/15-cli-reference.md` - Complete CLI command reference
-16. `docs/16-workflows.md` - GitHub Actions workflows guide
-17. `docs/17-package-reference.md` - Package structure and codebase guide
-18. `docs/18-performance-tuning.md` - Performance optimization and scaling
-19. `docs/migration.md` - Migration guide
+16. `docs/16-performance-tuning.md` - Performance optimization and scaling
+17. `docs/17-workflows.md` - GitHub Actions workflows guide
+18. `docs/18-package-reference.md` - Package structure and codebase guide
+19. `docs/19-testing.md` - Test coverage and testing strategy
+20. `docs/migration.md` - Migration guide
