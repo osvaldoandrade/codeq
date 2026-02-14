@@ -24,7 +24,6 @@ safe-outputs:
     labels: [planning, qa]
   add-comment:
     issue: true
-    discussion: true
     target: "*" # all issues and PRs
     max: 5
   create-pull-request:

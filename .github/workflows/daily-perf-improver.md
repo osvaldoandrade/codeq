@@ -28,7 +28,6 @@ safe-outputs:
     max: 5
   add-comment:
     issue: true
-    discussion: true
     target: "*" # can add a comment to any one single issue or pull request
   create-pull-request:
     draft: true
