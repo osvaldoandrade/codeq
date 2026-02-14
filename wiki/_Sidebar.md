@@ -19,6 +19,10 @@
 - [CLI](CLI)
 - [Configuration](Configuration)
 
+## Development
+- [Package Reference](Package-Reference)
+- [Performance Tuning](Performance-Tuning)
+
 ## Operations
 - [Operations](Operations)
 - [Migration](Migration)

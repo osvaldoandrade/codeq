@@ -1,5 +1,57 @@
 # Architecture and flow
 
+## Package Structure
+
+### Public Packages (`pkg/`)
+
+- **`pkg/app`**: Application bootstrap and HTTP server setup
+  - `application.go`: Main application struct, server initialization
+  - `url_mappings.go`: HTTP route definitions
+  - `integration_test.go`: End-to-end integration tests
+- **`pkg/config`**: Configuration loading and validation
+  - `config.go`: Config struct, YAML/env parsing, defaults
+- **`pkg/domain`**: Core domain entities
+  - `task.go`: Task, Command types
+  - `result.go`: Result, Artifact types
+  - `subscription.go`: Subscription (webhook) types
+  - `queue_stats.go`: QueueStats metrics
+
+### Internal Packages (`internal/`)
+
+- **`internal/controllers`**: HTTP handlers (Gin)
+  - `create_task_controller.go`: Producer enqueue
+  - `claim_task_controller.go`: Worker claim
+  - `submit_result_controller.go`: Worker completion
+  - `nack_task_controller.go`: Worker NACK
+  - `heartbeat_controller.go`: Worker lease renewal
+  - `get_task_controller.go`, `get_result_controller.go`: Read endpoints
+  - `create_subscription_controller.go`, `heartbeat_subscription_controller.go`: Webhook subscription management
+  - `queue_admin_controller.go`, `queue_stats_controller.go`, `cleanup_expired_controller.go`: Admin operations
+- **`internal/middleware`**: Authentication and request processing
+  - `auth.go`: Producer token validation (Tikti/Identity JWKS)
+  - `worker_auth.go`: Worker JWT validation (JWKS)
+  - `worker_scope.go`: Event type authorization filter
+  - `require_admin.go`: Admin endpoint protection
+  - `any_auth.go`: Either producer or worker token
+  - `logger.go`: Request logging
+  - `request_id.go`: Correlation ID injection
+- **`internal/services`**: Business logic layer
+  - `scheduler_service.go`: Task claim, NACK, repair, requeue logic
+  - `results_service.go`: Result storage and validation
+  - `result_callback_service.go`: Task-level webhook delivery
+  - `subscription_service.go`: Worker availability subscription management
+  - `notifier_service.go`: Worker availability webhook dispatch
+  - `subscription_cleanup_service.go`: Expired subscription removal
+- **`internal/repository`**: Data access layer (Redis operations)
+  - `task_repository.go`: Task CRUD, queue operations (RPOPLPUSH, delayed queue)
+  - `result_repository.go`: Result storage and retrieval
+  - `subscription_repository.go`: Subscription storage
+- **`internal/providers`**: External integrations
+  - `redis_provider.go`: Redis client initialization
+  - `uploader.go`: Artifact storage (local filesystem)
+- **`internal/backoff`**: Retry logic
+  - `backoff.go`: Backoff policies (fixed, linear, exponential, jitter)
+
 ## Components
 
 - HTTP API: Gin-based router with JSON binding.
