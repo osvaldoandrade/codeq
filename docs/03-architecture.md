@@ -33,6 +33,7 @@
 - **`internal/middleware`**: Authentication and request processing
   - `auth.go`: Producer token validation (JWKS-based via plugin system)
   - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
+  - `rate_limit.go`: Token bucket rate limiting per bearer token
   - `tenant.go`: Tenant ID extraction from JWT claims
   - `worker_scope.go`: Event type authorization filter
   - `require_admin.go`: Admin endpoint protection
@@ -55,6 +56,8 @@
   - `uploader.go`: Artifact storage (local filesystem)
 - **`internal/backoff`**: Retry logic
   - `backoff.go`: Backoff policies (fixed, linear, exponential, jitter)
+- **`internal/ratelimit`**: Rate limiting
+  - `token_bucket.go`: Redis-backed token bucket rate limiter
 - **`internal/metrics`**: Observability and monitoring
   - `metrics.go`: Prometheus metric definitions (counters, histograms, gauges)
   - `redis_collector.go`: Custom Prometheus collector for Redis-backed queue metrics
@@ -63,6 +66,7 @@
 
 - HTTP API: Gin-based router with JSON binding.
 - Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
+- Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
 - Result processor: validates completion payloads and stores results.
 - Storage: KVRocks via Redis API.

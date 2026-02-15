@@ -321,6 +321,66 @@ backoffMaxSeconds: 900
 maxAttemptsDefault: 5
 ```
 
+### API rate limiting
+
+CodeQ supports Redis-backed rate limiting to protect against API abuse and ensure fair resource allocation. Rate limiting is optional and disabled by default.
+
+**When to enable rate limiting:**
+
+- **Multi-tenant deployments**: Prevent one tenant from monopolizing resources
+- **Public APIs**: Protect against DDoS and abuse
+- **Quota enforcement**: Implement tiered service levels
+- **Cost control**: Limit compute costs from runaway clients
+
+**Configuration example:**
+
+````yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 1000  # ~16.7 req/sec sustained
+    burstSize: 100           # Allow bursts up to 100 requests
+  worker:
+    requestsPerMinute: 600   # ~10 req/sec sustained
+    burstSize: 50
+  webhook:
+    requestsPerMinute: 600
+    burstSize: 100
+  admin:
+    requestsPerMinute: 30    # ~0.5 req/sec sustained
+    burstSize: 5
+````
+
+**Performance characteristics:**
+
+- **Token bucket algorithm**: Each request consumes 1 token; tokens refill at `requestsPerMinute / 60` per second
+- **Redis overhead**: Single Redis call (Lua script) per API request, ~1-2ms latency
+- **Per-bearer-token isolation**: Rate limits enforced per individual token (SHA256-hashed)
+- **Fail-open behavior**: If Redis is unavailable, requests are allowed to prevent outages
+- **Memory usage**: Token bucket state in Redis, ~100 bytes per active token, auto-expires after ~2 refill cycles
+
+**Capacity planning:**
+
+For a deployment handling 1000 producer tokens at 10 req/sec each:
+
+````yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 600   # 10 req/sec per token
+    burstSize: 100           # Handle 10-second bursts
+````
+
+Memory overhead: ~100 KB total (1000 tokens × 100 bytes)
+
+**Best practices:**
+
+1. **Set burst = 2-5x sustained**: Allows legitimate traffic spikes without triggering rate limits
+2. **Monitor rate limit hits**: Alert on sustained `codeq_rate_limit_hits_total` increases
+3. **Coordinate with clients**: Ensure clients implement exponential backoff with `Retry-After` header
+4. **Start conservative**: Begin with generous limits, tighten based on metrics
+5. **Different limits per scope**: Producers need higher limits than admin operations
+
+See [Operations - Rate Limiting](10-operations.md#rate-limiting) for detailed configuration and monitoring.
+
 ## 3) Scaling Strategies
 
 ### Horizontal scaling (API servers)
