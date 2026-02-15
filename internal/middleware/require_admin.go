@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	identitymw "github.com/osvaldoandrade/codeq/internal/identitymw"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
 )
 
 func RequireAdmin() gin.HandlerFunc {

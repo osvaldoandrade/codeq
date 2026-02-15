@@ -13,6 +13,10 @@ import (
 )
 
 func setupRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redis.Client, TaskRepository) {
+	return setupRepoWithBackoff(t, "exp_full_jitter", 1, 10)
+}
+
+func setupRepoWithBackoff(t *testing.T, policy string, baseSeconds int, maxSeconds int) (context.Context, *miniredis.Miniredis, *redis.Client, TaskRepository) {
 	t.Helper()
 	mr, err := miniredis.Run()
 	if err != nil {
@@ -21,7 +25,7 @@ func setupRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redis.Clie
 	t.Cleanup(mr.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, policy, baseSeconds, maxSeconds)
 	return context.Background(), mr, rdb, repo
 }
 
@@ -65,6 +69,50 @@ func TestPriorityClaim(t *testing.T) {
 	}
 	if got.ID != high.ID {
 		t.Fatalf("expected high priority task, got %s (low=%s)", got.ID, low.ID)
+	}
+}
+
+func TestClaimRepairRequeuesExpiredLease(t *testing.T) {
+	ctx, mr, rdb, repo := setupRepoWithBackoff(t, "fixed", 1, 1)
+	cmd := domain.CmdGenerateMaster
+
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 1, 50, 5)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if claimed.ID != task.ID {
+		t.Fatalf("expected claimed id=%s, got %s", task.ID, claimed.ID)
+	}
+
+	inprogKey := "codeq:q:" + strings.ToLower(string(cmd)) + ":inprog"
+	if n, _ := rdb.SCard(ctx, inprogKey).Result(); n != 1 {
+		t.Fatalf("expected inprog size=1, got %d", n)
+	}
+
+	// Expire the lease key in Redis without waiting on wall clock time.
+	mr.FastForward(2 * time.Second)
+
+	// Next claim triggers repair; task is requeued to delayed with backoff.
+	_, ok, err = repo.Claim(ctx, "worker-2", []domain.Command{cmd}, 60, 50, 5)
+	if err != nil {
+		t.Fatalf("claim 2: %v", err)
+	}
+	if ok {
+		t.Fatalf("expected no immediate claim; expired task should be requeued to delayed")
+	}
+
+	if n, _ := rdb.SCard(ctx, inprogKey).Result(); n != 0 {
+		t.Fatalf("expected inprog size=0 after repair, got %d", n)
+	}
+
+	delayedKey := "codeq:q:" + strings.ToLower(string(cmd)) + ":delayed"
+	if _, err := rdb.ZScore(ctx, delayedKey, task.ID).Result(); err != nil {
+		t.Fatalf("expected task in delayed after repair, got err=%v", err)
 	}
 }
 
@@ -179,93 +227,93 @@ func TestEnqueueScheduledGoesToDelayed(t *testing.T) {
 }
 
 func TestHeartbeat(t *testing.T) {
-ctx, _, _, repo := setupRepo(t)
-cmd := domain.CmdGenerateMaster
-_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
-if err != nil {
-t.Fatalf("enqueue: %v", err)
-}
+	ctx, _, _, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 
-claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
-if err != nil || !ok {
-t.Fatalf("claim: ok=%v err=%v", ok, err)
-}
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
 
-err = repo.Heartbeat(ctx, claimed.ID, "worker-1", 120)
-if err != nil {
-t.Fatalf("heartbeat: %v", err)
-}
+	err = repo.Heartbeat(ctx, claimed.ID, "worker-1", 120)
+	if err != nil {
+		t.Fatalf("heartbeat: %v", err)
+	}
 }
 
 func TestAbandon(t *testing.T) {
-ctx, _, _, repo := setupRepo(t)
-cmd := domain.CmdGenerateMaster
-_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
-if err != nil {
-t.Fatalf("enqueue: %v", err)
-}
+	ctx, _, _, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 
-claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
-if err != nil || !ok {
-t.Fatalf("claim: ok=%v err=%v", ok, err)
-}
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
 
-err = repo.Abandon(ctx, claimed.ID, "worker-1")
-if err != nil {
-t.Fatalf("abandon: %v", err)
-}
+	err = repo.Abandon(ctx, claimed.ID, "worker-1")
+	if err != nil {
+		t.Fatalf("abandon: %v", err)
+	}
 }
 
 func TestAdminQueues(t *testing.T) {
-ctx, _, _, repo := setupRepo(t)
-cmd := domain.CmdGenerateMaster
-_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
-if err != nil {
-t.Fatalf("enqueue: %v", err)
-}
+	ctx, _, _, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 
-queues, err := repo.AdminQueues(ctx)
-if err != nil {
-t.Fatalf("admin queues: %v", err)
-}
-if queues == nil {
-t.Fatalf("expected non-nil queues map")
-}
+	queues, err := repo.AdminQueues(ctx)
+	if err != nil {
+		t.Fatalf("admin queues: %v", err)
+	}
+	if queues == nil {
+		t.Fatalf("expected non-nil queues map")
+	}
 }
 
 func TestQueueStats(t *testing.T) {
-ctx, _, _, repo := setupRepo(t)
-cmd := domain.CmdGenerateMaster
-_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
-if err != nil {
-t.Fatalf("enqueue: %v", err)
-}
+	ctx, _, _, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 
-stats, err := repo.QueueStats(ctx, cmd)
-if err != nil {
-t.Fatalf("queue stats: %v", err)
-}
-if stats == nil {
-t.Fatalf("expected non-nil stats")
-}
-if stats.Ready < 1 {
-t.Fatalf("expected at least 1 ready task, got %d", stats.Ready)
-}
+	stats, err := repo.QueueStats(ctx, cmd)
+	if err != nil {
+		t.Fatalf("queue stats: %v", err)
+	}
+	if stats == nil {
+		t.Fatalf("expected non-nil stats")
+	}
+	if stats.Ready < 1 {
+		t.Fatalf("expected at least 1 ready task, got %d", stats.Ready)
+	}
 }
 
 func TestPendingLength(t *testing.T) {
-ctx, _, _, repo := setupRepo(t)
-cmd := domain.CmdGenerateMaster
-_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
-if err != nil {
-t.Fatalf("enqueue: %v", err)
-}
+	ctx, _, _, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
 
-length, err := repo.PendingLength(ctx, cmd)
-if err != nil {
-t.Fatalf("pending length: %v", err)
-}
-if length < 1 {
-t.Fatalf("expected at least 1 pending task, got %d", length)
-}
+	length, err := repo.PendingLength(ctx, cmd)
+	if err != nil {
+		t.Fatalf("pending length: %v", err)
+	}
+	if length < 1 {
+		t.Fatalf("expected at least 1 pending task, got %d", length)
+	}
 }

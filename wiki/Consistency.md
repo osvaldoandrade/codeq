@@ -12,7 +12,7 @@ Each Redis command is linearizable, but workflows span multiple keys without a m
 
 ## Failure windows
 
-- If a crash occurs after `RPOPLPUSH` and before `SETEX`, the task is stuck in in-progress without a lease. The requeue logic detects missing/expired leases and moves it back to ready.
+- If a crash occurs after the atomic claim move (Lua `RPOP` + `SADD`) and before `SETEX`, the task is stuck in in-progress without a lease. The requeue logic detects missing/expired leases and moves it back to ready.
 - If a crash occurs after result persistence but before list cleanup, the result is authoritative and the list is repaired later.
 
 ## Clocks
@@ -25,7 +25,7 @@ Let C be the number of commands, L the scan limit, and N the list length.
 
 - Enqueue: O(1)
 - Claim: O(C * L) to scan and requeue + O(1) per successful pop
-- Requeue: O(N) per `LREM` in the worst case
+- Requeue: O(L) to scan leases (pipelined) + O(1) removal per expired task (`SREM`)
 - Cleanup: O(k * m) where k is tasks deleted and m is the number of lists touched
 
-These bounds follow Redis list and sorted set complexity.
+These bounds follow Redis list, set, and sorted set complexity.

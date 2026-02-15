@@ -83,7 +83,7 @@ func (c *redisCollector) Collect(ch chan<- prometheus.Metric) {
 			llens = append(llens, pipe.LLen(ctx, keyQueuePending(cmd, p)))
 		}
 		readyCmds[cmd] = llens
-		inprogCmds[cmd] = pipe.LLen(ctx, keyQueueInprog(cmd))
+		inprogCmds[cmd] = pipe.SCard(ctx, keyQueueInprog(cmd))
 		delayedCmds[cmd] = pipe.ZCard(ctx, keyQueueDelayed(cmd))
 		dlqCmds[cmd] = pipe.LLen(ctx, keyQueueDLQ(cmd))
 		subsCmds[cmd] = pipe.ZCount(ctx, keySubsEvent(cmd), minScore, "+inf")

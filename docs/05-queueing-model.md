@@ -5,7 +5,7 @@
 Each command is represented by a set of queues:
 
 - Pending queue: list of IDs available for claim.
-- In-progress queue: list of IDs currently leased.
+- In-progress queue: set of IDs currently leased.
 - Delayed queue: ZSET of IDs with `visibleAt` as score.
 - Dead-letter queue: list or ZSET for tasks that exceeded `maxAttempts`.
 
@@ -21,7 +21,7 @@ Alternative: store ready tasks in a ZSET with score `(priority, sequence)` but t
 
 ## Claim semantics
 
-- A claim moves one ID from pending to in-progress using `RPOPLPUSH`.
+- A claim atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`).
 - A lease key is set with TTL `leaseSeconds` and value `workerId`.
 - The task record is updated to `IN_PROGRESS`, `workerId`, and `leaseUntil`.
 

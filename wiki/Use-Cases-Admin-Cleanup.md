@@ -32,10 +32,10 @@ sequenceDiagram
   O->>Q: POST /admin/tasks/cleanup
   Q->>K: ZRANGEBYSCORE tasks:ttl (<= cutoff)
   loop for each task up to limit
-    Q->>K: HDEL tasks + HDEL results
-    Q->>K: DEL lease + DEL idempo
-    Q->>K: LREM pending/inprog + ZREM delayed + LREM dlq
-    Q->>K: ZREM tasks:ttl
-  end
-  Q-->>O: 200 OK (summary)
+	    Q->>K: HDEL tasks + HDEL results
+	    Q->>K: DEL lease + DEL idempo
+	    Q->>K: LREM pending + SREM inprog + ZREM delayed + LREM dlq
+	    Q->>K: ZREM tasks:ttl
+	  end
+	  Q-->>O: 200 OK (summary)
 ```
