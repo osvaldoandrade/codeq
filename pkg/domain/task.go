@@ -21,22 +21,34 @@ const (
 	StatusFailed     TaskStatus = "FAILED"
 )
 
+type TaskLocation string
+
+const (
+	LocationPending    TaskLocation = "PENDING_LIST"
+	LocationDelayed    TaskLocation = "DELAYED_ZSET"
+	LocationInProgress TaskLocation = "INPROG_SET"
+	LocationDLQ        TaskLocation = "DLQ_SET"
+	LocationNone       TaskLocation = "NONE"
+)
+
 type Task struct {
-	ID          string     `json:"id"`
-	Command     Command    `json:"command"`
-	Payload     string     `json:"payload"` // JSON string opaco
-	Priority    int        `json:"priority,omitempty"`
-	Webhook     string     `json:"webhook,omitempty"`
-	Status      TaskStatus `json:"status"`
-	WorkerID    string     `json:"workerId,omitempty"`
-	LeaseUntil  string     `json:"leaseUntil,omitempty"` // RFC3339
-	Attempts    int        `json:"attempts,omitempty"`
-	MaxAttempts int        `json:"maxAttempts,omitempty"`
-	Error       string     `json:"error,omitempty"`
-	ResultKey   string     `json:"resultKey,omitempty"`
-	TenantID    string     `json:"tenantId,omitempty"` // Tenant isolation
-	CreatedAt   time.Time  `json:"createdAt"`
-	UpdatedAt   time.Time  `json:"updatedAt"`
+	ID       string     `json:"id"`
+	Command  Command    `json:"command"`
+	Payload  string     `json:"payload"` // JSON string opaco
+	Priority int        `json:"priority,omitempty"`
+	Webhook  string     `json:"webhook,omitempty"`
+	Status   TaskStatus `json:"status"`
+	// lastKnownLocation is a hint for targeted admin cleanup; it is not authoritative.
+	LastKnownLocation TaskLocation `json:"lastKnownLocation,omitempty"`
+	WorkerID          string       `json:"workerId,omitempty"`
+	LeaseUntil        string       `json:"leaseUntil,omitempty"` // RFC3339
+	Attempts          int          `json:"attempts,omitempty"`
+	MaxAttempts       int          `json:"maxAttempts,omitempty"`
+	Error             string       `json:"error,omitempty"`
+	ResultKey         string       `json:"resultKey,omitempty"`
+	TenantID          string       `json:"tenantId,omitempty"` // Tenant isolation
+	CreatedAt         time.Time    `json:"createdAt"`
+	UpdatedAt         time.Time    `json:"updatedAt"`
 }
 
 var (
