@@ -244,6 +244,7 @@ func TestIdempotencyBloom_ConcurrentAddAndMaybeHas(t *testing.T) {
 	const opsPerGoroutine = 100
 
 	var wg sync.WaitGroup
+	errors := make(chan error, numGoroutines*opsPerGoroutine)
 
 	// Concurrently add and check keys
 	for g := 0; g < numGoroutines; g++ {
@@ -255,13 +256,19 @@ func TestIdempotencyBloom_ConcurrentAddAndMaybeHas(t *testing.T) {
 				bloom.Add(key)
 				// Immediately check if it's present
 				if !bloom.MaybeHas(key) {
-					t.Errorf("expected MaybeHas to return true for just-added key %q", key)
+					errors <- fmt.Errorf("expected MaybeHas to return true for just-added key %q", key)
 				}
 			}
 		}(g)
 	}
 
 	wg.Wait()
+	close(errors)
+
+	// Check for errors from concurrent operations
+	for err := range errors {
+		t.Error(err)
+	}
 
 	// Verify all keys are still present
 	for g := 0; g < numGoroutines; g++ {
@@ -283,6 +290,7 @@ func TestIdempotencyBloom_ConcurrentRotation(t *testing.T) {
 
 	var wg sync.WaitGroup
 	done := make(chan struct{})
+	errors := make(chan error, numGoroutines*100)
 
 	// Start workers that continuously add and check keys
 	for g := 0; g < numGoroutines; g++ {
@@ -298,7 +306,7 @@ func TestIdempotencyBloom_ConcurrentRotation(t *testing.T) {
 					key := fmt.Sprintf("g%d-k%d", gid, i)
 					bloom.Add(key)
 					if !bloom.MaybeHas(key) {
-						t.Errorf("expected MaybeHas to return true for just-added key %q", key)
+						errors <- fmt.Errorf("expected MaybeHas to return true for just-added key %q", key)
 					}
 					i++
 					time.Sleep(1 * time.Millisecond)
@@ -311,6 +319,12 @@ func TestIdempotencyBloom_ConcurrentRotation(t *testing.T) {
 	time.Sleep(duration)
 	close(done)
 	wg.Wait()
+	close(errors)
+
+	// Check for any errors
+	for err := range errors {
+		t.Error(err)
+	}
 }
 
 // TestIdempotencyBloom_DefaultParameters tests that default parameters are applied correctly.
