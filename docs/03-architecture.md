@@ -48,6 +48,7 @@
   - `subscription_cleanup_service.go`: Expired subscription removal
 - **`internal/repository`**: Data access layer (Redis operations)
   - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
+  - `idempotency_bloom.go`: In-process Bloom filter for idempotency fast-path optimization
   - `result_repository.go`: Result storage and retrieval
   - `subscription_repository.go`: Subscription storage
 - **`internal/providers`**: External integrations
@@ -75,8 +76,12 @@
 
 1. Producer submits `command`, `payload`, `priority`, and optional `webhook`.
 2. Service validates fields and normalizes the payload to a JSON string.
-3. Service writes the task record and inserts the task ID into the pending list.
-4. Service updates the retention index.
+3. If `idempotencyKey` is provided:
+   - **Bloom filter fast-path**: Check in-process probabilistic filter; if key is definitely absent, skip Redis GET
+   - **Redis-based deduplication**: Use SETNX on idempotency key mapping to ensure uniqueness
+   - Return existing task if conflict detected
+4. Service writes the task record and inserts the task ID into the pending list.
+5. Service updates the retention index.
 
 ## Claim flow (pull)
 
