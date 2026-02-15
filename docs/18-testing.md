@@ -11,7 +11,7 @@ This document describes the test coverage strategy for the codeq project. The pr
 | Package | Coverage | Status |
 |---------|----------|--------|
 | internal/backoff | 96.0% | ✅ Excellent |
-| internal/domain | 100.0% | ✅ Complete |
+| pkg/domain | 100.0% | ✅ Complete |
 | internal/repository | 72.8% | ✅ Good |
 | internal/services | 66.7% | ✅ Good |
 | internal/providers | 76.9% | ✅ Good |
