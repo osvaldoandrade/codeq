@@ -2,19 +2,21 @@
 
 ## Executive Summary
 
-This document presents a comprehensive design for implementing queue sharding in codeQ to enable horizontal scaling beyond single-node KVRocks deployments. The current architecture constrains all queue operations to a single KVRocks instance, creating a scaling ceiling that cannot be overcome through vertical scaling alone. As workloads grow beyond the capacity of a single storage node, the system requires a mechanism to distribute queue data across multiple storage backends while preserving the core guarantees of task scheduling, lease management, and at-least-once delivery semantics.
+This document presents the design for implementing queue sharding in codeQ to enable horizontal scaling beyond single-node KVRocks deployments. The current single-instance architecture creates a scaling ceiling; the system requires a mechanism to distribute queue data across multiple storage backends while preserving task scheduling, lease management, and at-least-once delivery guarantees.
 
-The proposed design introduces explicit sharding through a pluggable ShardSupplier interface that maps commands to storage backends. This approach balances the need for predictable routing with the flexibility to support different sharding strategies as operational requirements evolve. The design carefully considers the implications of distributed operations on Lua script atomicity, Redis Cluster hash slot constraints, and the migration path from the current single-shard architecture.
+The design introduces explicit sharding through a pluggable ShardSupplier interface that maps commands to storage backends, balancing predictable routing with flexibility for evolving operational requirements. The design addresses Lua script atomicity, Redis Cluster hash slot constraints, and migration paths from the single-shard architecture.
 
-Three strategic alternatives are evaluated: continuing with vertical scaling only (Option 1), deploying independent master-replica pairs per tenant or workload (Option 2), and implementing a RAFT-based consensus layer for strong consistency (Option 3). The analysis recommends pursuing Option 2 as the near-term pragmatic solution while keeping Option 3 as a long-term architectural aspiration once KVRocks cluster capabilities mature.
+**Design choice**: We've selected a combined approach that leverages explicit sharding (via ShardSupplier) with a path toward RAFT-based consensus for strong consistency and automatic failover. This matches our requirements for horizontal scalability, operational flexibility, and high availability. The implementation follows a phased approach: near-term explicit sharding with independent storage backends (enabling immediate scaling), evolving toward RAFT-backed consensus storage (such as TiKV) as the primary persistence layer for production deployments requiring strong consistency guarantees.
+
+An alternative architectural path—evolving the plugin architecture to decouple persistence from KVRocks—is also explored. This would enable pluggable persistence backends (Cassandra, HBase, TiKV) through well-defined interfaces that separate auth and persistence concerns.
 
 ## Problem Statement and Current Limitations
 
 ### Architecture Overview
 
-The codeQ service operates as a stateless HTTP API layer that orchestrates persistent queues stored in KVRocks, a disk-backed storage system implementing the Redis protocol. Workers pull tasks through atomic claim operations, lease them for a configurable duration, and submit completion results. The system maintains four distinct queue structures per command and tenant: a pending list for ready tasks, a delayed sorted set for future-scheduled tasks, an in-progress set for currently leased tasks, and a dead-letter set for tasks that exceeded retry limits.
+The codeQ service operates as a stateless HTTP API layer orchestrating persistent queues in KVRocks (disk-backed, Redis-protocol-compatible storage). The system maintains four queue structures per command and tenant: pending list, delayed sorted set, in-progress set, and dead-letter set.
 
-The current implementation assumes all queue operations target a single Redis-compatible backend. Queue keys incorporate tenant identifiers to provide isolation in multi-tenant deployments, following the pattern `codeq:q:{command}:{tenantID}:{queue-type}:{priority}`. This namespacing strategy effectively partitions data at the logical level but does not distribute it across multiple physical storage instances.
+The current implementation targets a single Redis-compatible backend. Queue keys use tenant identifiers for isolation (`codeq:q:{command}:{tenantID}:{queue-type}:{priority}`), providing logical partitioning without physical distribution.
 
 ```mermaid
 graph TB
@@ -45,69 +47,54 @@ graph TB
 
 ### Scaling Constraints
 
-The single-instance architecture encounters fundamental limitations as workload scales:
+The single-instance architecture encounters fundamental limitations:
 
-**Storage Capacity Ceiling**: KVRocks persists queue data to disk using RocksDB as the underlying storage engine. While RocksDB can handle datasets exceeding available memory through tiered storage, a single KVRocks instance is ultimately bounded by the disk capacity of its host. Organizations processing billions of tasks (for example, ten billion tasks with thirty-day retention at an average of five kilobytes per task requires approximately 500 terabytes of storage) will exhaust available storage on even the largest available instance types.
+**Storage Capacity**: Single KVRocks instance bounded by host disk capacity. Multi-billion task workloads with 30-day retention exhaust available storage on largest instance types.
 
-**CPU Saturation**: Queue operations require CPU cycles for command parsing, Lua script execution, compaction in RocksDB, and network I/O handling. Benchmarks in production-like environments show that a KVRocks instance with eight vCPUs saturates at approximately four thousand enqueue operations per second under sustained load (tested with five kilobyte payloads, fifty concurrent clients, as documented in the performance tuning guide section 4). While vertically scaling to sixteen or thirty-two vCPUs extends this ceiling, diminishing returns emerge as contention on shared data structures within KVRocks limits parallel execution efficiency.
+**CPU Saturation**: Benchmarks show 8-vCPU KVRocks saturates at ~4K enqueue ops/sec under sustained load (5KB payloads, 50 concurrent clients). Vertical scaling shows diminishing returns due to internal contention.
 
-**Memory Pressure**: KVRocks maintains an in-memory block cache to accelerate reads and reduce disk I/O. The block cache size directly impacts query latency, with cache misses forcing expensive disk reads. As the working set grows with more commands, tenants, and in-flight tasks, the cache hit ratio degrades unless memory scales proportionally. Vertical scaling to sixty-four or one hundred twenty-eight gigabytes of memory is feasible but expensive, and eventually encounters physical limits of available instance types.
+**Memory Pressure**: Block cache size impacts query latency. Growing working sets degrade cache hit ratios without proportional memory scaling.
 
-**Network Bandwidth**: High-throughput deployments can saturate network interfaces. A single KVRocks instance handling ten thousand requests per second with average payload sizes of five kilobytes requires approximately four hundred megabits per second of sustained bandwidth. While modern instance types provide ten gigabit network interfaces, bursty traffic patterns and operational monitoring overhead consume headroom.
+**Network Bandwidth**: 10K req/sec at 5KB average payload requires ~400 Mbps sustained. Bursty traffic patterns consume available headroom.
 
-**Operational Risk**: Concentrating all queue state in a single KVRocks instance creates a single point of failure for the entire scheduling system. While KVRocks supports asynchronous replication to standby replicas, failover requires manual intervention or external orchestration through systems like Redis Sentinel. The recovery time objective during a primary failure directly impacts the availability guarantees of the overall system.
+**Operational Risk**: Single point of failure. Asynchronous replication with manual failover impacts availability SLAs.
 
 ### Horizontal Scaling Requirements
 
-To overcome these limitations, the system must distribute queue data across multiple independent storage backends. The sharding mechanism must satisfy several requirements:
+Sharding must satisfy:
 
-The routing decision must be deterministic and stable. Given a command and tenant identifier, the system must consistently select the same storage backend across all API server instances and over time. Non-deterministic routing would cause tasks enqueued by one API server to become invisible to workers claiming through another API server, violating the fundamental contract of the queueing system.
-
-The sharding strategy must preserve tenant isolation boundaries. Tasks belonging to different tenants must remain logically separated even when colocated on the same physical shard. This ensures that tenant A cannot exhaust storage or performance resources in a way that impacts tenant B, maintaining the multi-tenant security and resource isolation guarantees.
-
-Atomic operations within a single command queue must remain atomic despite sharding. The claim operation atomically moves a task identifier from the pending list to the in-progress set using a Lua script that executes `RPOP` followed by `SADD`. This atomicity cannot span multiple storage backends without introducing distributed transaction coordination, which conflicts with the system's availability-first design philosophy.
-
-The introduction of sharding must not break existing deployments. Organizations running codeQ against a single KVRocks instance must be able to upgrade to a sharding-aware version without data migration or operational disruption. A backward compatibility path that treats the single-instance configuration as a single-shard deployment is essential for adoption.
+- **Deterministic routing**: Given command and tenant ID, consistently select the same backend across all API servers and over time
+- **Tenant isolation**: Maintain separation even when colocated on same physical shard  
+- **Atomic operations**: Preserve atomicity within single command queue (e.g., Lua scripts for claim operations)
+- **Backward compatibility**: Support single-instance deployments as single-shard configuration
 
 ## Sharding Strategy Evaluation
 
 ### Hash-Based Sharding
 
-Hash-based sharding computes a shard identifier by applying a hash function to a routing key. For codeQ, the natural routing key would combine command and tenant identifiers. The hash function maps this composite key to one of N configured shards, distributing load across storage backends based on the statistical properties of the hash function.
+Applies hash function to (command, tenant) composite key, mapping to one of N shards. Provides automatic load balancing and deterministic routing.
 
-This approach provides automatic load balancing without manual shard assignment. As new commands or tenants are introduced, they distribute across existing shards according to the hash function. The mapping is deterministic, ensuring all API servers route the same command-tenant pair to the same shard. Consistent hashing variants can minimize rehashing when the shard count changes, though this adds complexity.
+**Pros**: Automatic distribution, no manual assignment, consistent hashing minimizes rehashing.
 
-However, hash-based sharding introduces operational challenges. The distribution is opaque, making it difficult to reason about which commands or tenants reside on which shards. Troubleshooting a performance issue with a specific command requires searching multiple shards or maintaining a separate mapping index. The automatic distribution may create hotspots if certain command-tenant pairs see disproportionate traffic, as the hash function has no awareness of load.
-
-Rebalancing existing data when adding or removing shards is complex. While consistent hashing reduces the number of keys that must move, some data migration is unavoidable. Migrating tasks from one shard to another while maintaining queue ordering and lease consistency requires careful coordination. The system must either pause task processing during migration or implement complex dual-read logic to handle tasks that are mid-flight.
+**Cons**: Opaque distribution complicates troubleshooting, potential hotspots from unaware load distribution, complex rebalancing when adding/removing shards.
 
 ### Range-Based Sharding
 
-Range-based sharding partitions the key space into contiguous ranges, assigning each range to a specific shard. For codeQ, ranges could be defined on command name lexicographically or on tenant identifier numerically. A configuration file or database table stores the range boundaries and their corresponding shard assignments.
+Partitions key space into contiguous ranges (e.g., command names 'A-M' on shard 1, 'N-Z' on shard 2).
 
-This strategy provides predictable data locality. All commands with names starting with 'A' through 'M' might reside on shard 1, while 'N' through 'Z' reside on shard 2. Operators can reason about data placement and target specific shards for maintenance or debugging. Related commands can be deliberately colocated by choosing appropriate range boundaries.
+**Pros**: Predictable data locality, related commands can be colocated.
 
-The primary disadvantage is the risk of uneven distribution. If command names or tenant identifiers are not uniformly distributed, certain shards will carry disproportionate load. A system with many commands starting with 'A' would overload the first shard while leaving others underutilized. Splitting ranges to rebalance load requires updating configuration and potentially migrating data, which is operationally disruptive.
+**Cons**: Risk of uneven distribution if keys aren't uniformly distributed, rigid coupling to key structure, disruptive rebalancing.
 
-Range-based sharding also couples the shard assignment to the key structure. If the organization later decides to shard by a different attribute, such as geographic region, the existing range definitions become obsolete. The rigidity of range boundaries makes it difficult to adapt to changing operational requirements without significant rework.
+### Explicit Sharding (Chosen Approach)
 
-### Explicit Sharding
+Delegates routing to pluggable ShardSupplier component. Configuration maps commands/tenants to named shards.
 
-Explicit sharding delegates the routing decision to an application-level ShardSupplier component. This pluggable interface accepts a command and tenant identifier and returns the target shard identifier. The mapping logic is entirely external to the core queueing system, allowing operators to implement arbitrary strategies.
+**Pros**: Maximum operational control, deliberate placement of high-traffic commands, supports gradual rollout, flexible routing strategies without code changes.
 
-A simple explicit implementation might use a static configuration file mapping specific commands to named shards. More sophisticated implementations could query a configuration service, implement custom load-balancing logic, or route based on external metadata such as customer tier or geographic location. The flexibility to change routing strategies without modifying core system code is valuable as operational requirements evolve.
+**Cons**: Requires manual mapping maintenance, configuration synchronization across API servers.
 
-Explicit sharding provides maximum operational control. Operators can deliberately place high-traffic commands on dedicated shards with provisioned capacity. Testing environments can use a single-shard configuration, while production uses multi-shard. Gradual rollout of sharding becomes feasible by initially routing all commands to the legacy shard, then progressively moving commands to new shards as confidence grows.
-
-The trade-off is operational complexity. Operators must maintain the shard mapping configuration and ensure it remains synchronized across all API server instances. Incorrect configuration can route tasks to the wrong shard or cause split-brain scenarios where different API servers have inconsistent views of the mapping. The system must provide validation tooling and configuration update mechanisms that minimize these risks.
-
-### Recommended Approach
-
-This design recommends explicit sharding through a ShardSupplier interface as the initial implementation. The flexibility to support different routing strategies without code changes is valuable during the early phases of sharding adoption. Organizations can start with simple static mappings and evolve toward more sophisticated strategies as operational experience grows.
-
-The explicit approach also aligns with the system's design philosophy of providing mechanisms rather than policies. The core queueing system should not encode assumptions about how organizations want to distribute their workloads. By externalizing the routing decision, the system remains adaptable to diverse deployment scenarios.
-
-Future extensions could layer hash-based or range-based routing as alternative ShardSupplier implementations, giving operators a menu of choices. The core system would remain agnostic to the specific strategy, interacting only through the stable interface contract.
+**Why chosen**: Aligns with providing mechanisms rather than policies. Organizations start with simple static mappings, evolve toward sophisticated strategies as needed. Hash/range-based routing can be implemented as alternative ShardSupplier implementations.
 
 ## Proposed Architecture
 
@@ -511,9 +498,11 @@ Cost efficiency may suffer from underutilization. If tenant workloads vary signi
 
 **When to choose this option**: Organizations with natural partitioning boundaries (geographic regions, customer tiers, business units) benefit from independent stacks. If cross-partition operations are not required, or can be handled at a higher orchestration layer, the operational simplicity of independent stacks may outweigh the benefits of unified sharding. This approach is particularly attractive as a near-term pragmatic solution while the engineering team develops confidence in sharding implementations.
 
-### Option 3: RAFT Consensus Layer
+### Option 3: Sharding with RAFT-Backed Storage (Chosen Approach)
 
-Implement a RAFT-based consensus layer on top of multiple KVRocks instances to provide strong consistency and automatic failover. The codeQ service would interact with a RAFT cluster that replicates queue operations across multiple KVRocks nodes.
+**This is our chosen long-term design.** We leverage explicit sharding (via ShardSupplier) combined with RAFT-backed consensus storage to provide strong consistency and automatic failover.
+
+The architecture uses ShardSupplier for horizontal distribution across multiple storage backends, where each backend is a RAFT-consensus system (such as TiKV) rather than standalone KVRocks instances. This combines the scalability benefits of sharding with the availability guarantees of distributed consensus.
 
 ```mermaid
 graph TB
@@ -523,61 +512,174 @@ graph TB
         API3[API Server N]
     end
     
-    subgraph "RAFT Consensus Cluster"
-        RAFT_L[RAFT Leader]
-        RAFT_F1[RAFT Follower 1]
-        RAFT_F2[RAFT Follower 2]
+    subgraph "Shard A: RAFT Cluster"
+        RAFT_A_L[RAFT Leader A]
+        RAFT_A_F1[RAFT Follower A1]
+        RAFT_A_F2[RAFT Follower A2]
         
-        RAFT_L -.->|Replication| RAFT_F1
-        RAFT_L -.->|Replication| RAFT_F2
-        RAFT_F1 -.->|Heartbeat| RAFT_L
-        RAFT_F2 -.->|Heartbeat| RAFT_L
+        RAFT_A_L -.->|Replication| RAFT_A_F1
+        RAFT_A_L -.->|Replication| RAFT_A_F2
     end
     
-    subgraph "Storage Layer"
-        KV1[(KVRocks 1)]
-        KV2[(KVRocks 2)]
-        KV3[(KVRocks 3)]
+    subgraph "Shard B: RAFT Cluster"
+        RAFT_B_L[RAFT Leader B]
+        RAFT_B_F1[RAFT Follower B1]
+        RAFT_B_F2[RAFT Follower B2]
+        
+        RAFT_B_L -.->|Replication| RAFT_B_F1
+        RAFT_B_L -.->|Replication| RAFT_B_F2
     end
     
-    API1 --> RAFT_L
-    API2 --> RAFT_L
-    API3 --> RAFT_L
+    API1 --> RAFT_A_L
+    API2 --> RAFT_A_L
+    API3 --> RAFT_B_L
     
-    RAFT_L --> KV1
-    RAFT_F1 --> KV2
-    RAFT_F2 --> KV3
-    
-    style RAFT_L fill:#4ecdc4
-    style RAFT_F1 fill:#95e1d3
-    style RAFT_F2 fill:#95e1d3
+    style RAFT_A_L fill:#4ecdc4
+    style RAFT_A_F1 fill:#95e1d3
+    style RAFT_A_F2 fill:#95e1d3
+    style RAFT_B_L fill:#4ecdc4
+    style RAFT_B_F1 fill:#95e1d3
+    style RAFT_B_F2 fill:#95e1d3
 ```
 
-**Advantages**: RAFT provides strong consistency guarantees and automatic leader election during failures. A RAFT cluster can tolerate the failure of minority nodes while continuing to serve requests. Queue operations replicate to multiple nodes before acknowledging, ensuring durability even if the leader crashes.
+**Advantages**: 
+- Horizontal scaling via sharding + strong consistency per shard via RAFT
+- Automatic leader election and failover (no manual intervention)
+- Tolerates minority node failures while serving requests
+- Queue operations replicate to quorum before acknowledging (durability guarantees)
 
-This approach would make codeQ resilient to KVRocks instance failures without manual intervention. Recovery is automatic, typically completing in seconds. The system could continue operating with degraded performance rather than failing completely. For organizations with strict availability requirements, the resilience benefits are compelling.
+**Implementation Path**: 
+- **Near-term**: ShardSupplier with independent KVRocks backends (enables immediate scaling)
+- **Long-term**: Migrate shards to RAFT-backed storage (TiKV, or future KVRocks with native RAFT support)
+- The ShardSupplier abstraction remains unchanged; only backend configuration changes
 
-**Disadvantages**: KVRocks does not natively support RAFT. Implementing a RAFT layer would require building a custom storage engine or proxy that replicates Redis protocol operations through a RAFT library. The engineering effort is substantial, measured in quarters rather than weeks. The complexity of debugging distributed consensus issues would fall on the codeQ team rather than leveraging mature infrastructure like KVRocks.
+**Performance Considerations**: 
+RAFT consensus adds network round-trip latency (synchronous replication to quorum). Within a single availability zone, expect modest throughput reduction compared to unreplicated instances. This trade-off is acceptable for the availability guarantees provided.
 
-Performance degrades compared to single-instance operations. RAFT requires synchronous replication to a quorum of nodes before acknowledging writes. This adds network round-trip latency to every enqueue operation. In a geographically distributed cluster, cross-region latency could make this prohibitive. Even within a single availability zone, the consensus overhead would reduce throughput by 30-50% compared to an unreplicated instance.
-
-The operational burden increases. RAFT clusters require monitoring for split-brain scenarios, careful capacity planning to avoid quorum loss, and understanding of consensus algorithm edge cases. Many operators are more familiar with master-replica replication models than with consensus systems.
-
-**When to choose this option**: This option becomes attractive once KVRocks or a compatible storage system implements native RAFT clustering. Several emerging Redis-compatible storage systems are exploring RAFT-based replication, including possible future directions for KVRocks itself. If and when such a system matures, codeQ could adopt it with minimal changes to the application layer. Until then, the engineering cost of building a custom RAFT layer exceeds the value for most organizations.
-
-For organizations with extreme availability requirements and engineering resources to invest, building a RAFT layer might be justified. However, most organizations would be better served by investing in improving failover automation for master-replica deployments or deploying multi-region independent stacks.
+**Why this matches our requirements**:
+- Enables horizontal scaling (multiple shards)
+- Provides high availability (RAFT consensus per shard)
+- Maintains operational flexibility (ShardSupplier supports various routing strategies)
+- Allows phased adoption (start with independent backends, evolve to RAFT-backed storage)
 
 ### Trade-Off Analysis
 
-The comparison between these alternatives depends heavily on organizational context:
+**For small to mid-scale deployments** (under 1M tasks/day): Option 1 (vertical scaling only) remains pragmatic. Transition to Option 2 (independent stacks) when approaching limits.
 
-**For small to mid-scale deployments** (under 1M tasks/day), Option 1 (vertical scaling only) remains the pragmatic choice. The operational simplicity and lack of code changes outweigh the eventual scaling ceiling. When that ceiling approaches, transitioning to Option 2 (independent stacks) provides a natural next step without requiring complex sharding logic.
+**For large-scale multi-tenant SaaS platforms**: The proposed explicit sharding design (evolving to Option 3) offers the best balance. ShardSupplier provides routing flexibility, enables tenant isolation, and supports evolution toward RAFT-backed storage.
 
-**For large-scale multi-tenant SaaS platforms**, the proposed explicit sharding design offers the best balance. The flexibility to route different tenants or commands to different shards enables resource isolation and capacity planning. The ShardSupplier abstraction allows evolution from simple static mappings toward more sophisticated strategies over time.
+**For organizations with strict availability SLAs**: Option 3 (sharding + RAFT) is the target architecture. Near-term implementation uses Option 2 (independent stacks) as a stepping stone.
 
-**For organizations operating in regulated industries with strict availability SLAs**, Option 2 (independent stacks per region/tenant) combined with robust infrastructure-level failover provides a defensible architecture today. Option 3 (RAFT) remains aspirational until the ecosystem matures.
+The explicit sharding design with RAFT-backed storage is our **chosen implementation path** because it enables gradual adoption, supports horizontal scaling, and provides strong consistency guarantees for production deployments.
 
-The proposed explicit sharding design through ShardSupplier is recommended as the **primary implementation path** because it enables gradual adoption, supports diverse operational strategies, and provides a foundation for future optimization without locking into a specific approach.
+## Alternative: Plugin Architecture Evolution
+
+An alternative architectural path involves evolving the plugin system to decouple persistence from any specific storage backend. This approach recognizes that sharding + RAFT addresses horizontal scaling and availability, but organizations may have diverse persistence requirements that extend beyond Redis-protocol-compatible storage.
+
+### Separation of Concerns
+
+The current architecture tightly couples the repository layer to Redis/KVRocks. The TaskRepository and ResultRepository implementations directly use `redis.Client`. While this provides a simple integration path, it limits flexibility for organizations with existing investments in other storage systems.
+
+A plugin-based architecture would separate concerns through well-defined interfaces:
+
+**Authentication Plugin**: Already partially implemented via `pkg/auth/Validator` interface. Supports JWKS, static tokens, and can be extended for OAuth2, SAML, or custom authentication providers.
+
+**Persistence Plugin**: New abstraction layer that decouples queue operations from Redis-specific commands. Define interfaces for queue primitives (enqueue, claim, complete, etc.) that can be implemented against various backends.
+
+### Proposed Plugin Interface Structure
+
+```go
+// pkg/persistence/interface.go
+
+// QueueBackend defines the contract for persistent queue storage
+type QueueBackend interface {
+    // Queue operations
+    Enqueue(ctx context.Context, req EnqueueRequest) (*EnqueueResult, error)
+    Claim(ctx context.Context, req ClaimRequest) (*Task, error)
+    Complete(ctx context.Context, taskID string, result *Result) error
+    Fail(ctx context.Context, taskID string, reason string) error
+    
+    // Queue inspection
+    GetTaskStatus(ctx context.Context, taskID string) (*TaskStatus, error)
+    ListPending(ctx context.Context, command, tenantID string, limit int) ([]*Task, error)
+    
+    // Lifecycle
+    Close() error
+}
+
+// EnqueueRequest encapsulates task submission parameters
+type EnqueueRequest struct {
+    Command   string
+    TenantID  string
+    Priority  int
+    Payload   []byte
+    DelayUntil *time.Time
+    IdempotencyKey *string
+}
+
+// Implementation factory
+type BackendFactory func(config map[string]interface{}) (QueueBackend, error)
+
+// Registry pattern for pluggable backends
+var backends = make(map[string]BackendFactory)
+
+func RegisterBackend(name string, factory BackendFactory) {
+    backends[name] = factory
+}
+```
+
+### Supported Backend Implementations
+
+With this abstraction, codeQ can support multiple persistence backends:
+
+**Redis/KVRocks Backend** (current implementation, refactored):
+- Implements QueueBackend using existing Lua scripts and data structures
+- No behavioral changes, purely an interface wrapper
+- Remains the default and recommended backend for most deployments
+
+**Cassandra Backend**:
+- Uses Cassandra's lightweight transactions (LWT) for atomic claim operations
+- Queue as partitioned by (command, tenant_id, priority)
+- Pending tasks stored with TTL for automatic expiry
+- Suitable for organizations with existing Cassandra infrastructure
+
+**HBase Backend**:
+- Leverages HBase's strong consistency within row operations
+- Row key design: `{command}:{tenantID}:{priority}:{taskID}`
+- Uses CheckAndPut for atomic claim operations
+- Integrates with existing Hadoop ecosystem deployments
+
+**TiKV Backend** (RAFT-backed):
+- Uses TiKV's native transactions for atomic queue operations
+- Benefits from built-in RAFT consensus (high availability out-of-the-box)
+- Redis protocol compatibility via TiKV's Redis module (minimal migration)
+- Provides both horizontal scaling and strong consistency
+
+### Benefits of Plugin Architecture
+
+**Flexibility**: Organizations choose persistence based on existing infrastructure investments, operational expertise, and compliance requirements.
+
+**Incremental Migration**: Existing deployments on KVRocks continue unchanged. New deployments can select alternative backends without rewriting codeQ core logic.
+
+**Vendor Independence**: Reduces lock-in to any single storage vendor. If KVRocks development stalls or pricing changes unfavorably, alternative backends remain viable.
+
+**Testing and Development**: Plugin architecture enables lightweight in-memory backends for unit tests, reducing test suite dependencies on Docker or external services.
+
+### Trade-Offs
+
+**Increased Complexity**: Abstraction layer adds indirection. Each backend requires separate testing, documentation, and operational runbooks.
+
+**Feature Parity Challenges**: Advanced features (Bloom filters for idempotency, Lua scripts for atomicity) may not translate directly to all backends. Either limit features to lowest common denominator or accept feature availability varies by backend.
+
+**Maintenance Burden**: Supporting multiple backends multiplies maintenance surface area. Bug fixes and performance optimizations may need backend-specific implementations.
+
+**Performance Overhead**: Abstraction layer introduces function call overhead. For latency-sensitive deployments, direct Redis operations may outperform generic interface calls.
+
+### Recommendation
+
+The plugin architecture is a **complementary approach** to sharding + RAFT, not a replacement. Near-term priorities should focus on implementing ShardSupplier and RAFT-backed storage within the existing Redis-based architecture. The plugin abstraction can be introduced in a later phase if demand for alternative backends materializes.
+
+Key decision point: If three or more customers request non-Redis persistence within 12 months, prioritize plugin architecture refactoring. Until then, optimize the Redis-based implementation for horizontal scaling and high availability.
 
 ## Implementation Phases
 
@@ -843,14 +945,15 @@ The ShardSupplier configuration itself is negligible, typically under 1MB even f
 
 ## Conclusion and Recommendations
 
-The proposed explicit sharding design through the ShardSupplier interface provides a pragmatic path to horizontal scaling for codeQ. The approach balances operational flexibility, implementation complexity, and migration safety.
+The explicit sharding design through ShardSupplier, combined with RAFT-backed consensus storage, provides the path to horizontal scaling and high availability for codeQ.
 
-**Recommended strategy**: Organizations currently operating on a single KVRocks instance should continue with vertical scaling until they approach the limits of available instance types or encounter unacceptable failover recovery times. At that point, deploying multiple independent codeQ+KVRocks stacks (Option 2) provides immediate relief with minimal code changes.
+**Chosen Strategy**: 
+1. **Near-term** (Phase 1-3): Implement ShardSupplier with independent KVRocks backends to enable immediate horizontal scaling
+2. **Long-term** (Phase 4+): Migrate shards to RAFT-backed storage (TiKV or equivalent) for strong consistency and automatic failover
+3. **Optional** (future): Evaluate plugin architecture for persistence abstraction if customer demand materializes
 
-For organizations requiring unified operations across shards or managing dozens of tenants where independent stacks are operationally unwieldy, implementing the proposed explicit sharding design is recommended. The phased implementation approach allows gradual adoption with clearly defined rollback points at each stage.
+This phased approach balances immediate scaling needs with long-term availability requirements. Organizations continue vertical scaling on single KVRocks instances until approaching limits, then adopt ShardSupplier-based sharding. Production deployments requiring high availability migrate to RAFT-backed storage backends.
 
-The RAFT-based consensus approach (Option 3) should remain under evaluation as the KVRocks ecosystem evolves. If native clustering support emerges, codeQ can adopt it with minor adjustments to the ShardSupplier implementation.
+**Next steps**: Implementation phases track to issue #31. Phase 1 (interface definition) begins immediately. Subsequent phases gate on production validation. Complete timeline: 2-3 quarters including testing, documentation, and operational hardening.
 
-**Next steps**: The implementation phases outlined in this document track to issue #31. Phase 1 (interface definition) can begin immediately with low risk. Subsequent phases should gate on production validation of the previous phase. The complete implementation timeline is estimated at two to three quarters of engineering effort, including testing, documentation, and operational hardening.
-
-Organizations evaluating sharding should assess their specific workload characteristics, growth trajectory, and operational constraints. The flexibility of the proposed design allows adaptation to diverse deployment scenarios, making it a solid foundation for the future scalability of codeQ.
+**Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Redis-protocol storage. This path is **deferred** until customer demand justifies the additional complexity. Current priorities focus on ShardSupplier implementation and RAFT-backed storage integration.
