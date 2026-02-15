@@ -254,6 +254,64 @@ Auth: admin token.
 
 See [Rate Limiting](10-operations.md#rate-limiting) for configuration details.
 
-## Health
+## Observability
 
-`GET /healthz`
+### Prometheus Metrics
+
+`GET /metrics`
+
+Returns Prometheus-formatted metrics for monitoring and observability.
+
+**Authentication:** None (public endpoint)
+
+**Response Format:** `text/plain; version=0.0.4`
+
+**Metrics Exposed:**
+
+- **HTTP metrics**: Request counts, duration, response sizes per endpoint
+- **Queue metrics**: 
+  - Task counts by state (queued, claimed, completed, failed, DLQ)
+  - Queue depth by command type
+  - Claim success/failure rates
+- **Redis metrics**:
+  - Connection pool stats
+  - Command latencies
+  - Memory usage
+- **Go runtime metrics**: Goroutines, memory, GC stats
+
+**Example:**
+
+````bash
+curl http://localhost:8080/metrics
+````
+
+**Sample Response:**
+
+````
+# HELP codeq_tasks_created_total Total number of tasks created
+# TYPE codeq_tasks_created_total counter
+codeq_tasks_created_total{command="GENERATE_MASTER"} 1523
+
+# HELP codeq_tasks_claimed_total Total number of tasks claimed
+# TYPE codeq_tasks_claimed_total counter
+codeq_tasks_claimed_total{command="GENERATE_MASTER"} 1520
+
+# HELP codeq_queue_depth Current number of tasks in queue
+# TYPE codeq_queue_depth gauge
+codeq_queue_depth{command="GENERATE_MASTER",state="queued"} 12
+````
+
+**Usage:**
+
+Configure Prometheus to scrape this endpoint:
+
+````yaml
+scrape_configs:
+  - job_name: 'codeq'
+    static_configs:
+      - targets: ['codeq:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 15s
+````
+
+See [Operations Guide](10-operations.md#monitoring) for full metrics reference and Grafana dashboard setup.
