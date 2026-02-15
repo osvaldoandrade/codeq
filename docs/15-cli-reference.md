@@ -191,13 +191,13 @@ codeq task create --event <event> [options]
 - `--event <string>`: Event/command type (e.g., `GENERATE_MASTER`)
 
 **Options:**
-- `--payload <json>`: Task payload as JSON string (default: `{}`)
-- `--priority <int>`: Task priority, higher = more urgent (default: 5)
+- `--payload <json>`: Task payload as JSON string (default: `""` - empty JSON)
+- `--priority <int>`: Task priority, higher = more urgent (default: `0`)
 - `--webhook <url>`: Callback URL for result notification
-- `--max-attempts <int>`: Maximum retry attempts (default: 3)
+- `--max-attempts <int>`: Maximum retry attempts (default: `0` - uses server default)
 - `--idempotency-key <string>`: Idempotency key for duplicate prevention
 - `--run-at <timestamp>`: Schedule task for specific time (ISO 8601)
-- `--delay <seconds>`: Delay task execution by N seconds
+- `--delay-seconds <int>`: Delay task execution by N seconds (default: `0`)
 
 **Examples:**
 
@@ -222,7 +222,7 @@ Create delayed task:
 codeq task create \
   --event SEND_EMAIL \
   --payload '{"to":"user@example.com"}' \
-  --delay 3600
+  --delay-seconds 3600
 ````
 
 With callback webhook:
@@ -307,10 +307,12 @@ codeq worker start --events <event1,event2> [options]
 - `--events <list>`: Comma-separated list of event types to process
 
 **Options:**
-- `--concurrency <int>`: Number of concurrent tasks to process (default: 1)
+- `--concurrency <int>`: Number of concurrent tasks to process (default: `1`)
 - `--handler <path>`: Path to handler script (default: `./handler.sh`)
-- `--lease <seconds>`: Lease duration for claimed tasks (default: 300)
-- `--poll <seconds>`: Long-poll wait time (default: 30)
+- `--lease-seconds <int>`: Lease duration for claimed tasks in seconds (default: `60`)
+- `--wait-seconds <int>`: Long-poll wait time in seconds, 0-30 (default: `10`)
+- `--ack <mode>`: Acknowledgment mode after processing: `complete|abandon|nack|none` (default: `abandon`)
+- `--nack-delay <int>`: Delay in seconds before retrying NACKed tasks (default: `5`)
 - `--once`: Process one task and exit
 
 **Handler Script:**

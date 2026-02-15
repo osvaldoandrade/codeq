@@ -36,7 +36,7 @@
 
 - `backoffPolicy` (string): Retry backoff algorithm, one of: `fixed`, `linear`, `exponential`, `exp_full_jitter`, `exp_equal_jitter`
   - Environment variable: `BACKOFF_POLICY`
-  - Default: `exponential`
+  - Default: `exp_full_jitter`
   - See `docs/11-backoff.md` for algorithm details
 - `backoffBaseSeconds` (int): Base delay for backoff calculation, default 5 seconds
   - Environment variable: `BACKOFF_BASE_SECONDS`
