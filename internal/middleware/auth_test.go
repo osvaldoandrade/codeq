@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks" // Register JWKS provider
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +49,25 @@ func setupEnv(t *testing.T) *testEnv {
 		IdentityIssuer:          "codeq-test",
 		IdentityAudience:        "codeq-producer",
 	}
+	
+	// Setup auth providers config (normally done by LoadConfig)
+	cfg.ProducerAuthProvider = "jwks"
+	cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
+		"jwksUrl":     cfg.IdentityJwksURL,
+		"issuer":      cfg.IdentityIssuer,
+		"audience":    cfg.IdentityAudience,
+		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		"httpTimeout": 5 * time.Second,
+	})
+	cfg.WorkerAuthProvider = "jwks"
+	cfg.WorkerAuthConfig, _ = json.Marshal(map[string]interface{}{
+		"jwksUrl":     cfg.WorkerJwksURL,
+		"issuer":      cfg.WorkerIssuer,
+		"audience":    cfg.WorkerAudience,
+		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		"httpTimeout": 5 * time.Second,
+	})
+	
 	return &testEnv{cfg: cfg, jwksSrv: jwksSrv, privKey: privKey}
 }
 
@@ -88,7 +109,11 @@ func TestWorkerAuthValid(t *testing.T) {
 		"scope":      "codeq:claim",
 	})
 
-	validator, err := newWorkerValidator(env.cfg)
+	// Create validator using config
+	validator, err := auth.NewValidator(auth.ProviderConfig{
+		Type:   env.cfg.WorkerAuthProvider,
+		Config: env.cfg.WorkerAuthConfig,
+	})
 	if err != nil {
 		t.Fatalf("validator init: %v", err)
 	}
@@ -124,7 +149,12 @@ func TestWorkerAuthMissingScope(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBuffer(nil))
 	ctx.Request.Header.Set("Authorization", "Bearer "+tok)
 
-	WorkerAuthMiddleware(env.cfg)(ctx)
+	// Create validator using config
+	validator, _ := auth.NewValidator(auth.ProviderConfig{
+		Type:   env.cfg.WorkerAuthProvider,
+		Config: env.cfg.WorkerAuthConfig,
+	})
+	WorkerAuthMiddleware(validator, nil, env.cfg)(ctx)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized for missing scope, got %d", rec.Code)
 	}
@@ -145,7 +175,10 @@ func TestWorkerAuthInvalidAudience(t *testing.T) {
 		"scope":      "codeq:claim",
 	})
 
-	validator, err := newWorkerValidator(env.cfg)
+	validator, err := auth.NewValidator(auth.ProviderConfig{
+		Type:   env.cfg.WorkerAuthProvider,
+		Config: env.cfg.WorkerAuthConfig,
+	})
 	if err != nil {
 		t.Fatalf("validator init: %v", err)
 	}
@@ -175,7 +208,12 @@ func TestProducerAuthValid(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/", bytes.NewBuffer(nil))
 	ctx.Request.Header.Set("Authorization", "Bearer "+tok)
 
-	AuthMiddleware(env.cfg)(ctx)
+	// Create validator using config  
+	validator, _ := auth.NewValidator(auth.ProviderConfig{
+		Type:   env.cfg.ProducerAuthProvider,
+		Config: env.cfg.ProducerAuthConfig,
+	})
+	AuthMiddleware(validator, env.cfg)(ctx)
 	if rec.Code == http.StatusUnauthorized {
 		t.Fatalf("expected producer auth to pass")
 	}

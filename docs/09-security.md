@@ -2,15 +2,16 @@
 
 ## Producer auth
 
-Producers must call the API using an **access token (RS256)** minted by Tikti:
+Producers must call the API using an **access token (RS256)** validated via JWKS:
 
 - Request header: `Authorization: Bearer <accessToken>`
-- Services validate access tokens locally using Tikti's JWKS (`identityJwksUrl`), not via lookup.
-- Clients obtain an `idToken` (HS256) via login and then exchange it for an access token:
+- Services validate access tokens locally using JWKS (`identityJwksUrl`), not via lookup.
+- The default JWKS plugin supports standard JWT tokens with RSA signatures.
+- For integration with OAuth2/OIDC providers, clients typically:
 
-  - `POST /v1/accounts/token/exchange?key=API_KEY`
-  - Body: `{ idToken, audience, scopes, tenantId }`
-  - Response: `{ accessToken }`
+  - Obtain an ID token via login
+  - Exchange it for an access token from your auth provider
+  - Use the access token to call CodeQ APIs
 
 ## Worker auth
 
@@ -61,3 +62,13 @@ When `workerGroup` is present, webhook subscriptions must use the same group id.
 ## Webhook security
 
 Webhook registration requires a worker token. codeQ signs webhook notifications with an HMAC derived from the worker token or a configured shared secret. Workers must validate the signature and timestamp.
+
+## Authentication Plugins
+
+CodeQ uses a plugin-based authentication system. The default implementation validates JWT tokens using JWKS (JSON Web Key Sets), but you can implement custom authentication plugins for different auth systems.
+
+See [Authentication Plugins](20-authentication-plugins.md) for details on:
+- Using the default JWKS plugin
+- Creating custom authentication plugins
+- Plugin interface reference
+- Migration guide

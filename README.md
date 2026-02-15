@@ -22,6 +22,7 @@ codeQ provides:
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
+- **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
 
 ## Get started
 
@@ -46,6 +47,30 @@ Upgrade:
 npm i -g @osvaldoandrade/codeq@latest
 ```
 
+### Use SDKs for Java and Node.js
+
+Integrate codeQ into your microservices with official SDKs:
+
+**Java** (Spring Boot, Quarkus, Micronaut):
+```xml
+<dependency>
+    <groupId>io.codeq</groupId>
+    <artifactId>codeq-sdk-java</artifactId>
+    <version>1.0.0</version>
+</dependency>
+```
+
+**Node.js/TypeScript** (Express, NestJS):
+```bash
+npm install @codeq/sdk
+```
+
+📚 **SDK Documentation**:
+- [SDK Overview & Quick Start](sdks/README.md)
+- [Java Integration Guide](docs/integrations/21-java-integration.md)
+- [Node.js Integration Guide](docs/integrations/22-nodejs-integration.md)
+- [Example Applications](examples/)
+
 ### 1) Helm (small cluster)
 
 The chart in this repo deploys codeQ and, by default, a single-node KVRocks instance.
@@ -57,7 +82,7 @@ cd codeq
 helm install codeq ./helm/codeq \
   --set secrets.enabled=true \
   --set secrets.webhookHmacSecret=YOUR_SECRET \
-  --set config.identityServiceUrl=https://api.storifly.ai \
+  --set config.identityServiceUrl=https://your-auth-server.com \
   --set config.workerJwksUrl=https://your-jwks \
   --set config.workerIssuer=https://issuer
 ```
@@ -116,6 +141,10 @@ Key references:
 - **Overview**: `docs/01-overview.md` - System goals and design principles
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
+- **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs
+  - [Java Integration](docs/integrations/21-java-integration.md) - Spring Boot, Quarkus, Micronaut
+  - [Node.js Integration](docs/integrations/22-nodejs-integration.md) - Express, NestJS, React
+- **Examples**: `examples/` - Working examples with Java and Node.js frameworks
 - **Developer Guide**: `docs/18-developer-guide.md` - Contributing and internal architecture
 - **Queue model**: `docs/05-queueing-model.md` - Queue semantics
 - **Storage layout**: `docs/07-storage-kvrocks.md` - KVRocks data structures
