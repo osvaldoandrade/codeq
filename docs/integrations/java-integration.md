@@ -505,9 +505,9 @@ log.info("Ready: {}, InProgress: {}, DLQ: {}",
 
 ## See Also
 
-- [HTTP API Reference](04-http-api.md)
-- [Configuration Guide](14-configuration.md)
-- [Performance Tuning](17-performance-tuning.md)
-- [Example: Spring Boot](../examples/java/springboot/)
-- [Example: Quarkus](../examples/java/quarkus/)
-- [Example: Micronaut](../examples/java/micronaut/)
+- [HTTP API Reference](../04-http-api.md)
+- [Configuration Guide](../14-configuration.md)
+- [Performance Tuning](../17-performance-tuning.md)
+- [Example: Spring Boot](../../examples/java/springboot/)
+- [Example: Quarkus](../../examples/java/quarkus/)
+- [Example: Micronaut](../../examples/java/micronaut/)
