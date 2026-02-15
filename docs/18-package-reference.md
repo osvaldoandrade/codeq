@@ -331,7 +331,7 @@ delay := backoff.ComputeBackoff("exp_full_jitter", 5, 900, 3)
   - `codeq_webhook_deliveries_total`: Webhook deliveries, labeled by `kind`, `command`, `outcome`
 
 - **Histograms** (latency distribution):
-  - `codeq_task_processing_latency_seconds`: End-to-end task processing time (creation to completion)
+  - `codeq_task_processing_latency_seconds`: End-to-end task processing time (creation to completion), labeled by `command` and `status`
 
 - **Gauges** (instantaneous values):
   - `codeq_queue_depth`: Current queue depth, labeled by `command` and `queue` (ready/delayed/in_progress/dlq)
