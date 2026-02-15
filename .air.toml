@@ -1,0 +1,13 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/codeq-server ./cmd/server"
+  bin = "tmp/codeq-server"
+  delay = 500
+  exclude_dir = ["tmp", "vendor", "node_modules", "deploy", "docs", "wiki", "examples", "sdks"]
+  include_ext = ["go"]
+
+[log]
+  time = true
+

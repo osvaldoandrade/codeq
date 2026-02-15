@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  codeq:
+    volumes:
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - ./.artifacts:/app/.artifacts
+    command: ["sh", "-c", "go mod download && go install github.com/air-verse/air@latest && air -c .air.toml"]
+
+volumes:
+  go-mod-cache:
+  go-build-cache:
+
