@@ -856,7 +856,7 @@ High-cardinality labels can degrade Prometheus performance.
 - ❌ Webhook URLs (potentially thousands)
 - ❌ User IDs (unbounded)
 
-**See**: `docs/18-developer-guide.md#adding-metrics` for best practices
+**See**: `docs/23-developer-guide.md#adding-metrics` for best practices
 
 ### Monitoring Best Practices
 
