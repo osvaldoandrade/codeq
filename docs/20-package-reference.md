@@ -365,7 +365,7 @@ Kubernetes deployment configuration. See `helm/codeq/README.md` for usage.
 
 ### GitHub Workflows (`.github/workflows/`)
 
-CI/CD automation. See `docs/16-workflows.md` for workflow details.
+CI/CD automation. See `docs/17-workflows.md` for workflow details.
 
 ---
 
