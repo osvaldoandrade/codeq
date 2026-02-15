@@ -52,12 +52,47 @@ Optional claim:
 
 When `workerGroup` is present, webhook subscriptions must use the same group id.
 
+## Tenant Isolation
+
+CodeQ implements complete tenant isolation at the queue level. Tasks from different tenants are stored in separate queues and cannot be accessed across tenant boundaries.
+
+### Tenant ID Extraction
+
+The tenant ID is automatically extracted from JWT claims in the following order:
+
+1. `tenantId` (camelCase)
+2. `tenant_id` (snake_case)
+3. `organizationId` (camelCase)
+4. `organization_id` (snake_case)
+5. Falls back to `sub` (subject) for single-tenant deployments
+
+The extracted tenant ID is used to namespace all queue operations, ensuring complete isolation between tenants.
+
+### Queue Isolation
+
+Each tenant has dedicated queues:
+
+- Pending: `codeq:q:{command}:{tenantID}:pending:{priority}`
+- In-progress: `codeq:q:{command}:{tenantID}:inprog`
+- Delayed: `codeq:q:{command}:{tenantID}:delayed`
+- Dead-letter: `codeq:q:{command}:{tenantID}:dlq`
+
+This prevents:
+- Cross-tenant task visibility
+- Resource contention between tenants
+- Mixed tenant task processing by workers
+
+### Single-Tenant Deployments
+
+For single-tenant deployments where JWT tokens don't include explicit tenant claims, CodeQ uses the token's `sub` (subject) as the tenant identifier. This ensures consistent behavior while maintaining simplicity for single-tenant use cases.
+
 ## Authorization rules
 
 - Claim: requested `commands` must be a subset of token `eventTypes`.
 - Heartbeat/abandon/nack/result: token `sub` must match `task.workerId`.
 - Missing required scope returns `403`.
 - Admin: require `role=ADMIN` or a separate admin issuer.
+- Tenant isolation: tasks are automatically scoped to the authenticated user's tenant.
 
 ## Webhook security
 
