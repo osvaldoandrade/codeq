@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
@@ -19,19 +20,19 @@ func setupSchedulerTest(t *testing.T) (context.Context, *miniredis.Miniredis, *r
 		t.Fatalf("miniredis start: %v", err)
 	}
 	t.Cleanup(mr.Close)
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	
+
 	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
-	
+
 	// Create a mock subscription repository for the notifier
 	mockSubRepo := &mockSubscriptionRepo{}
-	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5)
-	
+	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{})
+
 	now := func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
 	svc := NewSchedulerService(repo, notifier, time.UTC, now, 60, 50, 5, "exp_full_jitter", 5, 900)
-	
+
 	return context.Background(), mr, rdb, repo, svc
 }
 
@@ -68,9 +69,9 @@ func (m *mockSubscriptionRepo) CleanupExpired(ctx context.Context, limit int, be
 
 func TestCreateTaskSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "https://example.com/webhook", 3, "", time.Time{}, 0, "")
-	
+
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
@@ -87,9 +88,9 @@ func TestCreateTaskSuccess(t *testing.T) {
 
 func TestCreateTaskEmptyCommand(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	_, err := svc.CreateTask(ctx, "", `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
-	
+
 	if err == nil {
 		t.Fatal("Expected error for empty command")
 	}
@@ -100,7 +101,7 @@ func TestCreateTaskEmptyCommand(t *testing.T) {
 
 func TestCreateTaskInvalidWebhook(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	tests := []struct {
 		name    string
 		webhook string
@@ -109,7 +110,7 @@ func TestCreateTaskInvalidWebhook(t *testing.T) {
 		{"ftp scheme", "ftp://example.com"},
 		{"no host", "http://"},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, tt.webhook, 3, "", time.Time{}, 0, "")
@@ -125,9 +126,9 @@ func TestCreateTaskInvalidWebhook(t *testing.T) {
 
 func TestCreateTaskDefaultMaxAttempts(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 0, "", time.Time{}, 0, "")
-	
+
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
@@ -138,9 +139,9 @@ func TestCreateTaskDefaultMaxAttempts(t *testing.T) {
 
 func TestCreateTaskWithDelay(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 60, "")
-	
+
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
@@ -152,10 +153,10 @@ func TestCreateTaskWithDelay(t *testing.T) {
 
 func TestCreateTaskWithRunAt(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	runAt := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
 	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", runAt, 0, "")
-	
+
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
@@ -166,19 +167,19 @@ func TestCreateTaskWithRunAt(t *testing.T) {
 
 func TestCreateTaskIdempotent(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	idempotencyKey := "test-key-123"
-	
+
 	task1, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, idempotencyKey, time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask 1 failed: %v", err)
 	}
-	
+
 	task2, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, idempotencyKey, time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask 2 failed: %v", err)
 	}
-	
+
 	if task1.ID != task2.ID {
 		t.Errorf("Expected same task ID for idempotency, got %s and %s", task1.ID, task2.ID)
 	}
@@ -186,16 +187,16 @@ func TestCreateTaskIdempotent(t *testing.T) {
 
 func TestClaimTaskSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create a task first
 	_, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
-	
+
 	// Claim the task
 	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
-	
+
 	if err != nil {
 		t.Fatalf("ClaimTask failed: %v", err)
 	}
@@ -212,9 +213,9 @@ func TestClaimTaskSuccess(t *testing.T) {
 
 func TestClaimTaskEmptyWorkerID(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	_, _, err := svc.ClaimTask(ctx, "", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
-	
+
 	if err == nil {
 		t.Fatal("Expected error for empty workerID")
 	}
@@ -225,13 +226,13 @@ func TestClaimTaskEmptyWorkerID(t *testing.T) {
 
 func TestClaimTaskDefaultCommands(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create tasks for both default commands
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
-	
+
 	// Claim with empty commands (should default)
 	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{}, 60, 0, "")
-	
+
 	if err != nil {
 		t.Fatalf("ClaimTask failed: %v", err)
 	}
@@ -242,12 +243,12 @@ func TestClaimTaskDefaultCommands(t *testing.T) {
 
 func TestClaimTaskWithWait(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Claim with wait but no tasks available - should timeout quickly
 	start := time.Now()
 	_, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 1, "")
 	duration := time.Since(start)
-	
+
 	if err != nil {
 		t.Fatalf("ClaimTask failed: %v", err)
 	}
@@ -261,14 +262,14 @@ func TestClaimTaskWithWait(t *testing.T) {
 
 func TestHeartbeatSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create and claim a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
-	
+
 	// Heartbeat
 	err := svc.Heartbeat(ctx, task.ID, "worker-1", 30)
 	if err != nil {
@@ -278,14 +279,14 @@ func TestHeartbeatSuccess(t *testing.T) {
 
 func TestHeartbeatDefaultExtend(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create and claim a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
-	
+
 	// Heartbeat with 0 extend (should use default)
 	err := svc.Heartbeat(ctx, task.ID, "worker-1", 0)
 	if err != nil {
@@ -295,14 +296,14 @@ func TestHeartbeatDefaultExtend(t *testing.T) {
 
 func TestAbandonTask(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create and claim a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
-	
+
 	// Abandon
 	err := svc.Abandon(ctx, task.ID, "worker-1")
 	if err != nil {
@@ -312,17 +313,17 @@ func TestAbandonTask(t *testing.T) {
 
 func TestNackTaskSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create and claim a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
-	
+
 	// Nack
 	delay, dlq, err := svc.NackTask(ctx, task.ID, "worker-1", 0, "test error")
-	
+
 	if err != nil {
 		t.Fatalf("NackTask failed: %v", err)
 	}
@@ -336,9 +337,9 @@ func TestNackTaskSuccess(t *testing.T) {
 
 func TestNackTaskEmptyWorkerID(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	_, _, err := svc.NackTask(ctx, "task-123", "", 0, "error")
-	
+
 	if err == nil {
 		t.Fatal("Expected error for empty workerID")
 	}
@@ -349,9 +350,9 @@ func TestNackTaskEmptyWorkerID(t *testing.T) {
 
 func TestNackTaskNotFound(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	_, _, err := svc.NackTask(ctx, "nonexistent-task", "worker-1", 0, "error")
-	
+
 	if err == nil {
 		t.Fatal("Expected error for nonexistent task")
 	}
@@ -359,17 +360,17 @@ func TestNackTaskNotFound(t *testing.T) {
 
 func TestNackTaskWithExplicitDelay(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create and claim a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
-	
+
 	// Nack with explicit delay
 	delay, _, err := svc.NackTask(ctx, task.ID, "worker-1", 30, "test error")
-	
+
 	if err != nil {
 		t.Fatalf("NackTask failed: %v", err)
 	}
@@ -380,17 +381,17 @@ func TestNackTaskWithExplicitDelay(t *testing.T) {
 
 func TestNackTaskDelayExceedsMax(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create and claim a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
-	
+
 	// Nack with delay exceeding max (900 seconds)
 	delay, _, err := svc.NackTask(ctx, task.ID, "worker-1", 10000, "test error")
-	
+
 	if err != nil {
 		t.Fatalf("NackTask failed: %v", err)
 	}
@@ -401,13 +402,13 @@ func TestNackTaskDelayExceedsMax(t *testing.T) {
 
 func TestGetTask(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create a task
 	created, _ := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
-	
+
 	// Get the task
 	task, err := svc.GetTask(ctx, created.ID)
-	
+
 	if err != nil {
 		t.Fatalf("GetTask failed: %v", err)
 	}
@@ -418,9 +419,9 @@ func TestGetTask(t *testing.T) {
 
 func TestAdminQueues(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	queues, err := svc.AdminQueues(ctx)
-	
+
 	if err != nil {
 		t.Fatalf("AdminQueues failed: %v", err)
 	}
@@ -431,13 +432,13 @@ func TestAdminQueues(t *testing.T) {
 
 func TestQueueStats(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create a task
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
-	
+
 	// Get stats
 	stats, err := svc.QueueStats(ctx, domain.CmdGenerateMaster)
-	
+
 	if err != nil {
 		t.Fatalf("QueueStats failed: %v", err)
 	}
@@ -448,13 +449,13 @@ func TestQueueStats(t *testing.T) {
 
 func TestCleanupExpired(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Create some tasks
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
-	
+
 	// Cleanup with future date
 	deleted, err := svc.CleanupExpired(ctx, 10, time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC))
-	
+
 	if err != nil {
 		t.Fatalf("CleanupExpired failed: %v", err)
 	}
@@ -465,10 +466,10 @@ func TestCleanupExpired(t *testing.T) {
 
 func TestCleanupExpiredDefaultLimit(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Cleanup with zero limit (should use default 1000)
 	deleted, err := svc.CleanupExpired(ctx, 0, time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC))
-	
+
 	if err != nil {
 		t.Fatalf("CleanupExpired failed: %v", err)
 	}
@@ -479,10 +480,10 @@ func TestCleanupExpiredDefaultLimit(t *testing.T) {
 
 func TestCleanupExpiredZeroBefore(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
-	
+
 	// Cleanup with zero time (should use current time from now())
 	deleted, err := svc.CleanupExpired(ctx, 10, time.Time{})
-	
+
 	if err != nil {
 		t.Fatalf("CleanupExpired failed: %v", err)
 	}
@@ -494,19 +495,19 @@ func TestCleanupExpiredZeroBefore(t *testing.T) {
 func TestNewSchedulerServiceDefaults(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
 	mockSubRepo := &mockSubscriptionRepo{}
-	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5)
-	
+	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{})
+
 	tests := []struct {
-		name              string
-		maxAttemptsInput  int
-		backoffBaseInput  int
-		backoffMaxInput   int
+		name               string
+		maxAttemptsInput   int
+		backoffBaseInput   int
+		backoffMaxInput    int
 		backoffPolicyInput string
 	}{
 		{"zero maxAttempts", 0, 5, 900, "exp_full_jitter"},
@@ -515,7 +516,7 @@ func TestNewSchedulerServiceDefaults(t *testing.T) {
 		{"zero backoff max", 5, 5, 0, "exp_full_jitter"},
 		{"empty policy", 5, 5, 900, ""},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			now := func() time.Time { return time.Now() }

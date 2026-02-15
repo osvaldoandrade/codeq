@@ -16,9 +16,9 @@ func SetupMappings(app *Application) {
 	worker := v1.Group("", middleware.WorkerAuthMiddleware(app.WorkerValidator, app.ProducerValidator, app.Config))
 	anyAuth := v1.Group("", middleware.AnyAuthMiddleware(app.WorkerValidator, app.ProducerValidator, app.Config))
 	{
-		producer.POST("/tasks", controllers.NewCreateTaskController(app.Scheduler).Handle)
+		producer.POST("/tasks", middleware.RateLimitProducer(app.RateLimiter, app.Config), controllers.NewCreateTaskController(app.Scheduler).Handle)
 
-		worker.POST("/tasks/claim", middleware.RequireWorkerScope("codeq:claim"), controllers.NewClaimTaskController(app.Scheduler).Handle)
+		worker.POST("/tasks/claim", middleware.RequireWorkerScope("codeq:claim"), middleware.RateLimitWorkerClaim(app.RateLimiter, app.Config), controllers.NewClaimTaskController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/heartbeat", middleware.RequireWorkerScope("codeq:heartbeat"), controllers.NewHeartbeatController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/abandon", middleware.RequireWorkerScope("codeq:abandon"), controllers.NewAbandonController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/nack", middleware.RequireWorkerScope("codeq:nack"), controllers.NewNackController(app.Scheduler).Handle)
@@ -34,6 +34,6 @@ func SetupMappings(app *Application) {
 		admin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
 
 		// Novo: limpeza administrativa de tasks expiradas no índice Z
-		admin.POST("/tasks/cleanup", controllers.NewCleanupExpiredController(app.Scheduler).Handle)
+		admin.POST("/tasks/cleanup", middleware.RateLimitAdminCleanup(app.RateLimiter, app.Config), controllers.NewCleanupExpiredController(app.Scheduler).Handle)
 	}
 }

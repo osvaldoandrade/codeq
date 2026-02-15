@@ -48,6 +48,19 @@ type Config struct {
 	ResultWebhookMaxAttempts           int             `yaml:"resultWebhookMaxAttempts"`
 	ResultWebhookBaseBackoffSeconds    int             `yaml:"resultWebhookBaseBackoffSeconds"`
 	ResultWebhookMaxBackoffSeconds     int             `yaml:"resultWebhookMaxBackoffSeconds"`
+	RateLimit                          RateLimitConfig `yaml:"rateLimit"`
+}
+
+type RateLimitConfig struct {
+	Producer RateLimitBucketConfig `yaml:"producer"`
+	Worker   RateLimitBucketConfig `yaml:"worker"`
+	Webhook  RateLimitBucketConfig `yaml:"webhook"`
+	Admin    RateLimitBucketConfig `yaml:"admin"`
+}
+
+type RateLimitBucketConfig struct {
+	RequestsPerMinute int `yaml:"requestsPerMinute"`
+	BurstSize         int `yaml:"burstSize"`
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -264,6 +277,32 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if c.ResultWebhookMaxBackoffSeconds <= 0 {
 		c.ResultWebhookMaxBackoffSeconds = 60
+	}
+
+	// Rate limiting is disabled by default unless explicitly configured.
+	if c.RateLimit.Producer.RequestsPerMinute < 0 {
+		c.RateLimit.Producer.RequestsPerMinute = 0
+	}
+	if c.RateLimit.Producer.BurstSize < 0 {
+		c.RateLimit.Producer.BurstSize = 0
+	}
+	if c.RateLimit.Worker.RequestsPerMinute < 0 {
+		c.RateLimit.Worker.RequestsPerMinute = 0
+	}
+	if c.RateLimit.Worker.BurstSize < 0 {
+		c.RateLimit.Worker.BurstSize = 0
+	}
+	if c.RateLimit.Webhook.RequestsPerMinute < 0 {
+		c.RateLimit.Webhook.RequestsPerMinute = 0
+	}
+	if c.RateLimit.Webhook.BurstSize < 0 {
+		c.RateLimit.Webhook.BurstSize = 0
+	}
+	if c.RateLimit.Admin.RequestsPerMinute < 0 {
+		c.RateLimit.Admin.RequestsPerMinute = 0
+	}
+	if c.RateLimit.Admin.BurstSize < 0 {
+		c.RateLimit.Admin.BurstSize = 0
 	}
 
 	log.Printf("Scheduler Config: {Port:%d Redis:%s Identity:%s TZ:%s Lease:%ds Inspect:%d}\n",

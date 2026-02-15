@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/metrics"
+	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
@@ -27,9 +28,12 @@ type resultCallbackService struct {
 	maxAttempts int
 	baseDelay   time.Duration
 	maxDelay    time.Duration
+
+	limiter ratelimit.Limiter
+	bucket  ratelimit.Bucket
 }
 
-func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts int, baseDelaySeconds int, maxDelaySeconds int) ResultCallbackService {
+func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts int, baseDelaySeconds int, maxDelaySeconds int, limiter ratelimit.Limiter, bucket ratelimit.Bucket) ResultCallbackService {
 	if maxAttempts <= 0 {
 		maxAttempts = 5
 	}
@@ -45,6 +49,8 @@ func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts in
 		maxAttempts: maxAttempts,
 		baseDelay:   time.Duration(baseDelaySeconds) * time.Second,
 		maxDelay:    time.Duration(maxDelaySeconds) * time.Second,
+		limiter:     limiter,
+		bucket:      bucket,
 	}
 }
 
@@ -68,6 +74,23 @@ func (s *resultCallbackService) Send(ctx context.Context, task domain.Task, rec 
 
 func (s *resultCallbackService) sendWithRetry(ctx context.Context, cmd domain.Command, url string, body []byte) {
 	for attempt := 1; attempt <= s.maxAttempts; attempt++ {
+		if s.limiter != nil && s.bucket.Enabled() {
+			for {
+				dec, err := s.limiter.Allow(ctx, "webhook", url, s.bucket)
+				if err != nil {
+					// Fail open.
+					break
+				}
+				if dec.Allowed {
+					break
+				}
+				metrics.RateLimitHitsTotal.WithLabelValues("webhook", "task_result").Inc()
+				if sleepOrDone(ctx, dec.RetryAfter) != nil {
+					return
+				}
+			}
+		}
+
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		s.addSignature(req, body)
@@ -81,7 +104,7 @@ func (s *resultCallbackService) sendWithRetry(ctx context.Context, cmd domain.Co
 			_ = resp.Body.Close()
 		}
 		delay := s.backoffDelay(attempt)
-		time.Sleep(delay)
+		_ = sleepOrDone(ctx, delay)
 	}
 	metrics.WebhookDeliveriesTotal.WithLabelValues("task_result", string(cmd), "failure").Inc()
 	s.logger.Warn("result callback failed", "url", url)
@@ -93,6 +116,20 @@ func (s *resultCallbackService) backoffDelay(attempt int) time.Duration {
 		d = s.maxDelay
 	}
 	return d
+}
+
+func sleepOrDone(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 func (s *resultCallbackService) addSignature(req *http.Request, body []byte) {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
@@ -16,12 +17,12 @@ import (
 func TestNewNotifierServiceDefaults(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	repo := repository.NewSubscriptionRepository(rdb, time.UTC)
-	
+
 	tests := []struct {
 		name      string
 		minNotify int
@@ -30,10 +31,10 @@ func TestNewNotifierServiceDefaults(t *testing.T) {
 		{"negative minNotify", -1},
 		{"positive minNotify", 10},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewNotifierService(repo, slog.Default(), "secret", tt.minNotify)
+			svc := NewNotifierService(repo, slog.Default(), "secret", tt.minNotify, nil, ratelimit.Bucket{})
 			if svc == nil {
 				t.Fatal("Expected service to be non-nil")
 			}
@@ -44,13 +45,13 @@ func TestNewNotifierServiceDefaults(t *testing.T) {
 func TestNotifierServiceNotifyQueueReadyNoSubscriptions(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	repo := repository.NewSubscriptionRepository(rdb, time.UTC)
-	svc := NewNotifierService(repo, slog.Default(), "secret", 5)
-	
+	svc := NewNotifierService(repo, slog.Default(), "secret", 5, nil, ratelimit.Bucket{})
+
 	// Should not panic with no subscriptions
 	ctx := context.Background()
 	svc.NotifyQueueReady(ctx, domain.CmdGenerateMaster)
@@ -59,13 +60,13 @@ func TestNotifierServiceNotifyQueueReadyNoSubscriptions(t *testing.T) {
 func TestNotifierServiceNotifyQueueReadyWithSubscription(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	repo := repository.NewSubscriptionRepository(rdb, time.UTC)
-	svc := NewNotifierService(repo, slog.Default(), "secret", 5)
-	
+	svc := NewNotifierService(repo, slog.Default(), "secret", 5, nil, ratelimit.Bucket{})
+
 	// Create a subscription
 	sub := domain.Subscription{
 		CallbackURL:        "https://example.com/callback",
@@ -74,11 +75,11 @@ func TestNotifierServiceNotifyQueueReadyWithSubscription(t *testing.T) {
 		MinIntervalSeconds: 30,
 	}
 	_, _ = repo.Create(context.Background(), sub, 3600)
-	
+
 	// Notify (will try to send HTTP request but that's async)
 	ctx := context.Background()
 	svc.NotifyQueueReady(ctx, domain.CmdGenerateMaster)
-	
+
 	// Just verify it doesn't panic
 	time.Sleep(100 * time.Millisecond)
 }
