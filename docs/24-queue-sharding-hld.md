@@ -947,13 +947,6 @@ The ShardSupplier configuration itself is negligible, typically under 1MB even f
 
 The explicit sharding design through ShardSupplier, combined with RAFT-backed consensus storage, provides the path to horizontal scaling and high availability for codeQ.
 
-**Chosen Strategy**: 
-1. **Near-term** (Phase 1-3): Implement ShardSupplier with independent KVRocks backends to enable immediate horizontal scaling
-2. **Long-term** (Phase 4+): Migrate shards to RAFT-backed storage (TiKV or equivalent) for strong consistency and automatic failover
-3. **Optional** (future): Evaluate plugin architecture for persistence abstraction if customer demand materializes
+**Next steps**: Implementation phases track to issue #31. Phase 1 (interface definition) begins immediately. Subsequent phases gate on production validation. Complete ETA: Aug/26.
 
-This phased approach balances immediate scaling needs with long-term availability requirements. Organizations continue vertical scaling on single KVRocks instances until approaching limits, then adopt ShardSupplier-based sharding. Production deployments requiring high availability migrate to RAFT-backed storage backends.
-
-**Next steps**: Implementation phases track to issue #31. Phase 1 (interface definition) begins immediately. Subsequent phases gate on production validation. Complete timeline: 2-3 quarters including testing, documentation, and operational hardening.
-
-**Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Redis-protocol storage. This path is **deferred** until customer demand justifies the additional complexity. Current priorities focus on ShardSupplier implementation and RAFT-backed storage integration.
+**Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Redis-protocol storage.

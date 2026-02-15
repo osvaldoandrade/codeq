@@ -3,55 +3,134 @@
 ## Core
 
 - `port` (int): HTTP port, default 8080
+  - Environment variable: `PORT`
 - `redisAddr` (string): KVRocks/Redis address, default `localhost:6379`
+  - Environment variable: `REDIS_ADDR`
 - `redisPassword` (string, optional): KVRocks/Redis password
-- `timezone` (string): default `America/Sao_Paulo`
-- `env` (string): default `dev`
-- `logLevel` (string): default `info`
-- `logFormat` (string): `json|text`, default `json`
+  - Environment variable: `REDIS_PASSWORD` or `KVROCKS_PASSWORD`
+- `timezone` (string): Timezone for task scheduling and logging, default `America/Sao_Paulo`
+  - Environment variable: `TIMEZONE`
+- `env` (string): Environment mode (`dev` or `prod`), affects validation strictness, default `dev`
+  - Environment variable: `ENV`
+  - In `dev` mode, missing auth config generates warnings instead of errors
+- `logLevel` (string): Logging level (`debug`, `info`, `warn`, `error`), default `info`
+  - Environment variable: `LOG_LEVEL`
+- `logFormat` (string): Log output format (`json` or `text`), default `json`
+  - Environment variable: `LOG_FORMAT`
+  - Use `text` for local development, `json` for production structured logging
 
 ## Scheduling
 
-- `defaultLeaseSeconds` (int): default 300
-- `requeueInspectLimit` (int): default 200
-- `maxAttemptsDefault` (int): default 5
+- `defaultLeaseSeconds` (int): Default task lease duration in seconds when not specified in claim request, default 300 (5 minutes)
+  - Environment variable: `DEFAULT_LEASE_SECONDS`
+  - Used by claim endpoint if `leaseSeconds` not provided in request body
+- `requeueInspectLimit` (int): Maximum number of in-progress tasks to sample during claim-time lease repair, default 200
+  - Environment variable: `REQUEUE_INSPECT_LIMIT`
+  - Higher values increase repair thoroughness but add latency to claim operations
+  - Uses `SRANDMEMBER` to randomly sample in-progress SET, then pipelines TTL checks
+- `maxAttemptsDefault` (int): Default maximum retry attempts before moving task to DLQ, default 5
+  - Environment variable: `MAX_ATTEMPTS_DEFAULT`
+  - Can be overridden per-task via `maxAttempts` field in enqueue request
 
 ## Backoff
 
-- `backoffPolicy` (string): `fixed|linear|exponential|exp_full_jitter|exp_equal_jitter`
-- `backoffBaseSeconds` (int): default 5
-- `backoffMaxSeconds` (int): default 900
+- `backoffPolicy` (string): Retry backoff algorithm, one of: `fixed`, `linear`, `exponential`, `exp_full_jitter`, `exp_equal_jitter`
+  - Environment variable: `BACKOFF_POLICY`
+  - Default: `exponential`
+  - See `docs/11-backoff.md` for algorithm details
+- `backoffBaseSeconds` (int): Base delay for backoff calculation, default 5 seconds
+  - Environment variable: `BACKOFF_BASE_SECONDS`
+  - For exponential: initial delay = base × 2^(attempt-1)
+- `backoffMaxSeconds` (int): Maximum backoff delay cap, default 900 seconds (15 minutes)
+  - Environment variable: `BACKOFF_MAX_SECONDS`
+  - Prevents unbounded exponential growth
 
 ## Producer auth
 
+### Legacy JWKS Configuration (Deprecated)
+
+The following fields are deprecated in favor of the new plugin-based authentication system (see `producerAuthProvider` below):
+
 - `identityServiceUrl` (string): Authentication service base URL / issuer (example: `https://your-auth-server.com`)
+  - Environment variable: `IDENTITY_SERVICE_URL`
   - Used to derive `identityJwksUrl` and `identityIssuer` if not explicitly set
   - Can be any OAuth2/OIDC compliant authentication service
 - `identityJwksUrl` (string): JWKS URL for producer access tokens (default: `{identityServiceUrl}/v1/.well-known/jwks.json`)
-- `identityIssuer` (string): expected `iss` for producer access tokens (default: `{identityServiceUrl}`)
-- `identityAudience` (string, optional): expected `aud` for producer access tokens
-- `identityServiceApiKey` (string, optional): API key for integration with legacy auth services
+  - Environment variable: `IDENTITY_JWKS_URL`
+- `identityIssuer` (string): expected `iss` claim for producer access tokens (default: `{identityServiceUrl}`)
+  - Environment variable: `IDENTITY_ISSUER`
+- `identityAudience` (string, optional): expected `aud` claim for producer access tokens
+  - Environment variable: `IDENTITY_AUDIENCE`
+- `identityServiceApiKey` (string, optional): API key for integration with legacy identity services
+  - Environment variable: `IDENTITY_SERVICE_API_KEY`
+  - Used by deprecated identity middleware
+
+### Plugin-Based Authentication (Recommended)
+
+- `producerAuthProvider` (string): Authentication provider type for producer endpoints, one of: `jwks`, `static`
+  - Environment variable: `PRODUCER_AUTH_PROVIDER`
+  - Default: `jwks` if `identityJwksUrl` is set
+  - See `docs/20-authentication-plugins.md` for provider details
+- `producerAuthConfig` (JSON string or object): Provider-specific configuration
+  - Environment variable: `PRODUCER_AUTH_CONFIG` (JSON string)
+  - Format varies by provider (see authentication plugins documentation)
 
 ## Worker auth
 
-- `workerJwksUrl` (string)
-- `workerAudience` (string): default `codeq-worker`
-- `workerIssuer` (string)
-- `allowedClockSkewSeconds` (int): default 60
-- `allowProducerAsWorker` (bool): when true, producer tokens can access worker endpoints and are mapped to a wildcard worker identity (dev only)
+### Legacy JWKS Configuration (Deprecated)
+
+The following fields are deprecated in favor of the new plugin-based authentication system (see `workerAuthProvider` below):
+
+- `workerJwksUrl` (string): JWKS URL for worker JWT validation
+  - Environment variable: `WORKER_JWKS_URL`
+- `workerAudience` (string): Expected `aud` claim in worker JWTs, default `codeq-worker`
+  - Environment variable: `WORKER_AUDIENCE`
+- `workerIssuer` (string): Expected `iss` claim in worker JWTs
+  - Environment variable: `WORKER_ISSUER`
+- `allowedClockSkewSeconds` (int): JWT timestamp tolerance in seconds, default 60
+  - Environment variable: `ALLOWED_CLOCK_SKEW_SECONDS`
+  - Allows for clock drift between issuer and codeQ server
+- `allowProducerAsWorker` (bool): Development flag to allow producer tokens on worker endpoints, default `false`
+  - Environment variable: `ALLOW_PRODUCER_AS_WORKER` (accepts: `true`, `1`, `yes`)
+  - When `true`, producer tokens can claim tasks and are mapped to a wildcard worker identity (`*`)
+  - **WARNING:** Use only in development; violates security boundaries in production
+
+### Plugin-Based Authentication (Recommended)
+
+- `workerAuthProvider` (string): Authentication provider type for worker endpoints, one of: `jwks`, `static`
+  - Environment variable: `WORKER_AUTH_PROVIDER`
+  - Default: `jwks` if `workerJwksUrl` is set
+  - See `docs/20-authentication-plugins.md` for provider details
+- `workerAuthConfig` (JSON string or object): Provider-specific configuration
+  - Environment variable: `WORKER_AUTH_CONFIG` (JSON string)
+  - Format varies by provider (see authentication plugins documentation)
 
 ## Webhooks
 
-- `webhookHmacSecret` (string)
-- `subscriptionMinIntervalSeconds` (int): default 5
-- `subscriptionCleanupIntervalSeconds` (int): default 60
-- `resultWebhookMaxAttempts` (int): default 5
-- `resultWebhookBaseBackoffSeconds` (int): default 2
-- `resultWebhookMaxBackoffSeconds` (int): default 60
+- `webhookHmacSecret` (string): Secret key for HMAC-SHA256 webhook signature generation
+  - Environment variable: `WEBHOOK_HMAC_SECRET`
+  - Required for webhook security; signatures sent in `X-CodeQ-Signature` header
+  - Recommended: Generate with `openssl rand -hex 32`
+- `subscriptionMinIntervalSeconds` (int): Minimum interval between worker availability notifications per subscription, default 5 seconds
+  - Environment variable: `SUBSCRIPTION_MIN_INTERVAL_SECONDS`
+  - Prevents webhook spam; enforced at subscription creation and heartbeat
+- `subscriptionCleanupIntervalSeconds` (int): Background job interval for expired subscription removal, default 60 seconds
+  - Environment variable: `SUBSCRIPTION_CLEANUP_INTERVAL_SECONDS`
+- `resultWebhookMaxAttempts` (int): Maximum delivery attempts for task result webhooks, default 5
+  - Environment variable: `RESULT_WEBHOOK_MAX_ATTEMPTS`
+  - After max attempts, webhook delivery is abandoned (not retried)
+- `resultWebhookBaseBackoffSeconds` (int): Base delay for result webhook retry backoff, default 2 seconds
+  - Environment variable: `RESULT_WEBHOOK_BASE_BACKOFF_SECONDS`
+- `resultWebhookMaxBackoffSeconds` (int): Maximum backoff delay for result webhook retries, default 60 seconds
+  - Environment variable: `RESULT_WEBHOOK_MAX_BACKOFF_SECONDS`
 
 ## Artifact storage
 
-- `localArtifactsDir` (string): default `/tmp/codeq-artifacts`
+- `localArtifactsDir` (string): Local filesystem directory for storing task result artifacts, default `/tmp/codeq-artifacts`
+  - Environment variable: `LOCAL_ARTIFACTS_DIR`
+  - Directory must be writable by codeQ process
+  - **Note:** Artifacts are stored locally and not replicated across replicas
+  - For production multi-replica deployments, use external object storage (S3, GCS, etc.)
 
 ## Rate limiting
 
@@ -64,7 +143,7 @@ Rate limit configuration is per scope (producer, worker, webhook, admin). Each s
 
 Both values must be greater than zero to enable rate limiting for a scope.
 
-**Note:** The `webhook` scope is currently reserved for future use and is not yet implemented in the codebase. Only `producer`, `worker`, and `admin` scopes are actively enforced.
+**Note:** The `webhook` scope is **not currently implemented** in the codebase. Only `producer`, `worker`, and `admin` scopes are actively enforced. The webhook rate limiting configuration is reserved for future use.
 
 ### YAML configuration
 
