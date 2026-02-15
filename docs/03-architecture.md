@@ -49,7 +49,9 @@
   - `subscription_cleanup_service.go`: Expired subscription removal
 - **`internal/repository`**: Data access layer (Redis operations)
   - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
-  - `idempotency_bloom.go`: In-process Bloom filter for idempotency fast-path optimization
+  - `idempotency_bloom.go`: In-process Bloom filters for optimization
+    - **Idempotency Bloom**: Skips negative Redis GET on fresh idempotency keys (Enqueue fast-path)
+    - **Ghost Bloom**: Skips Redis HGET for administratively deleted tasks (Claim fast-path)
   - `result_repository.go`: Result storage and retrieval
   - `subscription_repository.go`: Subscription storage
 - **`internal/providers`**: External integrations
@@ -93,8 +95,10 @@
 2. Service validates token and filters event types by token claims.
 3. Service runs the requeue logic for each command.
 4. Service atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`).
-5. Service sets a lease key with `SETEX` and updates task status to `IN_PROGRESS`.
-6. Service returns the task record. If no task is available, returns `204`.
+5. **Ghost Bloom filter check**: If ID is in ghost filter (deleted by admin), skip HGET and clean up queue references.
+6. Service loads task JSON with `HGET`; if nil (ghost task), adds ID to ghost filter and retries.
+7. Service sets a lease key with `SETEX` and updates task status to `IN_PROGRESS`.
+8. Service returns the task record. If no task is available, returns `204`.
 
 ## Completion flow
 

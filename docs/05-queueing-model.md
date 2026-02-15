@@ -79,9 +79,13 @@ If the lease expires before completion or a worker sends `nack`, the task is ret
 
 When `idempotencyKey` is provided, the service stores a mapping of `idempotencyKey -> taskId` with TTL equal to the retention window. Subsequent requests with the same key return the existing task.
 
-### Bloom Filter Optimization
+### Bloom Filter Optimizations
 
-To accelerate idempotency checks, codeQ uses an in-process rotating Bloom filter that avoids negative Redis GET operations on the fast path:
+codeQ uses TWO in-process rotating Bloom filters to optimize Redis operations:
+
+#### 1. Idempotency Bloom Filter (Enqueue Fast-Path)
+
+Accelerates idempotency checks by avoiding negative Redis GET operations:
 
 **Fast-path logic:**
 1. Check local Bloom filter: if `MaybeHas(key)` returns `false`, the key is definitely not present
@@ -94,9 +98,34 @@ To accelerate idempotency checks, codeQ uses an in-process rotating Bloom filter
 - **False negatives**: Impossible by Bloom filter design—never claims a key exists when Redis doesn't have it
 - **Thread-safe**: Uses atomic operations and lock-free reads for concurrent access
 - **Rotating buffers**: Maintains current and previous filter, rotated every 30 minutes by default
-- **Memory footprint**: ~1-2 MB for 1M keys at 1% false positive rate
+- **Memory footprint**: ~2.4 MB for 1M keys at 1% false positive rate
+- **Configuration**: 1M capacity, 0.01 FP rate, 30min rotation
 
 **Performance impact:**
 - Eliminates one Redis round-trip per enqueue when idempotency key is new
 - Most effective for workloads with high idempotency key uniqueness
 - Minimal overhead for duplicate submissions (Bloom filter check + Redis GET)
+
+#### 2. Ghost Bloom Filter (Claim Fast-Path)
+
+Optimizes Claim by skipping HGET for administratively deleted tasks ("ghost" IDs that linger in queues):
+
+**Fast-path logic:**
+1. After RPOP+SADD (atomic queue move), check ghost Bloom filter
+2. If `MaybeHas(taskID)` returns `true`, skip Redis HGET and clean up queue references
+3. If returns `false`, proceed with standard HGET to load task JSON
+4. If HGET returns nil (deleted task), add ID to ghost filter for future claims
+
+**Characteristics:**
+- **Ultra-low false positive rate**: 1e-12 (one in a trillion) to minimize unnecessary HGETs
+- **Larger capacity**: 2M keys to track deleted task history over longer periods
+- **Longer rotation**: 6 hours (vs 30 minutes for idempotency) to retain ghost knowledge
+- **Thread-safe**: Uses atomic operations and lock-free reads for concurrent access
+- **Memory footprint**: ~8.6 MB for 2M keys at 1e-12 false positive rate
+- **Configuration**: 2M capacity, 1e-12 FP rate, 6hr rotation
+
+**Performance impact:**
+- Eliminates Redis HGET round-trip for deleted tasks still in queues
+- Reduces wasted Claim iterations when pending queues have stale IDs
+- Most effective after administrative cleanup operations
+- No benefit for fresh systems without cleanup history
