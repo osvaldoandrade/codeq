@@ -192,7 +192,7 @@ Queue depth metrics are gathered dynamically during Prometheus scrapes rather th
 **Collector behavior:**
 - Registered once at application bootstrap (`pkg/app/application.go`)
 - Executes Redis pipeline queries on each scrape (2-second timeout)
-- Queries queue depths for all commands across all sharding buckets (priority 0-9)
+- Queries queue depths for all commands across all priority levels (0-9)
 - Aggregates pending, delayed, in-progress, and DLQ counts
 - Exposes as gauges: `codeq_queue_depth`, `codeq_dlq_depth`, `codeq_subscriptions_active`
 
