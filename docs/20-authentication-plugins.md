@@ -1,143 +1,184 @@
 # Authentication Plugins
 
-CodeQ uses a plugin-based authentication system that allows you to implement custom authentication providers. This decouples CodeQ from any specific authentication service and makes it adaptable to different environments.
+CodeQ uses a true plugin-based authentication system with framework-like extensibility. No internal code edits are required to add custom authentication providers.
 
 ## Overview
 
-The authentication plugin architecture consists of:
+The authentication plugin architecture provides three integration points:
 
-1. **Interface**: A common interface (`pkg/auth/interface.go`) that all authentication plugins must implement
-2. **Default Plugin**: A JWKS-based implementation (`pkg/auth/jwks/`) that validates JWT tokens using JSON Web Key Sets
-3. **Middleware**: The middleware layer uses the plugin interface, making it independent of the authentication implementation
+1. **Configuration-based** - Select providers via config file (recommended for operations)
+2. **Dependency Injection** - Pass validators at application startup (recommended for embedded use)
+3. **Provider Registry** - Register factories globally (recommended for libraries)
 
-## Using the Default JWKS Plugin
+## Quick Start
 
-The default JWKS plugin validates JWT tokens signed with RSA keys. It's suitable for most OAuth2/OIDC-based authentication systems.
+### Using the Default JWKS Plugin
 
-### Configuration
-
-Configure the JWKS plugin through environment variables or config file:
-
+**Option 1: Legacy Config (backward compatible)**
 ```yaml
-# For producer authentication
+# Auto-configured as JWKS provider
 identityJwksUrl: https://your-auth-server.com/.well-known/jwks.json
 identityIssuer: https://your-auth-server.com
 identityAudience: codeq-producer
 
-# For worker authentication
 workerJwksUrl: https://your-auth-server.com/.well-known/jwks.json
 workerIssuer: https://your-auth-server.com
 workerAudience: codeq-worker
-
-# Clock skew tolerance
-allowedClockSkewSeconds: 60
 ```
 
-### Required Token Claims
+**Option 2: Explicit Provider Config (new)**
+```yaml
+producerAuthProvider: jwks
+producerAuthConfig:
+  jwksUrl: https://your-auth-server.com/.well-known/jwks.json
+  issuer: https://your-auth-server.com
+  audience: codeq-producer
+  clockSkew: 60s
+  httpTimeout: 5s
 
-**Producer tokens** must include:
-- `iss`: Issuer identifier (must match `identityIssuer`)
-- `aud`: Audience (must include `identityAudience`)
-- `sub`: Subject (user identifier)
-- `exp`: Expiration time
-- `iat`: Issued at time
-- `email`: User email (optional, falls back to `sub`)
-- `role`: User role (optional, used for admin checks)
+workerAuthProvider: jwks
+workerAuthConfig:
+  jwksUrl: https://your-auth-server.com/.well-known/jwks.json
+  issuer: https://your-auth-server.com
+  audience: codeq-worker
+  clockSkew: 60s
+  httpTimeout: 5s
+```
 
-**Worker tokens** must include all producer claims plus:
-- `eventTypes`: Array of event types the worker can process
-- `scope`: Space-separated list of permissions (e.g., "codeq:claim codeq:result")
+### Environment Variables
 
-### Token Validation
+```bash
+# Legacy (still supported)
+IDENTITY_JWKS_URL=https://your-auth-server.com/.well-known/jwks.json
+IDENTITY_ISSUER=https://your-auth-server.com
+IDENTITY_AUDIENCE=codeq-producer
 
-The JWKS plugin:
-1. Fetches public keys from the JWKS endpoint
-2. Validates the token signature using the key identified by `kid` in the token header
-3. Verifies issuer, audience, and expiration
-4. Caches keys for 5 minutes to reduce network calls
+# Or explicit provider selection (new)
+PRODUCER_AUTH_PROVIDER=jwks
+PRODUCER_AUTH_CONFIG='{"jwksUrl":"https://...","issuer":"...","audience":"..."}'
+```
 
-## Creating a Custom Plugin
+## Creating Custom Plugins
 
-You can implement your own authentication plugin to integrate with different auth systems (API keys, mutual TLS, custom tokens, etc.).
+### Method 1: Provider Registry (Recommended)
 
-### Step 1: Implement the Validator Interface
-
-Create a new package (e.g., `pkg/auth/custom/`) and implement the `auth.Validator` interface:
+Register your provider globally using the init() pattern:
 
 ```go
-package custom
+package myauth
 
 import (
+	"encoding/json"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 )
 
-type CustomValidator struct {
-	// Your validator state
+type Config struct {
+	APIKey string `json:"apiKey"`
 }
 
-func NewValidator(cfg auth.Config) (auth.Validator, error) {
-	// Initialize your validator
-	return &CustomValidator{}, nil
+type Validator struct {
+	apiKey string
 }
 
-func (v *CustomValidator) Validate(token string) (*auth.Claims, error) {
-	// Implement your validation logic
-	// Return auth.Claims with user/worker information
-	
-	return &auth.Claims{
-		Subject:    "user-id",
-		Email:      "user@example.com",
-		Issuer:     "your-auth-system",
-		Audience:   []string{"codeq"},
-		ExpiresAt:  expiryTime,
-		IssuedAt:   issuedTime,
-		Scopes:     []string{"codeq:claim", "codeq:result"},
-		EventTypes: []string{"*"},
-		Raw:        map[string]interface{}{}, // Additional claims
-	}, nil
+func init() {
+	auth.RegisterProvider("myauth", NewValidator)
 }
-```
 
-### Step 2: Use Your Plugin in Middleware
+func NewValidator(configJSON json.RawMessage) (auth.Validator, error) {
+	var cfg Config
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, err
+	}
+	return &Validator{apiKey: cfg.APIKey}, nil
+}
 
-Modify the middleware to use your custom plugin:
-
-```go
-// In internal/middleware/auth.go
-import "github.com/yourorg/codeq/pkg/auth/custom"
-
-func newProducerValidator(cfg *config.Config) (auth.Validator, error) {
-	return custom.NewValidator(auth.Config{
-		// Your config parameters
-	})
+func (v *Validator) Validate(token string) (*auth.Claims, error) {
+	// Your validation logic
+	if token == v.apiKey {
+		return &auth.Claims{
+			Subject: "api-user",
+			Scopes:  []string{"codeq:claim"},
+		}, nil
+	}
+	return nil, errors.New("invalid API key")
 }
 ```
 
-### Step 3: Test Your Plugin
-
-Create comprehensive tests for your plugin:
-
+**Usage:**
 ```go
-package custom
-
 import (
-	"testing"
-	"github.com/osvaldoandrade/codeq/pkg/auth"
+	_ "github.com/yourorg/myauth"  // Registers provider
+	"github.com/osvaldoandrade/codeq/pkg/app"
+	"github.com/osvaldoandrade/codeq/pkg/config"
 )
 
-func TestCustomValidator(t *testing.T) {
-	validator, err := NewValidator(auth.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	
-	claims, err := validator.Validate("your-test-token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	
-	// Assert claims are correct
+func main() {
+	cfg, _ := config.LoadConfig("config.yaml")
+	app, _ := app.NewApplication(cfg)
+	// Validators auto-created from config
 }
+```
+
+**Config:**
+```yaml
+producerAuthProvider: myauth
+producerAuthConfig:
+  apiKey: secret123
+```
+
+### Method 2: Dependency Injection
+
+Pass validators directly at application startup:
+
+```go
+package main
+
+import (
+	"github.com/osvaldoandrade/codeq/pkg/app"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+	"github.com/osvaldoandrade/codeq/pkg/config"
+)
+
+type MyValidator struct{}
+
+func (v *MyValidator) Validate(token string) (*auth.Claims, error) {
+	// Your validation logic
+	return &auth.Claims{Subject: "user"}, nil
+}
+
+func main() {
+	cfg, _ := config.LoadConfig("config.yaml")
+	
+	myValidator := &MyValidator{}
+	
+	app, err := app.NewApplication(cfg,
+		app.WithProducerValidator(myValidator),
+		app.WithWorkerValidator(myValidator),
+	)
+	if err != nil {
+		panic(err)
+	}
+	
+	app.SetupMappings(app)
+	// Start server...
+}
+```
+
+**Benefits:**
+- No global state
+- Full control over lifecycle
+- Easy testing with mocks
+
+### Method 3: Configuration Only
+
+For simple cases, just configure existing providers:
+
+```yaml
+producerAuthProvider: jwks
+producerAuthConfig:
+  jwksUrl: https://custom-auth.example.com/jwks
+  issuer: https://custom-auth.example.com
+  audience: my-app
 ```
 
 ## Plugin Interface Reference
@@ -168,64 +209,216 @@ type Claims struct {
 }
 ```
 
-### auth.Config
+### auth.ProviderConfig
 
 ```go
-type Config struct {
-	JwksURL     string        // JWKS endpoint URL
-	Issuer      string        // Expected issuer
-	Audience    string        // Expected audience
-	ClockSkew   time.Duration // Clock skew tolerance
-	HTTPTimeout time.Duration // HTTP client timeout
+type ProviderConfig struct {
+	Type   string          // Provider type (e.g., "jwks", "apikey")
+	Config json.RawMessage // Provider-specific configuration
 }
 ```
 
-Configuration for creating validators. Different plugins may use different fields.
+### Registry Functions
 
-## Migration from identity-middleware
+```go
+// Register a provider factory
+func RegisterProvider(providerType string, factory ValidatorFactory)
 
-If you're upgrading from a version that used the `codecompany/identity-middleware` dependency:
+// Create validator from config
+func NewValidator(config ProviderConfig) (Validator, error)
 
-1. **No configuration changes needed**: The JWKS plugin uses the same configuration variables
-2. **Token format unchanged**: Your existing tokens will continue to work
-3. **Backward compatible**: The Claims structure is identical
+// List registered providers
+func ListProviders() []string
+```
 
-The only difference is that CodeQ no longer depends on the private `identity-middleware` package, making it usable without access to that repository.
+## Real-World Examples
 
-## Examples
+### OAuth2 Introspection Plugin
 
-See `pkg/auth/jwks/validator_test.go` for a complete example of JWKS token validation.
+```go
+package oauth2
 
-For a minimal custom plugin example, see the "Creating a Custom Plugin" section above.
+import (
+	"encoding/json"
+	"net/http"
+	"net/url"
+	
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+)
 
-## Security Considerations
+type Config struct {
+	IntrospectionURL string `json:"introspectionUrl"`
+	ClientID         string `json:"clientId"`
+	ClientSecret     string `json:"clientSecret"`
+}
 
-When implementing a custom plugin:
+type Validator struct {
+	config Config
+	client *http.Client
+}
 
-1. **Validate all inputs**: Never trust token data without validation
-2. **Check expiration**: Always verify token expiration times
-3. **Use constant-time comparison**: For secrets, use `crypto/subtle.ConstantTimeCompare`
-4. **Cache carefully**: Balance performance with freshness of validation data
-5. **Log failures**: Log authentication failures for security monitoring
-6. **Rate limit**: Consider rate limiting validation attempts
+func init() {
+	auth.RegisterProvider("oauth2-introspection", NewValidator)
+}
+
+func NewValidator(configJSON json.RawMessage) (auth.Validator, error) {
+	var cfg Config
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, err
+	}
+	return &Validator{
+		config: cfg,
+		client: &http.Client{Timeout: 5 * time.Second},
+	}, nil
+}
+
+func (v *Validator) Validate(token string) (*auth.Claims, error) {
+	resp, err := v.client.PostForm(v.config.IntrospectionURL, url.Values{
+		"token":         {token},
+		"client_id":     {v.config.ClientID},
+		"client_secret": {v.config.ClientSecret},
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	
+	var introspection struct {
+		Active bool     `json:"active"`
+		Sub    string   `json:"sub"`
+		Scope  string   `json:"scope"`
+		Exp    int64    `json:"exp"`
+	}
+	
+	if err := json.NewDecoder(resp.Body).Decode(&introspection); err != nil {
+		return nil, err
+	}
+	
+	if !introspection.Active {
+		return nil, errors.New("token inactive")
+	}
+	
+	return &auth.Claims{
+		Subject:   introspection.Sub,
+		Scopes:    strings.Fields(introspection.Scope),
+		ExpiresAt: time.Unix(introspection.Exp, 0),
+	}, nil
+}
+```
+
+**Usage:**
+```yaml
+producerAuthProvider: oauth2-introspection
+producerAuthConfig:
+  introspectionUrl: https://oauth.example.com/introspect
+  clientId: codeq-service
+  clientSecret: secret
+```
+
+### Database-backed API Key Plugin
+
+See `examples/custom-auth-plugin.md` for a complete implementation.
+
+## Testing Your Plugin
+
+```go
+package myauth
+
+import (
+	"encoding/json"
+	"testing"
+	
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+)
+
+func TestMyAuthPlugin(t *testing.T) {
+	cfgJSON, _ := json.Marshal(Config{APIKey: "test-key"})
+	
+	validator, err := NewValidator(cfgJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	// Test valid token
+	claims, err := validator.Validate("test-key")
+	if err != nil {
+		t.Fatalf("expected valid token: %v", err)
+	}
+	if claims.Subject != "api-user" {
+		t.Errorf("unexpected subject: %s", claims.Subject)
+	}
+	
+	// Test invalid token
+	_, err = validator.Validate("wrong-key")
+	if err == nil {
+		t.Error("expected error for invalid token")
+	}
+}
+```
+
+## Migration from Previous Version
+
+If you implemented a "plugin" in the old system that required editing `newProducerValidator`/`newWorkerValidator`:
+
+**Before (required editing internal code):**
+```go
+// Had to edit internal/middleware/auth.go
+func newProducerValidator(cfg *config.Config) (auth.Validator, error) {
+	return myauth.NewValidator(...)  // Edit here
+}
+```
+
+**After (use registry or DI, no internal edits):**
+```go
+// Option 1: Register in your package
+func init() {
+	auth.RegisterProvider("myauth", factory)
+}
+
+// Option 2: Use dependency injection
+app.NewApplication(cfg, app.WithProducerValidator(myValidator))
+```
+
+## Best Practices
+
+1. **Use Registry for Libraries**: If distributing a reusable plugin, use `RegisterProvider` in `init()`
+2. **Use DI for Applications**: If building a custom deployment, use `WithProducerValidator` options
+3. **Use Config for Operations**: If running standard CodeQ, configure via YAML/env vars
+4. **Validate Configuration Early**: Return errors from `NewValidator` if config is invalid
+5. **Cache Wisely**: Balance security with performance (JWKS plugin caches keys for 5 minutes)
+6. **Handle Errors Gracefully**: Return clear error messages for debugging
+7. **Test Thoroughly**: Write unit tests for your validator logic
 
 ## Troubleshooting
 
-### Token validation fails with "invalid issuer"
+### "unknown auth provider type"
 
-Ensure your `identityIssuer` or `workerIssuer` configuration exactly matches the `iss` claim in the token.
+Your provider isn't registered. Ensure:
+1. You're importing the package with `_` (e.g., `import _ "pkg/myauth"`)
+2. The init() function calls `auth.RegisterProvider`
+3. The provider type in config matches the registered name
 
-### Token validation fails with "invalid audience"
+### "producer validator not configured"
 
-The token's `aud` claim must include the configured audience (`identityAudience` or `workerAudience`).
+The application couldn't create a validator. Check:
+1. Config has `producerAuthProvider` and `producerAuthConfig` set
+2. Or legacy `identityJwksUrl` fields are set for backward compatibility
+3. Provider is registered before `NewApplication` is called
 
-### "Key not found in JWKS"
+### "invalid token" in tests
 
-The `kid` in your token header doesn't match any key in the JWKS endpoint. Ensure:
-1. The JWKS URL is correct
-2. The key used to sign the token is published in the JWKS
-3. The `kid` in the token matches the `kid` in the JWKS
+Ensure test setup properly configures auth:
+```go
+cfg.ProducerAuthProvider = "jwks"
+cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
+	"jwksUrl": testServer.URL,
+	"issuer": "test",
+	"audience": "test",
+})
+```
 
-### Performance issues
+## See Also
 
-The JWKS plugin caches keys for 5 minutes. If you need different caching behavior, implement a custom plugin with your preferred caching strategy.
+- [Custom Plugin Examples](../examples/custom-auth-plugin.md) - Complete implementations
+- [Migration Guide](21-migration-plugin-system.md) - Upgrading from identity-middleware
+- [Configuration Reference](14-configuration.md) - All config options
