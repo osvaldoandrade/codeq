@@ -50,6 +50,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 ### Design Documents (Architecture-Oriented)
 
 24. `docs/24-queue-sharding-hld.md` - High-Level Design and RFC for queue sharding implementation
+25. `docs/25-plugin-architecture-hld.md` - High-Level Design for plugin architecture with persistence and authentication
 
 ### Migration Guides (Task-Oriented)
 
