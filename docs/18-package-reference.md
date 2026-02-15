@@ -241,32 +241,41 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 
 **Key files**:
 - `task_repository.go`: Task CRUD and queue operations
-  - `CreateTask()`, `GetTask()`, `UpdateTask()`
-  - `PushReady()`: Add to ready queue (LPUSH)
-  - `Claim()`: Atomic claim move from pending to in-progress (Lua `RPOP` + `SADD`)
-  - `PushDelayed()`: Schedule for future (ZADD with score = runAt)
-  - `MoveDelayedToReady()`: Requeue due tasks (ZRANGEBYSCORE + LPUSH)
-  - `GetInProgressExpired()`: Find expired leases (ZRANGEBYSCORE)
-  - `GetQueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
+  - `Enqueue()`: Add task to pending queue (LPUSH with priority)
+  - `Get()`: Fetch task by ID (HGET)
+  - `Claim()`: Atomic claim move from pending to in-progress SET (Lua `RPOP` + `SADD`), includes inline repair loop that samples in-progress via `SRANDMEMBER` + pipelined `TTL` checks
+  - `MoveDueDelayed()`: Requeue due tasks from delayed ZSET (ZRANGEBYSCORE + LPUSH)
+  - `Heartbeat()`: Extend lease TTL (EXPIRE)
+  - `Abandon()`: Return task to pending queue (SREM + LPUSH)
+  - `Nack()`: Requeue with backoff or move to DLQ (SREM + ZADD or LPUSH)
+  - `QueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
+  - `CleanupExpired()`: Admin cleanup of expired tasks (ZRANGEBYSCORE on TTL index)
 
 - `result_repository.go`: Result storage
-  - `SaveResult()`, `GetResult()`
+  - `SaveResult()`: Store task result (HSET)
+  - `GetResult()`: Retrieve task result (HGET)
+  - `UpdateTaskOnComplete()`: Update task status on completion
+  - `RemoveFromInprogAndClearLease()`: Clean up in-progress SET and lease key (SREM + DEL)
 
 - `subscription_repository.go`: Subscription storage
-  - `CreateSubscription()`, `GetSubscription()`, `RenewSubscription()`, `DeleteSubscription()`
-  - `FindSubscriptionsByEventType()`: Query for webhook dispatch
+  - `Create()`: Register webhook subscription (HSET + ZADD)
+  - `Get()`: Fetch subscription by ID (HGET)
+  - `Heartbeat()`: Renew subscription TTL (ZADD)
+  - `ListActive()`: Query active subscriptions for event type (ZRANGEBYSCORE)
+  - `CleanupExpired()`: Remove expired subscriptions (ZRANGEBYSCORE + ZREM + HDEL)
 
 **Redis layout**: See `docs/07-storage-kvrocks.md`
 
 **Example**:
 ````go
-// Ready queue operations
-taskRepo.PushReady(ctx, "GENERATE_MASTER", taskID)
-taskID, err := taskRepo.PopReady(ctx, "GENERATE_MASTER", workerID)
+// Enqueue a task
+task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt)
 
-// Delayed queue operations
-taskRepo.PushDelayed(ctx, "GENERATE_MASTER", taskID, runAt)
-dueTaskIDs, _ := taskRepo.MoveDelayedToReady(ctx, "GENERATE_MASTER", time.Now())
+// Claim a task (includes inline repair of expired leases via SRANDMEMBER + pipelined TTL)
+task, claimed, err := taskRepo.Claim(ctx, workerID, []domain.Command{domain.CmdGenerateMaster}, leaseSeconds, inspectLimit, maxAttemptsDefault)
+
+// Move delayed tasks to pending
+moved, err := taskRepo.MoveDueDelayed(ctx, domain.CmdGenerateMaster, limit)
 ````
 
 ---

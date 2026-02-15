@@ -513,7 +513,7 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 		dst := r.keyQueueInprog(cmd, tenantID)
 
 		for i := 0; i < inspectLimit; i++ {
-			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, inspectLimit).Result()
+			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
 			if err == redis.Nil {
 				return nil, false, nil // empty queue
 			}
