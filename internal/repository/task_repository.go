@@ -188,7 +188,7 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 				pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, p, tenantID), 0, id)
 			}
 		}
-		pipe.LRem(ctx, r.keyQueueInprog(*cmdOpt, tenantID), 0, id)
+		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt, tenantID), id)
 		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt, tenantID), id)
 		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), 0, id)
 	} else {
@@ -201,7 +201,7 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 				// Note: Cannot enumerate all possible tenants, so orphaned tenant-specific
 				// tasks would need manual cleanup or a separate background job
 			}
-			pipe.LRem(ctx, r.keyQueueInprog(c, ""), 0, id)
+			pipe.SRem(ctx, r.keyQueueInprog(c, ""), id)
 			pipe.ZRem(ctx, r.keyQueueDelayed(c, ""), id)
 			pipe.LRem(ctx, r.keyQueueDLQ(c, ""), 0, id)
 		}
@@ -294,16 +294,56 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 	return &task, nil
 }
 
+// claimMoveScript atomically pops one ID from the pending list and tracks it in the in-progress set.
+//
+// It also skips duplicate IDs that may exist in pending while already in in-progress (best-effort
+// self-healing for rare duplication bugs).
+//
+// KEYS[1] = pending list key
+// KEYS[2] = in-progress set key
+// ARGV[1] = max inner iterations (int)
+var claimMoveScript = redis.NewScript(`
+local src = KEYS[1]
+local dst = KEYS[2]
+local maxIter = tonumber(ARGV[1]) or 1
+for i=1,maxIter do
+  local id = redis.call("RPOP", src)
+  if not id then
+    return false
+  end
+  if redis.call("SADD", dst, id) == 1 then
+    return id
+  end
+end
+return false
+`)
+
 func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int, tenantID string) (int, error) {
 	inprog := r.keyQueueInprog(cmd, tenantID)
-	ids, err := r.rdb.LRange(ctx, inprog, 0, int64(inspectLimit-1)).Result()
-	if err != nil && err != redis.Nil {
-		return 0, fmt.Errorf("LRange inprog: %w", err)
+	if inspectLimit <= 0 {
+		inspectLimit = 200
 	}
-	moved := 0
+	ids, err := r.rdb.SRandMemberN(ctx, inprog, int64(inspectLimit)).Result()
+	if err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("SRANDMEMBER inprog: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	pipe := r.rdb.Pipeline()
+	ttlCmds := make([]*redis.DurationCmd, 0, len(ids))
 	for _, id := range ids {
-		ttl, err := r.rdb.TTL(ctx, r.keyLease(id)).Result()
-		if err != nil {
+		ttlCmds = append(ttlCmds, pipe.TTL(ctx, r.keyLease(id)))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("pipeline TTL leases: %w", err)
+	}
+
+	moved := 0
+	for i, id := range ids {
+		ttl, err := ttlCmds[i].Result()
+		if err != nil && err != redis.Nil {
 			return moved, fmt.Errorf("TTL lease: %w", err)
 		}
 		if ttl <= 0 {
@@ -321,8 +361,8 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 			_, _, err := r.Nack(ctx, id, "", delaySeconds, maxAttemptsDefault, "LEASE_EXPIRED")
 			if err != nil {
 				// fallback to pending if nack fails
-				if err := r.rdb.LRem(ctx, inprog, 0, id).Err(); err != nil {
-					return moved, fmt.Errorf("LREM inprog: %w", err)
+				if err := r.rdb.SRem(ctx, inprog, id).Err(); err != nil {
+					return moved, fmt.Errorf("SREM inprog: %w", err)
 				}
 				if err := r.rdb.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID), id).Err(); err != nil {
 					return moved, fmt.Errorf("LPUSH pending: %w", err)
@@ -474,19 +514,23 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 		dst := r.keyQueueInprog(cmd, tenantID)
 
 		for i := 0; i < inspectLimit; i++ {
-			id, err := r.rdb.RPopLPush(ctx, src, dst).Result()
+			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
 			if err == redis.Nil {
 				return nil, false, nil // fila vazia
 			}
 			if err != nil {
-				return nil, false, fmt.Errorf("RPOPLPUSH: %w", err)
+				return nil, false, fmt.Errorf("claim move script: %w", err)
+			}
+			id, ok := res.(string)
+			if !ok || id == "" {
+				return nil, false, nil // fila vazia / no unique id found
 			}
 
 			// Carrega JSON; pode ter sido limpo por admin endpoint
 			js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 			if err == redis.Nil || js == "" {
 				// remove da inprog e tenta novamente
-				_ = r.rdb.LRem(ctx, dst, 0, id).Err()
+				_ = r.rdb.SRem(ctx, dst, id).Err()
 				continue
 			}
 			if err != nil {
@@ -494,14 +538,14 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 			}
 			t, err := unmarshalTask(js)
 			if err != nil {
-				_ = r.rdb.LRem(ctx, dst, 0, id).Err()
+				_ = r.rdb.SRem(ctx, dst, id).Err()
 				continue
 			}
 
 			leaseKey := r.keyLease(id)
 			if err := r.rdb.SetEX(ctx, leaseKey, workerID, time.Duration(leaseSeconds)*time.Second).Err(); err != nil {
 				// Falha ao setar lease → desfaz o move e segue
-				_ = r.rdb.LRem(ctx, dst, 0, id).Err()
+				_ = r.rdb.SRem(ctx, dst, id).Err()
 				_ = r.rdb.LPush(ctx, src, id).Err()
 				return nil, false, fmt.Errorf("SETEX lease: %w", err)
 			}
@@ -587,8 +631,8 @@ func (r *taskRedisRepo) Abandon(ctx context.Context, taskID string, workerID str
 	if t.WorkerID != workerID {
 		return fmt.Errorf("not-owner")
 	}
-	if err := r.rdb.LRem(ctx, inprog, 0, taskID).Err(); err != nil {
-		return fmt.Errorf("LREM inprog: %w", err)
+	if err := r.rdb.SRem(ctx, inprog, taskID).Err(); err != nil {
+		return fmt.Errorf("SREM inprog: %w", err)
 	}
 	if err := r.rdb.LPush(ctx, pending, taskID).Err(); err != nil {
 		return fmt.Errorf("LPUSH pending: %w", err)
@@ -652,7 +696,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 		t.UpdatedAt = r.now()
 
 		pipe := r.rdb.TxPipeline()
-		pipe.LRem(ctx, inprog, 0, taskID)
+		pipe.SRem(ctx, inprog, taskID)
 		pipe.Del(ctx, r.keyLease(taskID))
 		pipe.LPush(ctx, dlq, taskID)
 		pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
@@ -680,7 +724,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 	t.UpdatedAt = r.now()
 
 	pipe := r.rdb.TxPipeline()
-	pipe.LRem(ctx, inprog, 0, taskID)
+	pipe.SRem(ctx, inprog, taskID)
 	pipe.Del(ctx, r.keyLease(taskID))
 	pipe.ZAdd(ctx, delayed, &redis.Z{Score: float64(visibleAt), Member: taskID})
 	pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
@@ -718,7 +762,7 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 			}
 			out[kp] = lp
 		}
-		li, err := r.rdb.LLen(ctx, ki).Result()
+		li, err := r.rdb.SCard(ctx, ki).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
@@ -750,7 +794,7 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 		}
 		ready += n
 	}
-	inprog, err := r.rdb.LLen(ctx, r.keyQueueInprog(cmd, "")).Result()
+	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}

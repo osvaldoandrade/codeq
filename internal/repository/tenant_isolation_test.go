@@ -96,7 +96,7 @@ func TestTenantIsolation(t *testing.T) {
 	inprogA := "codeq:q:generate_master:tenant-a:inprog"
 	inprogB := "codeq:q:generate_master:tenant-b:inprog"
 	
-	lenInprogA, err := rdb.LLen(ctx, inprogA).Result()
+	lenInprogA, err := rdb.SCard(ctx, inprogA).Result()
 	if err != nil {
 		t.Fatalf("get length of tenant A inprog queue: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestTenantIsolation(t *testing.T) {
 		t.Errorf("expected 1 task in tenant A inprog queue, got %d", lenInprogA)
 	}
 
-	lenInprogB, err := rdb.LLen(ctx, inprogB).Result()
+	lenInprogB, err := rdb.SCard(ctx, inprogB).Result()
 	if err != nil {
 		t.Fatalf("get length of tenant B inprog queue: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestBackwardCompatibilityWithEmptyTenant(t *testing.T) {
 
 	// Verify task moved to default in-progress queue
 	inprogKey := "codeq:q:generate_master:inprog"
-	lenInprog, err := rdb.LLen(ctx, inprogKey).Result()
+	lenInprog, err := rdb.SCard(ctx, inprogKey).Result()
 	if err != nil {
 		t.Fatalf("get length of default inprog queue: %v", err)
 	}
