@@ -83,7 +83,7 @@ func TestResultsServiceGetResultNotFound(t *testing.T) {
 	
 	// Create a task but no result
 	taskRepo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
-	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{})
+	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
 	
 	repo := repository.NewResultRepository(rdb, time.UTC)
 	uploader := &mockResultsUploader{}

@@ -645,9 +645,9 @@ func (r *taskRedisRepo) Get(ctx context.Context, taskID string) (*domain.Task, e
 func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
 	for _, cmd := range r.allCommands() {
-		ki := r.keyQueueInprog(cmd)
+		ki := r.keyQueueInprog(cmd, "")
 		for p := maxPriority; p >= minPriority; p-- {
-			kp := r.keyQueuePending(cmd, p)
+			kp := r.keyQueuePending(cmd, p, "")
 			lp, err := r.rdb.LLen(ctx, kp).Result()
 			if err != nil && err != redis.Nil {
 				return nil, err
@@ -660,14 +660,14 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 		}
 		out[ki] = li
 
-		kd := r.keyQueueDelayed(cmd)
+		kd := r.keyQueueDelayed(cmd, "")
 		ld, err := r.rdb.ZCard(ctx, kd).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
 		out[kd] = ld
 
-		kdlq := r.keyQueueDLQ(cmd)
+		kdlq := r.keyQueueDLQ(cmd, "")
 		ldlq, err := r.rdb.LLen(ctx, kdlq).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
@@ -680,21 +680,21 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
 	var ready int64
 	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p)).Result()
+		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "")).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
 		ready += n
 	}
-	inprog, err := r.rdb.LLen(ctx, r.keyQueueInprog(cmd)).Result()
+	inprog, err := r.rdb.LLen(ctx, r.keyQueueInprog(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd)).Result()
+	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	dlq, err := r.rdb.LLen(ctx, r.keyQueueDLQ(cmd)).Result()
+	dlq, err := r.rdb.LLen(ctx, r.keyQueueDLQ(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
@@ -710,7 +710,7 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 func (r *taskRedisRepo) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
 	var total int64
 	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p)).Result()
+		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "")).Result()
 		if err != nil && err != redis.Nil {
 			return 0, err
 		}

@@ -3,9 +3,8 @@ package middleware
 import (
 	"errors"
 	"net/http"
-	"strings"
 
-	identitymw "github.com/osvaldoandrade/codeq/internal/identitymw"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
