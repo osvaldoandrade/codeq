@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/osvaldoandrade/codeq/pkg/domain"
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/providers"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
 type ResultsService interface {
@@ -94,6 +95,11 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	}
 	if err := s.repo.RemoveFromInprogAndClearLease(ctx, taskID, task.Command); err != nil {
 		return nil, err
+	}
+
+	metrics.TaskCompletedTotal.WithLabelValues(string(task.Command), string(req.Status)).Inc()
+	if d := rec.CompletedAt.Sub(task.CreatedAt).Seconds(); d >= 0 {
+		metrics.TaskProcessingLatencySeconds.WithLabelValues(string(task.Command), string(req.Status)).Observe(d)
 	}
 
 	if s.callback != nil {
