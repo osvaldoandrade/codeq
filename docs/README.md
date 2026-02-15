@@ -30,8 +30,10 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 12. `docs/12-webhooks.md` - Webhook notifications
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
 17. `docs/17-performance-tuning.md` - Performance optimization guide
+18. `docs/18-developer-guide.md` - Contributing and internal architecture
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
+20. `docs/20-authentication-plugins.md` - Plugin-based authentication system
 
 ### Integration Guides (Framework-Oriented)
 
@@ -42,8 +44,13 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Explanation (Understanding-Oriented)
 
-15. `docs/15-cli-reference.md` - Complete CLI command reference
 17. `docs/17-performance-tuning.md` - Performance optimization and scaling
+18. `docs/18-developer-guide.md` - Contributing and internal architecture
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
-- `docs/migration.md` - Migration guide
+20. `docs/20-authentication-plugins.md` - Plugin-based authentication system
+
+### Migration Guides
+
+- `docs/migration.md` - Migration from legacy scheduler to codeQ
+- `docs/21-migration-plugin-system.md` - Migrating to plugin-based authentication
