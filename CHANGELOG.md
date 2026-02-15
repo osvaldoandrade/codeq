@@ -25,6 +25,10 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
 
 ### Performance Improvements
 
+- **Idempotency Bloom filter optimization**: Added in-process rotating Bloom filter to eliminate negative Redis lookups on idempotent enqueue fast-path. Achieves 20-30% enqueue latency reduction for workloads with fresh idempotency keys. ([#105](https://github.com/osvaldoandrade/codeq/pull/105))
+  - 1M capacity, 1% false positive rate, 30-minute rotation
+  - ~2.4 MB memory footprint per API server instance
+  - Thread-safe with atomic operations, zero configuration required
 - **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
 - **Optimized MoveDueDelayed batching**: Eliminated redundant task JSON reads and batch all updates in single pipeline. Reduces O(3M) round-trips to O(M) for M due tasks, achieving 50-70% latency reduction for delayed→pending migrations. ([#96](https://github.com/osvaldoandrade/codeq/pull/96))
 
