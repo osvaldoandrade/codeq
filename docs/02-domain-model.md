@@ -95,7 +95,7 @@ type ShardSupplier interface {
 }
 ```
 
-Sharding is a storage-level partition and does not change the API surface. It is not implemented in the current service; this section is reserved for a future expansion.
+Sharding is a storage-level partition and does not change the API surface. It is designed but not yet implemented in the current service. For the complete sharding design, architecture diagrams, and implementation roadmap, see **[Queue Sharding HLD](24-queue-sharding-hld.md)** and **[Sharding Status](06-sharding.md)**.
 
 ## Worker token
 
