@@ -125,7 +125,7 @@ Key references:
 - **Performance**: `docs/17-performance-tuning.md` - Optimization guide
 - **Testing**: `docs/18-testing.md` - Test coverage documentation
 - **Package Reference**: `docs/20-package-reference.md` - Codebase structure
-- **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
+- **Workflows**: `docs/17-workflows.md` - GitHub Actions automation
 - **Migration**: `docs/migration.md` - Upgrade guide
 - **Contributing**: `CONTRIBUTING.md` - Contribution guidelines
 
