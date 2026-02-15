@@ -32,11 +32,18 @@ services:
       - kvrocks
     command: ["sh", "-c", "go run ./cmd/server"]
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/metrics || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   seed:
     image: curlimages/curl:8.6.0
     depends_on:
-      - codeq
+      codeq:
+        condition: service_healthy
     environment:
       - CODEQ_BASE_URL=http://codeq:8080
       - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN:-dev-token}
@@ -45,8 +52,6 @@ services:
       - -c
       - |
         set -eu
-        echo "[seed] waiting for codeq..."
-        until curl -sf "$${CODEQ_BASE_URL}/metrics" >/dev/null; do sleep 1; done
         echo "[seed] creating example tasks..."
         curl -sf -X POST "$${CODEQ_BASE_URL}/v1/codeq/tasks" \
           -H "Authorization: Bearer $${CODEQ_PRODUCER_TOKEN}" \
