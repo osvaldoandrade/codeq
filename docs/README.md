@@ -46,4 +46,4 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 17. `docs/17-performance-tuning.md` - Performance optimization and scaling
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
-20. `docs/migration.md` - Migration guide
+- `docs/migration.md` - Migration guide
