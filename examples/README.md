@@ -31,7 +31,7 @@ cd java/springboot
 mvn spring-boot:run
 ````
 
-**Documentation**: See [java/springboot/README.md](java/springboot/README.md)
+**Documentation**: Spring Boot example documentation is coming soon.
 
 ---
 
