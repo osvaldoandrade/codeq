@@ -12,9 +12,9 @@ func SetupMappings(app *Application) {
 	app.Engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	v1 := app.Engine.Group("/v1/codeq")
-	producer := v1.Group("", middleware.AuthMiddleware(app.Config))
-	worker := v1.Group("", middleware.WorkerAuthMiddleware(app.Config))
-	anyAuth := v1.Group("", middleware.AnyAuthMiddleware(app.Config))
+	producer := v1.Group("", middleware.AuthMiddleware(app.ProducerValidator, app.Config))
+	worker := v1.Group("", middleware.WorkerAuthMiddleware(app.WorkerValidator, app.ProducerValidator, app.Config))
+	anyAuth := v1.Group("", middleware.AnyAuthMiddleware(app.WorkerValidator, app.ProducerValidator, app.Config))
 	{
 		producer.POST("/tasks", controllers.NewCreateTaskController(app.Scheduler).Handle)
 
