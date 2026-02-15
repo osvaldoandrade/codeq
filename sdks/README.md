@@ -186,8 +186,8 @@ npm start
 ## 📚 Documentation
 
 ### Integration Guides
-- [Java Integration Guide](docs/integrations/21-java-integration.md)
-- [Node.js/TypeScript Integration Guide](docs/integrations/22-nodejs-integration.md)
+- [Java Integration Guide](docs/integrations/java-integration.md)
+- [Node.js/TypeScript Integration Guide](docs/integrations/nodejs-integration.md)
 
 ### Deployment Recipes
 - [Kubernetes Deployment](deploy/kubernetes/)

@@ -69,8 +69,8 @@ npm install @codeq/sdk
 
 📚 **SDK Documentation**:
 - [SDK Overview & Quick Start](sdks/README.md)
-- [Java Integration Guide](docs/integrations/21-java-integration.md)
-- [Node.js Integration Guide](docs/integrations/22-nodejs-integration.md)
+- [Java Integration Guide](docs/integrations/java-integration.md)
+- [Node.js Integration Guide](docs/integrations/nodejs-integration.md)
 - [Example Applications](examples/)
 
 ### 1) Helm (small cluster)
@@ -146,8 +146,8 @@ Key references:
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
 - **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs
-  - [Java Integration](docs/integrations/21-java-integration.md) - Spring Boot, Quarkus, Micronaut
-  - [Node.js Integration](docs/integrations/22-nodejs-integration.md) - Express, NestJS, React
+  - [Java Integration](docs/integrations/java-integration.md) - Spring Boot, Quarkus, Micronaut
+  - [Node.js Integration](docs/integrations/nodejs-integration.md) - Express, NestJS, React
 - **Examples**: `examples/` - Working examples with Java and Node.js frameworks
 - **Developer Guide**: `docs/21-developer-guide.md` - Contributing and internal architecture
 - **Queue model**: `docs/05-queueing-model.md` - Queue semantics

@@ -131,8 +131,8 @@ Choose an example and follow its Quick Start instructions above.
    - Java → Start with [Spring Boot example](java/springboot/)
    - Node.js → Start with [NestJS example](nodejs/nestjs/)
 3. **Explore**: [Integration Guides](../docs/integrations/)
-   - [Java Integration Guide](../docs/integrations/21-java-integration.md)
-   - [Node.js Integration Guide](../docs/integrations/22-nodejs-integration.md)
+   - [Java Integration Guide](../docs/integrations/java-integration.md)
+   - [Node.js Integration Guide](../docs/integrations/nodejs-integration.md)
 
 ## 🏗️ Architecture Patterns
 
