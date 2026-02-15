@@ -17,6 +17,13 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	minPriority           = 0
+	maxPriority           = 9
+	taskRetention         = 24 * time.Hour
+	defaultInspectLimit   = 200 // Default number of tasks to inspect for lease expiration
+)
+
 type TaskRepository interface {
 	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
 	Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error)
@@ -61,14 +68,6 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		rng:                rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
-
-// ===== Retenção lógica (não TTL nativo) =====
-const taskRetention = 24 * time.Hour // 24h conforme solicitado
-
-const (
-	minPriority = 0
-	maxPriority = 9
-)
 
 // ===== Chaves Redis =====
 func (r *taskRedisRepo) keyTasksHash() string { return "codeq:tasks" }     // HASH único: field = id, value = JSON
@@ -321,7 +320,7 @@ return false
 func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int, tenantID string) (int, error) {
 	inprog := r.keyQueueInprog(cmd, tenantID)
 	if inspectLimit <= 0 {
-		inspectLimit = 200
+		inspectLimit = defaultInspectLimit
 	}
 	ids, err := r.rdb.SRandMemberN(ctx, inprog, int64(inspectLimit)).Result()
 	if err != nil && err != redis.Nil {
@@ -516,14 +515,14 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 		for i := 0; i < inspectLimit; i++ {
 			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
 			if err == redis.Nil {
-				return nil, false, nil // fila vazia
+				return nil, false, nil // empty queue
 			}
 			if err != nil {
 				return nil, false, fmt.Errorf("claim move script: %w", err)
 			}
 			id, ok := res.(string)
 			if !ok || id == "" {
-				return nil, false, nil // fila vazia / no unique id found
+				return nil, false, nil // empty queue / no unique id found
 			}
 
 			// Carrega JSON; pode ter sido limpo por admin endpoint
