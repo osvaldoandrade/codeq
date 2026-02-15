@@ -41,16 +41,37 @@ The `tenantId` field enables complete queue isolation in multi-tenant deployment
 
 The `lastKnownLocation` field is an optimization hint that tracks where a task was last placed in the queue system. This allows the admin cleanup operation to avoid expensive O(N) list scans when removing tasks. The field is not authoritative and may be out of sync if tasks are moved by external processes.
 
+### TaskLocation enum
+
+The `TaskLocation` field tracks task placement for administrative cleanup optimization:
+
+- `PENDING_LIST`: Task is in the ready queue (Redis LIST)
+- `DELAYED_ZSET`: Task is in the delayed queue (Redis ZSET)
+- `INPROG_SET`: Task is in the in-progress queue (Redis SET)
+- `DLQ_SET`: Task is in the dead letter queue (Redis SET)
+- `NONE`: Location unknown or task completed
+
+This tracking enables O(1) task removal during cleanup by targeting the specific data structure instead of scanning all queues.
+
 ## Result
 
 A Result record stores completion data:
 
-- `taskId`
+- `taskId`: Reference to the completed task
 - `status`: `COMPLETED` or `FAILED`
-- `result`: JSON object
-- `error`: error string
-- `artifacts`: array of `{name, url}`
-- `completedAt`
+- `result`: JSON object containing task output
+- `error`: Error message string (for failed tasks)
+- `artifacts`: Array of artifact references with structure `{name, url}`
+- `completedAt`: RFC3339 timestamp of completion
+
+### Artifact structure
+
+Result artifacts support attaching files or external resources to task results:
+
+- `ArtifactIn` (request): `{name: string, content: base64-encoded-string}` - Submitted by workers
+- `ArtifactOut` (response): `{name: string, url: string}` - Returned by API with storage URL
+
+Artifacts are stored locally by default (see `localArtifactsDir` config). For production multi-replica deployments, integrate external object storage.
 
 ## Subscription
 
