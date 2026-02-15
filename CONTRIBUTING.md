@@ -240,9 +240,39 @@ Your PR will trigger automated checks:
 
 Ensure all checks pass before requesting review.
 
-## Questions?
+## Community & Getting Help
 
-- Open an [issue](https://github.com/osvaldoandrade/codeq/issues) for bugs or feature requests
-- Check existing [discussions](https://github.com/osvaldoandrade/codeq/discussions) for questions
+### GitHub Discussions
+
+Join the conversation in [GitHub Discussions](https://github.com/osvaldoandrade/codeq/discussions):
+
+- **💡 Ideas**: Propose new features or enhancements
+- **🏗️ Architecture & RFCs**: Discuss major design changes (like queue sharding, RAFT integration)
+- **🙏 Q&A**: Get help with configuration, deployment, or usage questions
+- **💬 General**: Share use cases, best practices, or general feedback
+- **📣 Announcements**: Stay updated with releases and important changes (maintainers only)
+
+For detailed guidance on choosing the right category, see [Discussions Guide](.github/DISCUSSIONS_GUIDE.md).
+
+### Issues vs Discussions
+
+**Use Issues for**:
+- 🐛 Bug reports with reproducible steps
+- ✨ Feature requests that are well-defined and ready for implementation
+- 📝 Documentation fixes or improvements
+
+**Use Discussions for**:
+- ❓ Questions about how to use codeQ
+- 💭 Brainstorming feature ideas that need refinement
+- 🎯 Architecture proposals requiring community input (start here, then create formal RFC)
+- 📊 Performance tuning advice
+- 🌍 Use cases and success stories
+
+### Getting Help
+
+1. **Search first**: Check [documentation](docs/), [discussions](https://github.com/osvaldoandrade/codeq/discussions), and [issues](https://github.com/osvaldoandrade/codeq/issues)
+2. **Ask in Discussions**: Use the Q&A category for questions
+3. **Provide context**: Include versions, config, error messages, and what you've tried
+4. **Be patient**: Community members help in their free time
 
 Thank you for contributing! 🎉
