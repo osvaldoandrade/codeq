@@ -42,7 +42,7 @@ This change significantly improves claim-time repair performance by eliminating 
 ### Option A: drain and cut over (recommended)
 
 1. **Freeze producers** that write to the legacy scheduler.
-2. **Let workers drain** the legacy queues until pending and in-progress queues are empty.
+2. **Let workers drain** the legacy queues until pending sets and in-progress sets are empty.
 3. **Deploy codeQ** and point producers/workers to `/v1/codeq`.
 4. **Verify** new tasks are stored under `codeq:`.
 

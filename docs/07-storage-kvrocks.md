@@ -1,6 +1,6 @@
 # Storage layout (KVRocks)
 
-KVRocks implements the Redis protocol and persists to disk. codeQ uses lists, hashes, sorted sets, and TTL keys. Each operation is atomic at the command level.
+KVRocks implements the Redis protocol and persists to disk. codeQ uses lists, hashes, sorted sets, sets, and TTL keys. Each operation is atomic at the command level.
 
 ## Keyspace
 
