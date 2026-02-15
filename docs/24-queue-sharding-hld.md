@@ -47,9 +47,9 @@ graph TB
 
 The single-instance architecture encounters fundamental limitations as workload scales:
 
-**Storage Capacity Ceiling**: KVRocks persists queue data to disk using RocksDB as the underlying storage engine. While RocksDB can handle datasets exceeding available memory through tiered storage, a single KVRocks instance is ultimately bounded by the disk capacity of its host. Organizations processing billions of tasks with extended retention windows will exhaust available storage on even the largest available instance types.
+**Storage Capacity Ceiling**: KVRocks persists queue data to disk using RocksDB as the underlying storage engine. While RocksDB can handle datasets exceeding available memory through tiered storage, a single KVRocks instance is ultimately bounded by the disk capacity of its host. Organizations processing billions of tasks (for example, ten billion tasks with thirty-day retention at an average of five kilobytes per task requires approximately 500 terabytes of storage) will exhaust available storage on even the largest available instance types.
 
-**CPU Saturation**: Queue operations require CPU cycles for command parsing, Lua script execution, compaction in RocksDB, and network I/O handling. Benchmarks in production-like environments show that a KVRocks instance with eight vCPUs saturates at approximately four thousand enqueue operations per second under sustained load. While vertically scaling to sixteen or thirty-two vCPUs extends this ceiling, diminishing returns emerge as contention on shared data structures within KVRocks limits parallel execution efficiency.
+**CPU Saturation**: Queue operations require CPU cycles for command parsing, Lua script execution, compaction in RocksDB, and network I/O handling. Benchmarks in production-like environments show that a KVRocks instance with eight vCPUs saturates at approximately four thousand enqueue operations per second under sustained load (tested with five kilobyte payloads, fifty concurrent clients, as documented in the performance tuning guide section 4). While vertically scaling to sixteen or thirty-two vCPUs extends this ceiling, diminishing returns emerge as contention on shared data structures within KVRocks limits parallel execution efficiency.
 
 **Memory Pressure**: KVRocks maintains an in-memory block cache to accelerate reads and reduce disk I/O. The block cache size directly impacts query latency, with cache misses forcing expensive disk reads. As the working set grows with more commands, tenants, and in-flight tasks, the cache hit ratio degrades unless memory scales proportionally. Vertical scaling to sixty-four or one hundred twenty-eight gigabytes of memory is feasible but expensive, and eventually encounters physical limits of available instance types.
 
@@ -234,10 +234,10 @@ This architecture maintains the existing TaskRepository interface unchanged. The
 Queue key names must incorporate the shard identifier to support migration scenarios and operational visibility. The proposed format extends the existing pattern:
 
 ```
-codeq:q:{command}:{tenantID}:s:{shardID}:{queue-type}:{priority}
+codeq:q:<command>:<tenantID>:s:<shardID>:<queue-type>:<priority>
 ```
 
-The `:s:{shardID}` segment is inserted after the tenant identifier. For backward compatibility with single-shard deployments, the shard segment is omitted when the shard identifier is "default" or empty. This allows existing deployments to upgrade without data migration.
+The `:s:<shardID>` segment is inserted after the tenant identifier. For backward compatibility with single-shard deployments, the shard segment is omitted when the shard identifier is "default" or empty. This allows existing deployments to upgrade without data migration.
 
 ```
 # Legacy single-shard key (still supported)
@@ -247,11 +247,12 @@ codeq:q:GENERATE_MASTER:tenant-123:pending:5
 codeq:q:GENERATE_MASTER:tenant-123:s:workload-heavy:pending:5
 ```
 
-The placement of the shard segment after the tenant identifier is deliberate. Redis Cluster uses hash tags to determine which hash slot a key belongs to, extracting the substring between the first `{` and `}` characters. By placing the shard identifier early in the key, we ensure that all queues for a command-tenant-shard combination hash to the same slot, allowing atomic Lua operations even in Redis Cluster mode.
+The placement of the shard segment after the tenant identifier is deliberate. Redis Cluster uses hash tags to determine which hash slot a key belongs to, extracting the substring between the first opening brace and closing brace. By placing the shard identifier early in the key, we ensure that all queues for a command-tenant-shard combination hash to the same slot, allowing atomic Lua operations even in Redis Cluster mode.
 
-If Redis Cluster is used as the storage backend, the key format can be further adapted with explicit hash tags:
+If Redis Cluster is used as the storage backend, the key format can be further adapted with explicit hash tags (shown below with actual curly braces for Redis Cluster):
 
 ```
+# Note: Curly braces below are actual Redis Cluster hash tag delimiters
 codeq:q:{GENERATE_MASTER:tenant-123:s:workload-heavy}:pending:5
 ```
 
