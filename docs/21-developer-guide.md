@@ -255,7 +255,7 @@ func main() {
 - `codeq:q:<command>:pending:<priority>` (list)
 - `codeq:q:<command>:inprog` (set)
 - `codeq:q:<command>:delayed` (ZSET) score = `visibleAt` epoch seconds
-- `codeq:q:<command>:dlq` (list)
+- `codeq:q:<command>:dlq` (set)
 
 **Atomic claim operation:**
 
@@ -450,12 +450,13 @@ redis-cli -h localhost -p 6666
 # List all keys
 KEYS codeq:*
 
-# Inspect queues (example: GENERATE_MASTER)
-LLEN codeq:q:generate_master:pending:0
-SCARD codeq:q:generate_master:inprog
-SMEMBERS codeq:q:generate_master:inprog
-ZRANGE codeq:q:generate_master:delayed 0 -1 WITHSCORES
-LRANGE codeq:q:generate_master:dlq 0 -1
+	# Inspect queues (example: GENERATE_MASTER)
+	LLEN codeq:q:generate_master:pending:0
+	SCARD codeq:q:generate_master:inprog
+	SMEMBERS codeq:q:generate_master:inprog
+	ZRANGE codeq:q:generate_master:delayed 0 -1 WITHSCORES
+	SCARD codeq:q:generate_master:dlq
+	SSCAN codeq:q:generate_master:dlq 0 COUNT 100
 
 # Get task details
 HGET codeq:tasks 550e8400-e29b-41d4-a716-446655440000

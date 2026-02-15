@@ -67,6 +67,9 @@ func TestPriorityClaim(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected claim to succeed")
 	}
+	if got.LastKnownLocation != domain.LocationInProgress {
+		t.Fatalf("expected lastKnownLocation=%s, got %s", domain.LocationInProgress, got.LastKnownLocation)
+	}
 	if got.ID != high.ID {
 		t.Fatalf("expected high priority task, got %s (low=%s)", got.ID, low.ID)
 	}
@@ -141,6 +144,11 @@ func TestNackDelayedAndDLQ(t *testing.T) {
 	if delay != 0 {
 		t.Fatalf("expected delay 0, got %d", delay)
 	}
+	if storedAfterNack, err := repo.Get(ctx, task.ID); err != nil {
+		t.Fatalf("get after nack: %v", err)
+	} else if storedAfterNack.LastKnownLocation != domain.LocationDelayed {
+		t.Fatalf("expected lastKnownLocation=%s after nack, got %s", domain.LocationDelayed, storedAfterNack.LastKnownLocation)
+	}
 
 	if moved, err := repo.MoveDueDelayed(ctx, cmd, 10); err != nil || moved != 1 {
 		t.Fatalf("move due delayed: moved=%d err=%v", moved, err)
@@ -168,8 +176,11 @@ func TestNackDelayedAndDLQ(t *testing.T) {
 	if stored.Status != domain.StatusFailed {
 		t.Fatalf("expected failed status, got %s", stored.Status)
 	}
+	if stored.LastKnownLocation != domain.LocationDLQ {
+		t.Fatalf("expected lastKnownLocation=%s in dlq, got %s", domain.LocationDLQ, stored.LastKnownLocation)
+	}
 	dlqKey := "codeq:q:" + strings.ToLower(string(cmd)) + ":dlq"
-	if n, _ := rdb.LLen(ctx, dlqKey).Result(); n != 1 {
+	if n, _ := rdb.SCard(ctx, dlqKey).Result(); n != 1 {
 		t.Fatalf("expected 1 item in dlq, got %d", n)
 	}
 }
@@ -208,6 +219,9 @@ func TestEnqueueScheduledGoesToDelayed(t *testing.T) {
 	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", runAt, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
+	}
+	if task.LastKnownLocation != domain.LocationDelayed {
+		t.Fatalf("expected lastKnownLocation=%s, got %s", domain.LocationDelayed, task.LastKnownLocation)
 	}
 
 	// Should not be visible in pending yet.

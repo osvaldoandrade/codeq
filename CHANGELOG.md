@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ BREAKING CHANGES
+
+#### DLQ Data Structure Change
+
+The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) removal performance during admin cleanup.
+
+**What changed:**
+- `codeq:q:<command>:dlq` is now a SET (previously LIST)
+- DLQ enqueue uses `SADD` (previously `LPUSH`)
+- DLQ depth uses `SCARD` (previously `LLEN`)
+- DLQ cleanup uses `SREM` O(1) (previously `LREM` O(N))
+
+**Migration required:**
+- **Recommended**: Drain DLQ before upgrading
+- **Alternative**: Convert existing LIST → SET during freeze window (rename list to a temp key, then `SADD` members)
+
+### Performance Improvements
+
+- **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
+
 ## [1.1.0] - 2026-02-15
 
 ### ⚠️ BREAKING CHANGES

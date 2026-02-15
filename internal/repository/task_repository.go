@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	minPriority           = 0
-	maxPriority           = 9
-	taskRetention         = 24 * time.Hour
-	defaultInspectLimit   = 200 // Default number of tasks to inspect for lease expiration
+	minPriority         = 0
+	maxPriority         = 9
+	taskRetention       = 24 * time.Hour
+	defaultInspectLimit = 200 // Default number of tasks to inspect for lease expiration
 )
 
 type TaskRepository interface {
@@ -160,6 +160,7 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 	var cmdOpt *domain.Command
 	var prioOpt *int
 	var tenantIDOpt *string
+	var locOpt *domain.TaskLocation
 	if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
 		if t, err2 := unmarshalTask(js); err2 == nil {
 			cmd := t.Command
@@ -168,6 +169,8 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 			prioOpt = &prio
 			tid := t.TenantID
 			tenantIDOpt = &tid
+			loc := t.LastKnownLocation
+			locOpt = &loc
 		}
 	}
 
@@ -180,16 +183,18 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 		if tenantIDOpt != nil {
 			tenantID = *tenantIDOpt
 		}
-		if prioOpt != nil {
+		// Avoid O(N) list scans when we know the task is not in pending.
+		// lastKnownLocation is a hint (not authoritative), so we keep cheap removals in other structures.
+		shouldCheckPending := true
+		if locOpt != nil && *locOpt != "" && *locOpt != domain.LocationPending {
+			shouldCheckPending = false
+		}
+		if shouldCheckPending && prioOpt != nil {
 			pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, *prioOpt, tenantID), 0, id)
-		} else {
-			for p := maxPriority; p >= minPriority; p-- {
-				pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, p, tenantID), 0, id)
-			}
 		}
 		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt, tenantID), id)
 		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt, tenantID), id)
-		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), 0, id)
+		pipe.SRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), id)
 	} else {
 		// Try both with and without tenant to ensure cleanup when tenant is unknown
 		// This handles cases where we don't know which tenant the task belongs to
@@ -202,7 +207,7 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 			}
 			pipe.SRem(ctx, r.keyQueueInprog(c, ""), id)
 			pipe.ZRem(ctx, r.keyQueueDelayed(c, ""), id)
-			pipe.LRem(ctx, r.keyQueueDLQ(c, ""), 0, id)
+			pipe.SRem(ctx, r.keyQueueDLQ(c, ""), id)
 		}
 	}
 	_, err := pipe.Exec(ctx)
@@ -251,19 +256,25 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, error) {
 	now := r.now()
 	priority = normalizePriority(priority)
+	scheduled := !visibleAt.IsZero() && visibleAt.After(now)
+	loc := domain.LocationPending
+	if scheduled {
+		loc = domain.LocationDelayed
+	}
 
 	task := domain.Task{
-		ID:          id,
-		Command:     cmd,
-		Payload:     payload,
-		Priority:    priority,
-		Webhook:     webhook,
-		Attempts:    0,
-		MaxAttempts: maxAttempts,
-		Status:      domain.StatusPending,
-		TenantID:    tenantID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:                id,
+		Command:           cmd,
+		Payload:           payload,
+		Priority:          priority,
+		Webhook:           webhook,
+		Attempts:          0,
+		MaxAttempts:       maxAttempts,
+		Status:            domain.StatusPending,
+		LastKnownLocation: loc,
+		TenantID:          tenantID,
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	js := marshal(task)
 
@@ -278,7 +289,7 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 	}
 
 	// Enfileira na lista pending (imediato) ou no ZSET delayed (agendado).
-	if !visibleAt.IsZero() && visibleAt.After(now) {
+	if scheduled {
 		visibleAtUnix := visibleAt.UTC().Unix()
 		if err := r.rdb.ZAdd(ctx, r.keyQueueDelayed(cmd, tenantID), &redis.Z{Score: float64(visibleAtUnix), Member: id}).Err(); err != nil {
 			return nil, fmt.Errorf("redis ZADD delayed: %w", err)
@@ -421,6 +432,7 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
 			if t, err2 := unmarshalTask(js); err2 == nil {
 				t.Status = domain.StatusPending
+				t.LastKnownLocation = domain.LocationPending
 				t.WorkerID = ""
 				t.LeaseUntil = ""
 				t.UpdatedAt = r.now()
@@ -478,6 +490,7 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 		if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
 			if t, err2 := unmarshalTask(js); err2 == nil {
 				t.Status = domain.StatusPending
+				t.LastKnownLocation = domain.LocationPending
 				t.WorkerID = ""
 				t.LeaseUntil = ""
 				t.UpdatedAt = r.now()
@@ -552,6 +565,7 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 
 			// Atualiza JSON
 			t.Status = domain.StatusInProgress
+			t.LastKnownLocation = domain.LocationInProgress
 			t.WorkerID = workerID
 			t.LeaseUntil = leaseUntil
 			t.Attempts++
@@ -601,6 +615,7 @@ func (r *taskRedisRepo) Heartbeat(ctx context.Context, taskID string, workerID s
 	}
 	t.LeaseUntil = r.now().Add(time.Duration(extendSeconds) * time.Second).UTC().Format(time.RFC3339)
 	t.UpdatedAt = r.now()
+	t.LastKnownLocation = domain.LocationInProgress
 
 	if err := r.rdb.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
 		return fmt.Errorf("HSET task: %w", err)
@@ -639,6 +654,7 @@ func (r *taskRedisRepo) Abandon(ctx context.Context, taskID string, workerID str
 	_ = r.rdb.Del(ctx, r.keyLease(taskID)).Err()
 
 	t.Status = domain.StatusPending
+	t.LastKnownLocation = domain.LocationPending
 	t.WorkerID = ""
 	t.LeaseUntil = ""
 	t.UpdatedAt = r.now()
@@ -689,6 +705,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 			reason = "MAX_ATTEMPTS"
 		}
 		t.Status = domain.StatusFailed
+		t.LastKnownLocation = domain.LocationDLQ
 		t.WorkerID = ""
 		t.LeaseUntil = ""
 		t.Error = reason
@@ -697,7 +714,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 		pipe := r.rdb.TxPipeline()
 		pipe.SRem(ctx, inprog, taskID)
 		pipe.Del(ctx, r.keyLease(taskID))
-		pipe.LPush(ctx, dlq, taskID)
+		pipe.SAdd(ctx, dlq, taskID)
 		pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
 		pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
 		if _, err := pipe.Exec(ctx); err != nil {
@@ -717,6 +734,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 	visibleAt := r.now().Add(time.Duration(delaySeconds) * time.Second).UTC().Unix()
 
 	t.Status = domain.StatusPending
+	t.LastKnownLocation = domain.LocationDelayed
 	t.WorkerID = ""
 	t.LeaseUntil = ""
 	t.Error = ""
@@ -775,7 +793,7 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 		out[kd] = ld
 
 		kdlq := r.keyQueueDLQ(cmd, "")
-		ldlq, err := r.rdb.LLen(ctx, kdlq).Result()
+		ldlq, err := r.rdb.SCard(ctx, kdlq).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
@@ -801,7 +819,7 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	dlq, err := r.rdb.LLen(ctx, r.keyQueueDLQ(cmd, "")).Result()
+	dlq, err := r.rdb.SCard(ctx, r.keyQueueDLQ(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}

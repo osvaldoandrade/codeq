@@ -111,6 +111,7 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
 	t.Status = status
+	t.LastKnownLocation = domain.LocationNone
 	t.WorkerID = ""
 	t.LeaseUntil = ""
 	t.UpdatedAt = r.now()

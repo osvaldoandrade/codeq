@@ -24,6 +24,22 @@ The in-progress queue changed from Redis LIST to SET for O(1) removal performanc
 
 This change significantly improves claim-time repair performance by eliminating O(N) LREM operations.
 
+**DLQ data structure change**:
+
+The DLQ changed from Redis LIST to SET for O(1) removal performance during admin cleanup:
+- **Old**: `codeq:q:<command>:dlq` was a LIST (LPUSH, LLEN, LREM)
+- **New**: `codeq:q:<command>:dlq` is a SET (SADD, SCARD, SREM)
+
+**Migration impact**: Existing deployments with DLQ entries **must drain or convert** before upgrading:
+- **Recommended**: Drain DLQ before upgrade (Option A below)
+- **Alternative**: Manual conversion during freeze window:
+  ```bash
+  # Example: GENERATE_MASTER
+  redis-cli RENAME codeq:q:generate_master:dlq codeq:q:generate_master:dlq_list
+  redis-cli LRANGE codeq:q:generate_master:dlq_list 0 -1 | xargs redis-cli SADD codeq:q:generate_master:dlq
+  redis-cli DEL codeq:q:generate_master:dlq_list
+  ```
+
 ## Key mapping
 
 | Legacy key | New key | Notes |
