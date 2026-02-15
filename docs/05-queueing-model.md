@@ -31,6 +31,25 @@ Alternative: store ready tasks in a ZSET with score `(priority, sequence)` but t
 - The task record is updated to `IN_PROGRESS`, `workerId`, and `leaseUntil`.
 - Claims are tenant-scoped: workers can only claim tasks from their own tenant's queues.
 
+### Claim-time repair (expired lease detection)
+
+Before claiming a task, the system repairs expired leases using a sampling algorithm:
+
+1. **Sample in-progress tasks**: Use `SRANDMEMBER` to randomly sample up to `inspectLimit` task IDs from the in-progress SET
+2. **Check lease expiration**: Use pipelined `TTL` commands to efficiently check all sampled lease keys in a single round-trip
+3. **Requeue expired tasks**: For tasks with expired leases (TTL ≤ 0), call `Nack()` to requeue with backoff or move to DLQ if max attempts exceeded
+
+**Efficiency characteristics**:
+- Time complexity: O(inspectLimit) for sampling and TTL checks
+- Does not require scanning all in-progress tasks (which could be O(n) where n = total in-progress)
+- Sampling provides probabilistic coverage: higher `inspectLimit` increases detection rate
+- Default `inspectLimit = 200` balances repair coverage with claim latency
+
+**Claim loop optimization**:
+- The outer Go loop retries up to `inspectLimit` times to handle duplicate or invalid tasks
+- The inner Lua script (`claimMoveScript`) checks only **1 task per invocation** to avoid O(n²) complexity
+- This design keeps total work bounded at O(inspectLimit) rather than O(inspectLimit²)
+
 ## Ack and completion
 
 Acknowledgement is equivalent to result submission. On success the task is removed from in-progress, the lease is cleared, and status is set to `COMPLETED` or `FAILED`. This follows the Dyno Queues model where unacknowledged messages are requeued after a timeout.
