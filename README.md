@@ -171,6 +171,11 @@ Key references:
 - **Configuration**: `docs/14-configuration.md` - Config reference
 - **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
 - **Performance**: `docs/17-performance-tuning.md` - Optimization guide
+- **Testing**: `docs/19-testing.md` - Test coverage and strategy
+- **Authentication Plugins**: `docs/20-authentication-plugins.md` - Plugin system for custom auth
+- **Design Documents**:
+  - `docs/24-queue-sharding-hld.md` - Queue sharding high-level design
+  - `docs/25-plugin-architecture-hld.md` - Plugin architecture for persistence and auth
 - **Migration**: `docs/migration.md` - Upgrade guide
 - **Contributing**: `CONTRIBUTING.md` - Contribution guidelines
 
