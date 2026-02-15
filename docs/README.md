@@ -30,8 +30,9 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 12. `docs/12-webhooks.md` - Webhook notifications
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
 17. `docs/17-performance-tuning.md` - Performance optimization guide
-18. `docs/18-package-reference.md` - Package structure and codebase guide
+18. `docs/18-developer-guide.md` - Developer guide and best practices
 19. `docs/19-testing.md` - Test coverage and testing strategy
+20. `docs/20-package-reference.md` - Package structure and codebase guide
 
 ### Integration Guides (Framework-Oriented)
 
@@ -43,7 +44,9 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 ### Explanation (Understanding-Oriented)
 
 15. `docs/15-cli-reference.md` - Complete CLI command reference
+16. `docs/16-workflows.md` - GitHub Actions workflows and automation
 17. `docs/17-performance-tuning.md` - Performance optimization and scaling
-18. `docs/18-package-reference.md` - Package structure and codebase guide
+18. `docs/18-developer-guide.md` - Developer guide and best practices
 19. `docs/19-testing.md` - Test coverage and testing strategy
-20. `docs/migration.md` - Migration guide
+20. `docs/20-package-reference.md` - Package structure and codebase guide
+- `docs/migration.md` - Migration guide
