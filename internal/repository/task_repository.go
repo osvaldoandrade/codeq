@@ -391,7 +391,8 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 	if limit <= 0 {
 		limit = 200
 	}
-	maxTS := strconv.FormatInt(r.now().UTC().Unix(), 10)
+	now := r.now()
+	maxTS := strconv.FormatInt(now.UTC().Unix(), 10)
 	zrange := &redis.ZRangeBy{Min: "-inf", Max: maxTS, Offset: 0, Count: int64(limit)}
 
 	ids, err := r.rdb.ZRangeByScore(ctx, delayed, zrange).Result()
@@ -401,13 +402,18 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	pipe := r.rdb.TxPipeline()
-	moveIDs := make([]string, 0, len(ids))
-	priorities := make(map[string]int, len(ids))
+
+	type taskUpdate struct {
+		id string
+		js string
+	}
+
+	updates := make([]taskUpdate, 0, len(ids))
+	movePipe := r.rdb.TxPipeline()
 	for _, id := range ids {
 		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 		if err == redis.Nil || js == "" {
-			pipe.ZRem(ctx, delayed, id)
+			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		if err != nil {
@@ -415,34 +421,46 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		}
 		t, err := unmarshalTask(js)
 		if err != nil {
-			pipe.ZRem(ctx, delayed, id)
+			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		prio := normalizePriority(t.Priority)
-		priorities[id] = prio
-		moveIDs = append(moveIDs, id)
-		pipe.ZRem(ctx, delayed, id)
-		pipe.LPush(ctx, r.keyQueuePending(cmd, prio, t.TenantID), id)
+		movePipe.ZRem(ctx, delayed, id)
+		movePipe.LPush(ctx, r.keyQueuePending(cmd, prio, t.TenantID), id)
+
+		t.Status = domain.StatusPending
+		t.LastKnownLocation = domain.LocationPending
+		t.WorkerID = ""
+		t.LeaseUntil = ""
+		t.UpdatedAt = now
+		updates = append(updates, taskUpdate{id: id, js: marshal(t)})
 	}
-	if _, err := pipe.Exec(ctx); err != nil {
+	if _, err := movePipe.Exec(ctx); err != nil {
 		return 0, err
 	}
 
-	for _, id := range moveIDs {
-		if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
-			if t, err2 := unmarshalTask(js); err2 == nil {
-				t.Status = domain.StatusPending
-				t.LastKnownLocation = domain.LocationPending
-				t.WorkerID = ""
-				t.LeaseUntil = ""
-				t.UpdatedAt = r.now()
-				_ = r.rdb.HSet(ctx, r.keyTasksHash(), id, marshal(t)).Err()
-			}
-		}
-		r.bumpTTL(ctx, id)
+	// Best-effort task JSON + retention bumps.
+	// Use a guarded update to avoid "resurrecting" tasks that may have been
+	// deleted between movePipe.Exec and this update phase.
+	expireAt := now.Add(taskRetention)
+	expireAtUnix := expireAt.UTC().Unix()
+	lua := `
+if redis.call("HEXISTS", KEYS[1], ARGV[1]) == 1 then
+  redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
+  redis.call("ZADD", KEYS[2], ARGV[3], ARGV[1])
+  return 1
+end
+return 0
+`
+	for _, u := range updates {
+		// Ignore result and error to preserve best-effort semantics.
+		_, _ = r.rdb.Eval(ctx, lua, []string{
+			r.keyTasksHash(),
+			r.keyTTLIndex(),
+		}, u.id, u.js, expireAtUnix).Result()
 	}
 
-	return len(moveIDs), nil
+	return len(updates), nil
 }
 
 // moveDueDelayedForTenant moves due tasks from delayed queue to pending for a specific tenant
@@ -451,7 +469,8 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 	if limit <= 0 {
 		limit = 200
 	}
-	maxTS := strconv.FormatInt(r.now().UTC().Unix(), 10)
+	now := r.now()
+	maxTS := strconv.FormatInt(now.UTC().Unix(), 10)
 	zrange := &redis.ZRangeBy{Min: "-inf", Max: maxTS, Offset: 0, Count: int64(limit)}
 
 	ids, err := r.rdb.ZRangeByScore(ctx, delayed, zrange).Result()
@@ -461,12 +480,18 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	pipe := r.rdb.TxPipeline()
-	moveIDs := make([]string, 0, len(ids))
+
+	type taskUpdate struct {
+		id string
+		js string
+	}
+
+	updates := make([]taskUpdate, 0, len(ids))
+	movePipe := r.rdb.TxPipeline()
 	for _, id := range ids {
 		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 		if err == redis.Nil || js == "" {
-			pipe.ZRem(ctx, delayed, id)
+			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		if err != nil {
@@ -474,33 +499,34 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 		}
 		t, err := unmarshalTask(js)
 		if err != nil {
-			pipe.ZRem(ctx, delayed, id)
+			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		prio := normalizePriority(t.Priority)
-		moveIDs = append(moveIDs, id)
-		pipe.ZRem(ctx, delayed, id)
-		pipe.LPush(ctx, r.keyQueuePending(cmd, prio, tenantID), id)
+		movePipe.ZRem(ctx, delayed, id)
+		movePipe.LPush(ctx, r.keyQueuePending(cmd, prio, tenantID), id)
+
+		t.Status = domain.StatusPending
+		t.LastKnownLocation = domain.LocationPending
+		t.WorkerID = ""
+		t.LeaseUntil = ""
+		t.UpdatedAt = now
+		updates = append(updates, taskUpdate{id: id, js: marshal(t)})
 	}
-	if _, err := pipe.Exec(ctx); err != nil {
+	if _, err := movePipe.Exec(ctx); err != nil {
 		return 0, err
 	}
 
-	for _, id := range moveIDs {
-		if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
-			if t, err2 := unmarshalTask(js); err2 == nil {
-				t.Status = domain.StatusPending
-				t.LastKnownLocation = domain.LocationPending
-				t.WorkerID = ""
-				t.LeaseUntil = ""
-				t.UpdatedAt = r.now()
-				_ = r.rdb.HSet(ctx, r.keyTasksHash(), id, marshal(t)).Err()
-			}
-		}
-		r.bumpTTL(ctx, id)
+	// Best-effort task JSON + retention bumps (avoid per-task round-trips).
+	updatePipe := r.rdb.Pipeline()
+	expireAt := now.Add(taskRetention)
+	for _, u := range updates {
+		updatePipe.HSet(ctx, r.keyTasksHash(), u.id, u.js)
+		updatePipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(expireAt.UTC().Unix()), Member: u.id})
 	}
+	_, _ = updatePipe.Exec(ctx)
 
-	return len(moveIDs), nil
+	return len(updates), nil
 }
 
 func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {

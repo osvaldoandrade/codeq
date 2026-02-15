@@ -11,7 +11,7 @@ Each command and tenant combination is represented by a set of queues:
 - Pending queue: list of IDs available for claim.
 - In-progress queue: set of IDs currently leased (implemented as Redis SET for O(1) operations).
 - Delayed queue: ZSET of IDs with `visibleAt` as score.
-- Dead-letter queue: set of IDs for tasks that exceeded `maxAttempts` (implemented as Redis SET for O(1) operations).
+- Dead-letter queue: SET of IDs for tasks that exceeded `maxAttempts` (implemented as Redis SET for O(1) operations).
 
 ## Time-based scheduling
 
