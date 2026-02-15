@@ -31,16 +31,16 @@ sequenceDiagram
   Q->>K: Persist Task + enqueue in pending
   Q-->>P: 202 Accepted (taskId)
 
-	  W->>Q: POST /tasks/claim (commands)
-	  Q->>Q: Claim-time repair
-	  Q->>K: EVAL claim move (RPOP pending + SADD inprog)
-	  Q->>K: SETEX lease:<id>
-	  Q-->>W: 200 OK (Task)
+  W->>Q: POST /tasks/claim (commands)
+  Q->>Q: Claim-time repair
+  Q->>K: EVAL claim move (RPOP pending + SADD inprog)
+  Q->>K: SETEX lease:<id>
+  Q-->>W: 200 OK (Task)
 
-	  W->>Q: POST /tasks/:id/result (COMPLETED)
-	  Q->>K: Persist Result + clear lease + SREM inprog
-	  alt task has webhook
-	    Q->>H: POST signed callback
-	  end
-	  Q-->>W: 200 OK (Result)
+  W->>Q: POST /tasks/:id/result (COMPLETED)
+  Q->>K: Persist Result + clear lease + SREM inprog
+  alt task has webhook
+    Q->>H: POST signed callback
+  end
+  Q-->>W: 200 OK (Result)
 ```
