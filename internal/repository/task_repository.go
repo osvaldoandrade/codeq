@@ -247,6 +247,9 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 			}
 			return task, nil
 		}
+		// SETNX failed, so the idempotency key already exists in Redis; record it in the Bloom filter
+		// to avoid repeatedly taking the fast path on subsequent requests.
+		r.idempoBloom.Add(idempotencyKey)
 		// Fall through to the conflict resolution logic below.
 	}
 
