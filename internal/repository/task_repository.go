@@ -47,6 +47,7 @@ type taskRedisRepo struct {
 	backoffBaseSeconds int
 	backoffMaxSeconds  int
 	rng                *rand.Rand
+	idempoBloom        *idempotencyBloom
 }
 
 func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy string, backoffBaseSeconds int, backoffMaxSeconds int) TaskRepository {
@@ -66,6 +67,9 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		backoffBaseSeconds: backoffBaseSeconds,
 		backoffMaxSeconds:  backoffMaxSeconds,
 		rng:                rand.New(rand.NewSource(time.Now().UnixNano())),
+		// Best-effort local filter to avoid negative idempotency GETs.
+		// Defaults target a small memory footprint (~a few MB) and a short rolling window.
+		idempoBloom: newIdempotencyBloom(1_000_000, 0.01, 30*time.Minute),
 	}
 }
 
@@ -226,8 +230,34 @@ func (r *taskRedisRepo) Enqueue(ctx context.Context, cmd domain.Command, payload
 
 func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
 	idKey := r.keyIdempotency(idempotencyKey)
+
+	// Fast path: if the key is definitely not present per local Bloom filter, skip the Redis GET.
+	if r.idempoBloom != nil && !r.idempoBloom.MaybeHas(idempotencyKey) {
+		id := uuid.NewString()
+		ok, err := r.rdb.SetNX(ctx, idKey, id, taskRetention).Result()
+		if err != nil {
+			return nil, fmt.Errorf("redis SETNX idempotency: %w", err)
+		}
+		if ok {
+			r.idempoBloom.Add(idempotencyKey)
+			task, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+			if err != nil {
+				_ = r.rdb.Del(ctx, idKey).Err()
+				return nil, err
+			}
+			return task, nil
+		}
+		// SETNX failed, so the idempotency key already exists in Redis; record it in the Bloom filter
+		// to avoid repeatedly taking the fast path on subsequent requests.
+		r.idempoBloom.Add(idempotencyKey)
+		// Fall through to the conflict resolution logic below.
+	}
+
 	if existingID, err := r.rdb.Get(ctx, idKey).Result(); err == nil && existingID != "" {
 		if task, err := r.Get(ctx, existingID); err == nil {
+			if r.idempoBloom != nil {
+				r.idempoBloom.Add(idempotencyKey)
+			}
 			return task, nil
 		}
 		_ = r.rdb.Del(ctx, idKey).Err()
@@ -240,6 +270,9 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 	if !ok {
 		if existingID, err := r.rdb.Get(ctx, idKey).Result(); err == nil && existingID != "" {
 			if task, err := r.Get(ctx, existingID); err == nil {
+				if r.idempoBloom != nil {
+					r.idempoBloom.Add(idempotencyKey)
+				}
 				return task, nil
 			}
 		}
@@ -249,6 +282,9 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 	if err != nil {
 		_ = r.rdb.Del(ctx, idKey).Err()
 		return nil, err
+	}
+	if r.idempoBloom != nil {
+		r.idempoBloom.Add(idempotencyKey)
 	}
 	return task, nil
 }
