@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # CodeQ Server
+  codeq:
+    image: codeq/server:latest
+    container_name: codeq-server
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=kvrocks:6666
+      - REDIS_PASSWORD=
+      - IDENTITY_SERVICE_URL=https://api.storifly.ai
+      - WORKER_JWKS_URL=https://your-jwks-url
+      - WORKER_ISSUER=https://your-issuer
+      - WEBHOOK_HMAC_SECRET=your-secret-here
+      - LOG_LEVEL=info
+    depends_on:
+      - kvrocks
+    networks:
+      - codeq-network
+    restart: unless-stopped
+
+  # KVRocks (Redis-compatible)
+  kvrocks:
+    image: apache/kvrocks:latest
+    container_name: kvrocks
+    ports:
+      - "6666:6666"
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks
+    networks:
+      - codeq-network
+    restart: unless-stopped
+
+  # Spring Boot Producer/Worker
+  springboot-app:
+    build:
+      context: ../examples/java/springboot
+      dockerfile: Dockerfile
+    container_name: springboot-codeq
+    ports:
+      - "8081:8080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=docker
+      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN}
+      - CODEQ_WORKER_TOKEN=${CODEQ_WORKER_TOKEN}
+    depends_on:
+      - codeq
+    networks:
+      - codeq-network
+    restart: unless-stopped
+
+  # NestJS Producer/Worker
+  nestjs-app:
+    build:
+      context: ../examples/nodejs/nestjs
+      dockerfile: Dockerfile
+    container_name: nestjs-codeq
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN}
+      - CODEQ_WORKER_TOKEN=${CODEQ_WORKER_TOKEN}
+    depends_on:
+      - codeq
+    networks:
+      - codeq-network
+    restart: unless-stopped
+
+  # Express Producer/Worker
+  express-app:
+    build:
+      context: ../examples/nodejs/express
+      dockerfile: Dockerfile
+    container_name: express-codeq
+    ports:
+      - "3001:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN}
+      - CODEQ_WORKER_TOKEN=${CODEQ_WORKER_TOKEN}
+    depends_on:
+      - codeq
+    networks:
+      - codeq-network
+    restart: unless-stopped
+
+  # Nginx reverse proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: nginx-proxy
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - codeq
+      - springboot-app
+      - nestjs-app
+      - express-app
+    networks:
+      - codeq-network
+    restart: unless-stopped
+
+volumes:
+  kvrocks-data:
+    driver: local
+
+networks:
+  codeq-network:
+    driver: bridge
