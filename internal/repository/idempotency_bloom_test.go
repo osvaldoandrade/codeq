@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+const (
+	// rotationBuffer is the extra time we wait after rotation interval to ensure rotation has occurred
+	rotationBuffer = 10 * time.Millisecond
+)
+
 // TestBloomFilter_BasicAddAndMaybeHas tests the basic operations of the underlying bloomFilter.
 func TestBloomFilter_BasicAddAndMaybeHas(t *testing.T) {
 	bf := newBloomFilter(1000, 0.01)
@@ -151,7 +156,7 @@ func TestIdempotencyBloom_Rotation(t *testing.T) {
 	}
 
 	// Wait for rotation
-	time.Sleep(rotateInterval + 10*time.Millisecond)
+	time.Sleep(rotateInterval + rotationBuffer)
 
 	// After rotation, key1 should still be in prev filter
 	if !bloom.MaybeHas("key1") {
@@ -170,7 +175,7 @@ func TestIdempotencyBloom_Rotation(t *testing.T) {
 	}
 
 	// Wait for another rotation
-	time.Sleep(rotateInterval + 10*time.Millisecond)
+	time.Sleep(rotateInterval + rotationBuffer)
 
 	// key1 should now be gone (it was in prev, which is now dropped)
 	if bloom.MaybeHas("key1") {
@@ -209,7 +214,7 @@ func TestIdempotencyBloom_DoubleRotation(t *testing.T) {
 	}
 
 	// Wait for first rotation (key moves from current to prev)
-	time.Sleep(rotateInterval + 10*time.Millisecond)
+	time.Sleep(rotateInterval + rotationBuffer)
 
 	// Key should still be present in prev
 	if !bloom.MaybeHas(uniqueKey) {
@@ -217,7 +222,7 @@ func TestIdempotencyBloom_DoubleRotation(t *testing.T) {
 	}
 
 	// Wait for second rotation (prev is dropped, key should be gone)
-	time.Sleep(rotateInterval + 10*time.Millisecond)
+	time.Sleep(rotateInterval + rotationBuffer)
 
 	// Key should likely be gone now (unless false positive)
 	// We test this by adding many other keys and checking if our original key
@@ -377,7 +382,7 @@ func TestIdempotencyBloom_PrevFilterLookup(t *testing.T) {
 	bloom.Add("old-key-2")
 
 	// Wait for rotation
-	time.Sleep(rotateInterval + 10*time.Millisecond)
+	time.Sleep(rotateInterval + rotationBuffer)
 
 	// Add new keys after rotation
 	bloom.Add("new-key-1")
