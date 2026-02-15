@@ -33,6 +33,7 @@
 - **`internal/middleware`**: Authentication and request processing
   - `auth.go`: Producer token validation (JWKS-based via plugin system)
   - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
+  - `rate_limit.go`: Token bucket rate limiting per bearer token
   - `tenant.go`: Tenant ID extraction from JWT claims
   - `worker_scope.go`: Event type authorization filter
   - `require_admin.go`: Admin endpoint protection
@@ -48,6 +49,7 @@
   - `subscription_cleanup_service.go`: Expired subscription removal
 - **`internal/repository`**: Data access layer (Redis operations)
   - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
+  - `idempotency_bloom.go`: In-process Bloom filter for idempotency fast-path optimization
   - `result_repository.go`: Result storage and retrieval
   - `subscription_repository.go`: Subscription storage
 - **`internal/providers`**: External integrations
@@ -55,6 +57,8 @@
   - `uploader.go`: Artifact storage (local filesystem)
 - **`internal/backoff`**: Retry logic
   - `backoff.go`: Backoff policies (fixed, linear, exponential, jitter)
+- **`internal/ratelimit`**: Rate limiting
+  - `token_bucket.go`: Redis-backed token bucket rate limiter
 - **`internal/metrics`**: Observability and monitoring
   - `metrics.go`: Prometheus metric definitions (counters, histograms, gauges)
   - `redis_collector.go`: Custom Prometheus collector for Redis-backed queue metrics
@@ -63,6 +67,7 @@
 
 - HTTP API: Gin-based router with JSON binding.
 - Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
+- Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
 - Result processor: validates completion payloads and stores results.
 - Storage: KVRocks via Redis API.
@@ -75,8 +80,12 @@
 
 1. Producer submits `command`, `payload`, `priority`, and optional `webhook`.
 2. Service validates fields and normalizes the payload to a JSON string.
-3. Service writes the task record and inserts the task ID into the pending list.
-4. Service updates the retention index.
+3. If `idempotencyKey` is provided:
+   - **Bloom filter fast-path**: Check in-process probabilistic filter; if key is definitely absent, skip Redis GET
+   - **Redis-based deduplication**: Use SETNX on idempotency key mapping to ensure uniqueness
+   - Return existing task if conflict detected
+4. Service writes the task record and inserts the task ID into the pending list.
+5. Service updates the retention index.
 
 ## Claim flow (pull)
 

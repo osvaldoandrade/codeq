@@ -52,3 +52,73 @@
 ## Artifact storage
 
 - `localArtifactsDir` (string): default `/tmp/codeq-artifacts`
+
+## Rate limiting
+
+Rate limiting is optional and disabled by default. When enabled, CodeQ uses a Redis-backed token bucket algorithm to enforce per-token rate limits.
+
+Rate limit configuration is per scope (producer, worker, webhook, admin). Each scope has two parameters:
+
+- `requestsPerMinute` (int): Maximum sustained request rate per minute, default 0 (disabled)
+- `burstSize` (int): Maximum burst capacity (tokens in bucket), default 0 (disabled)
+
+Both values must be greater than zero to enable rate limiting for a scope.
+
+### YAML configuration
+
+````yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 1000  # 1000 requests/min sustained
+    burstSize: 100           # Allow bursts up to 100 requests
+  worker:
+    requestsPerMinute: 600
+    burstSize: 50
+  webhook:
+    requestsPerMinute: 600
+    burstSize: 100
+  admin:
+    requestsPerMinute: 30
+    burstSize: 5
+````
+
+### Behavior
+
+- **Token bucket algorithm**: Tokens refill at `requestsPerMinute / 60` per second, up to `burstSize` capacity
+- **Per-bearer-token**: Rate limits are scoped per individual bearer token (SHA256-hashed for privacy)
+- **Fail-open**: If Redis is unreachable, rate limiting is bypassed to prevent outages
+- **429 responses**: When rate limit is exceeded, API returns `429 Too Many Requests` with `Retry-After` header (in seconds)
+- **TTL management**: Token bucket state expires automatically after ~2 refill cycles to bound memory usage
+
+### Metrics
+
+Rate limit rejections are tracked by the `codeq_rate_limit_hits_total` counter with labels:
+- `scope`: `producer`, `worker`, `webhook`, or `admin`
+- `operation`: `create_task`, `claim`, `queue_ready`, `task_result`, or `cleanup`
+
+### Example: setting producer limits
+
+For a producer creating up to 1000 tasks/minute with occasional bursts:
+
+````yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 1000
+    burstSize: 100
+````
+
+This allows:
+- Sustained rate of ~16.7 requests/second
+- Bursts up to 100 requests before throttling
+- Tokens refill at ~16.7/second
+
+### Disabling rate limiting
+
+Omit the `rateLimit` section or set both values to 0:
+
+````yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 0
+    burstSize: 0
+````

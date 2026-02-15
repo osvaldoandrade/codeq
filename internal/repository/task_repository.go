@@ -48,6 +48,7 @@ type taskRedisRepo struct {
 	backoffMaxSeconds  int
 	rng                *rand.Rand
 	idempoBloom        *idempotencyBloom
+	ghostBloom         *idempotencyBloom
 }
 
 func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy string, backoffBaseSeconds int, backoffMaxSeconds int) TaskRepository {
@@ -70,6 +71,9 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		// Best-effort local filter to avoid negative idempotency GETs.
 		// Defaults target a small memory footprint (~a few MB) and a short rolling window.
 		idempoBloom: newIdempotencyBloom(1_000_000, 0.01, 30*time.Minute),
+		// Best-effort local filter to short-circuit "ghost" task IDs already known to be deleted.
+		// This reduces Claim-path Redis HGET pressure when admin cleanup leaves stale IDs in queues.
+		ghostBloom: newIdempotencyBloom(2_000_000, 1e-12, 6*time.Hour),
 	}
 }
 
@@ -215,6 +219,9 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 		}
 	}
 	_, err := pipe.Exec(ctx)
+	if err == nil && r.ghostBloom != nil {
+		r.ghostBloom.Add(id)
+	}
 	return err
 }
 
@@ -600,11 +607,24 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 				return nil, false, nil // fila vazia / no unique id found
 			}
 
+			// If admin cleanup already deleted this task, skip the Redis HGET and just clean up
+			// any queue references. False positives are bounded by the Bloom filter FP rate.
+			if r.ghostBloom != nil && r.ghostBloom.MaybeHas(id) {
+				pipe := r.rdb.Pipeline()
+				pipe.SRem(ctx, dst, id)
+				pipe.LRem(ctx, src, 0, id) // remove any remaining duplicates in this pending list
+				_, _ = pipe.Exec(ctx)
+				continue
+			}
+
 			// Carrega JSON; pode ter sido limpo por admin endpoint
 			js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 			if err == redis.Nil || js == "" {
 				// remove da inprog e tenta novamente
 				_ = r.rdb.SRem(ctx, dst, id).Err()
+				if r.ghostBloom != nil {
+					r.ghostBloom.Add(id)
+				}
 				continue
 			}
 			if err != nil {

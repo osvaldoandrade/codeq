@@ -18,7 +18,11 @@ All API operations are automatically scoped to the authenticated user's tenant. 
 
 Auth: producer token.
 
-May return `429 Too Many Requests` with a `Retry-After` header when producer rate limiting is enabled.
+**Rate limiting:** When producer rate limiting is enabled, may return `429 Too Many Requests` with:
+- Header: `Retry-After: <seconds>` (time to wait before retry)
+- Body: `{"error":"rate limit exceeded","scope":"producer","operation":"create_task","retryAfterSeconds":<N>}`
+
+See [Rate Limiting](10-operations.md#rate-limiting) for configuration details.
 
 Request body:
 
@@ -68,7 +72,11 @@ The `tenantId` field is automatically populated from JWT claims and cannot be sp
 
 Auth: worker token with `codeq:claim`.
 
-May return `429 Too Many Requests` with a `Retry-After` header when worker claim rate limiting is enabled.
+**Rate limiting:** When worker claim rate limiting is enabled, may return `429 Too Many Requests` with:
+- Header: `Retry-After: <seconds>` (time to wait before retry)
+- Body: `{"error":"rate limit exceeded","scope":"worker","operation":"claim","retryAfterSeconds":<N>}`
+
+See [Rate Limiting](10-operations.md#rate-limiting) for configuration details.
 
 Request body:
 
@@ -240,7 +248,11 @@ Response `200`:
 
 Auth: admin token.
 
-May return `429 Too Many Requests` with a `Retry-After` header when admin cleanup rate limiting is enabled.
+**Rate limiting:** When admin cleanup rate limiting is enabled, may return `429 Too Many Requests` with:
+- Header: `Retry-After: <seconds>` (time to wait before retry)
+- Body: `{"error":"rate limit exceeded","scope":"admin","operation":"cleanup","retryAfterSeconds":<N>}`
+
+See [Rate Limiting](10-operations.md#rate-limiting) for configuration details.
 
 ## Health
 

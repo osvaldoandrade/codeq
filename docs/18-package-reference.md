@@ -164,7 +164,7 @@ func CreateTaskController(svc *services.SchedulerService) gin.HandlerFunc {
 
 ### `internal/middleware`
 
-**Purpose**: Request preprocessing (auth, logging, correlation IDs)
+**Purpose**: Request preprocessing (auth, logging, correlation IDs, rate limiting)
 
 **Key files**:
 - **Authentication**:
@@ -173,6 +173,13 @@ func CreateTaskController(svc *services.SchedulerService) gin.HandlerFunc {
   - `any_auth.go`: Accept either producer or worker token
   - `require_admin.go`: Admin scope validation
   - `worker_scope.go`: Filter event types by token claims
+  - `tenant.go`: Tenant ID extraction from JWT claims
+
+- **Rate limiting**:
+  - `rate_limit.go`: Token bucket rate limiting per bearer token
+    - `RateLimitProducer()`: Rate limit task creation endpoint
+    - `RateLimitWorkerClaim()`: Rate limit worker claim endpoint
+    - `RateLimitAdminCleanup()`: Rate limit admin cleanup endpoint
 
 - **Request processing**:
   - `logger.go`: Request/response logging
@@ -185,16 +192,25 @@ func CreateTaskController(svc *services.SchedulerService) gin.HandlerFunc {
 4. Extracts identity and scopes (e.g., `codeq:claim`, `eventTypes`)
 5. Stores identity in Gin context for controllers
 
+**Rate limiting flow**:
+1. Extract bearer token from `Authorization` header
+2. Check Redis token bucket for available tokens (SHA256-hashed key)
+3. If allowed: consume token, proceed to handler
+4. If denied: return `429 Too Many Requests` with `Retry-After` header
+
 **Example**:
 ````go
 router.POST("/tasks/claim",
     middleware.WorkerAuth(config),
+    middleware.RateLimitWorkerClaim(limiter, config),
     middleware.WorkerScope("codeq:claim"),
     controllers.ClaimTaskController(svc),
 )
 ````
 
-**See**: `docs/09-security.md` for authentication details
+**See**: 
+- `docs/09-security.md` for authentication details
+- `docs/10-operations.md#rate-limiting` for rate limiting configuration
 
 ---
 
@@ -247,7 +263,7 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 
 **Key files**:
 - `task_repository.go`: Task CRUD and queue operations
-  - `Enqueue()`: Add task to pending queue (LPUSH with priority)
+  - `Enqueue()`: Add task to pending queue (LPUSH with priority). Uses in-process Bloom filter to optimize idempotent enqueues by skipping Redis GET on fast path for fresh keys.
   - `Get()`: Fetch task by ID (HGET)
   - `Claim()`: Atomic claim move from pending to in-progress SET (Lua `RPOP` + `SADD`), includes inline repair loop that samples in-progress via `SRANDMEMBER` + pipelined `TTL` checks
   - `MoveDueDelayed()`: Batched delayed→pending migration. Reads each task JSON once (HGET), updates status in-memory, moves to pending (ZREM + LPUSH), then batch-writes all task updates in single pipeline (HSET + ZADD for TTL). Reduces O(3M) round-trips to O(M) for M due tasks. Uses guarded Lua update to prevent resurrecting deleted tasks.
@@ -257,14 +273,9 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
   - `QueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
   - `CleanupExpired()`: Admin cleanup of expired tasks (ZRANGEBYSCORE on TTL index)
 
-- `idempotency_bloom.go`: In-process Bloom filter for idempotency optimization
-  - `idempotencyBloom`: Rotating double-buffer Bloom filter with configurable capacity, false-positive rate, and rotation interval
-  - `MaybeHas(key)`: Lock-free check if key might exist (false positives possible, false negatives impossible)
-  - `Add(key)`: Thread-safe insertion using atomic CAS operations
-  - `rotateIfNeeded()`: Automatic rotation to prevent unbounded growth
-  - **Thread-safety**: Uses `atomic.Value` for lock-free reads, mutex-protected rotation
-  - **Memory**: ~1-2 MB for 1M keys at 1% FP rate (two filters active)
-  - **Use case**: Accelerates idempotency enqueue by skipping negative Redis GETs
+- `idempotency_bloom.go`: Rotating Bloom filter for idempotency enqueue optimization
+  - Best-effort probabilistic filter (1M capacity, 1% false positive rate, 30min rotation)
+  - Eliminates negative Redis lookups for fresh idempotency keys (20-30% enqueue latency reduction)
 
 - `result_repository.go`: Result storage
   - `SaveResult()`: Store task result (HSET)
@@ -337,6 +348,63 @@ delay := backoff.ComputeBackoff("exp_full_jitter", 5, 900, 3)
 
 ---
 
+### `internal/ratelimit`
+
+**Purpose**: Redis-backed token bucket rate limiting
+
+**Key files**:
+- `token_bucket.go`: Token bucket algorithm implementation with Lua scripts
+
+**Implementation**:
+- **Token bucket algorithm**: Tokens refill continuously at configured rate, up to burst capacity
+- **Redis Lua script**: Atomic check-and-decrement operation for race-free token consumption
+- **Per-bearer-token**: Rate limits enforced per individual bearer token (SHA256-hashed for privacy)
+- **Fail-open**: Returns allowed=true if Redis is unavailable to prevent outages
+- **Auto-expiring state**: Token buckets expire after ~2 refill cycles to bound memory usage
+
+**Interface**:
+````go
+type Limiter interface {
+    Allow(ctx context.Context, scope string, subject string, bucket Bucket) (Decision, error)
+}
+
+type Bucket struct {
+    RequestsPerMinute int
+    BurstSize         int
+}
+
+type Decision struct {
+    Allowed    bool
+    RetryAfter time.Duration // Only set when Allowed=false
+}
+````
+
+**Example**:
+````go
+limiter := ratelimit.NewTokenBucketLimiter(redisClient)
+bucket := ratelimit.Bucket{
+    RequestsPerMinute: 600,  // 10 req/sec sustained
+    BurstSize:         50,   // Allow bursts up to 50 requests
+}
+
+decision, err := limiter.Allow(ctx, "producer", bearerToken, bucket)
+if err != nil {
+    // Fail open: allow request on Redis errors
+    log.Warn("rate limit check failed", "err", err)
+} else if !decision.Allowed {
+    // Return 429 with Retry-After header
+    return http.StatusTooManyRequests, decision.RetryAfter
+}
+````
+
+**Redis key format**: `codeq:rl:<scope>:<sha256(subject)>`
+
+**See**: 
+- `docs/10-operations.md#rate-limiting` for configuration
+- `docs/17-performance-tuning.md` for capacity planning
+
+---
+
 ### `internal/metrics`
 
 **Purpose**: Observability and Prometheus instrumentation
@@ -353,6 +421,7 @@ delay := backoff.ComputeBackoff("exp_full_jitter", 5, 900, 3)
   - `codeq_task_completed_total`: Tasks completed, labeled by `command` and `status` (COMPLETED/FAILED)
   - `codeq_lease_expired_total`: Lease expirations detected, labeled by `command`
   - `codeq_webhook_deliveries_total`: Webhook deliveries, labeled by `kind`, `command`, `outcome`
+  - `codeq_rate_limit_hits_total`: Rate limit rejections, labeled by `scope` (producer/worker/webhook/admin) and `operation`
 
 - **Histograms** (latency distribution):
   - `codeq_task_processing_latency_seconds`: End-to-end task processing time (creation to completion), labeled by `command` and `status`
