@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/metrics"
+	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
@@ -27,13 +28,16 @@ type notifierService struct {
 	logger    *slog.Logger
 	secret    string
 	minNotify int
+
+	limiter ratelimit.Limiter
+	bucket  ratelimit.Bucket
 }
 
-func NewNotifierService(repo repository.SubscriptionRepository, logger *slog.Logger, secret string, minNotify int) NotifierService {
+func NewNotifierService(repo repository.SubscriptionRepository, logger *slog.Logger, secret string, minNotify int, limiter ratelimit.Limiter, bucket ratelimit.Bucket) NotifierService {
 	if minNotify <= 0 {
 		minNotify = 5
 	}
-	return &notifierService{repo: repo, logger: logger, secret: secret, minNotify: minNotify}
+	return &notifierService{repo: repo, logger: logger, secret: secret, minNotify: minNotify, limiter: limiter, bucket: bucket}
 }
 
 func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Command) {
@@ -89,6 +93,14 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 }
 
 func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription, cmd domain.Command) {
+	if n.limiter != nil && n.bucket.Enabled() {
+		dec, err := n.limiter.Allow(ctx, "webhook", sub.CallbackURL, n.bucket)
+		if err == nil && !dec.Allowed {
+			metrics.RateLimitHitsTotal.WithLabelValues("webhook", "queue_ready").Inc()
+			return
+		}
+	}
+
 	payload := map[string]any{
 		"eventType":      string(cmd),
 		"available":      true,

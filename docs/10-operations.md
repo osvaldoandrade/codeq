@@ -25,6 +25,7 @@ Notes:
 | `codeq_task_processing_latency_seconds` | histogram | `command`, `status` | End-to-end latency from task creation to completion. |
 | `codeq_lease_expired_total` | counter | `command` | Lease expirations detected during claim-time repair. |
 | `codeq_webhook_deliveries_total` | counter | `kind`, `command`, `outcome` | Webhook deliveries. `kind` is `queue_ready` (worker notification) or `task_result` (task completion callback). `outcome` is `success` or `failure`. |
+| `codeq_rate_limit_hits_total` | counter | `scope`, `operation` | Rate limit rejections. `scope` is `producer`, `worker`, `webhook`, or `admin`. |
 | `codeq_subscriptions_active` | gauge | `command` | Active subscriptions by event type (command). |
 
 ### Example PromQL
@@ -34,6 +35,7 @@ Notes:
 - Task creation rate: `sum by (command) (rate(codeq_task_created_total[5m]))`
 - Task completion rate by status: `sum by (command, status) (rate(codeq_task_completed_total[5m]))`
 - p95 end-to-end latency (completed): `histogram_quantile(0.95, sum by (le, command) (rate(codeq_task_processing_latency_seconds_bucket{status="COMPLETED"}[5m])))`
+- Rate limit hits: `sum by (scope, operation) (rate(codeq_rate_limit_hits_total[5m]))`
 
 ### Grafana dashboard
 
@@ -48,6 +50,28 @@ Delayed queue moves and lease expiry requeue are performed during claim operatio
 ## Cleanup
 
 Admin cleanup removes all structures for tasks whose retention timestamp is <= cutoff. Use `limit` to bound latency.
+
+## Rate limiting
+
+Rate limiting is optional and disabled by default. When enabled, API endpoints return `429 Too Many Requests` with a `Retry-After` header.
+
+Example configuration:
+
+```yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 1000
+    burstSize: 100
+  worker:
+    requestsPerMinute: 600
+    burstSize: 50
+  webhook:
+    requestsPerMinute: 600
+    burstSize: 100
+  admin:
+    requestsPerMinute: 30
+    burstSize: 5
+```
 
 ## Scaling
 

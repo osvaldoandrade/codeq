@@ -18,6 +18,8 @@ All API operations are automatically scoped to the authenticated user's tenant. 
 
 Auth: producer token.
 
+May return `429 Too Many Requests` with a `Retry-After` header when producer rate limiting is enabled.
+
 Request body:
 
 - `command` (string, required): queue command, e.g. `GENERATE_MASTER`
@@ -65,6 +67,8 @@ The `tenantId` field is automatically populated from JWT claims and cannot be sp
 `POST /v1/codeq/tasks/claim`
 
 Auth: worker token with `codeq:claim`.
+
+May return `429 Too Many Requests` with a `Retry-After` header when worker claim rate limiting is enabled.
 
 Request body:
 
@@ -235,6 +239,8 @@ Response `200`:
 `POST /v1/codeq/admin/tasks/cleanup`
 
 Auth: admin token.
+
+May return `429 Too Many Requests` with a `Retry-After` header when admin cleanup rate limiting is enabled.
 
 ## Health
 

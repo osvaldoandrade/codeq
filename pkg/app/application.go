@@ -9,6 +9,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
+	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
@@ -27,6 +28,7 @@ type Application struct {
 	TZ                *time.Location
 	ProducerValidator auth.Validator
 	WorkerValidator   auth.Validator
+	RateLimiter       ratelimit.Limiter
 }
 
 // ApplicationOption configures the Application
@@ -50,6 +52,7 @@ func WithWorkerValidator(validator auth.Validator) ApplicationOption {
 
 func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application, error) {
 	redisClient := providers.NewRedisProvider(cfg.RedisAddr, cfg.RedisPassword)
+	limiter := ratelimit.NewTokenBucketLimiter(redisClient)
 
 	loc, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
@@ -79,7 +82,7 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
 	subRepo := repository.NewSubscriptionRepository(redisClient, loc)
 	subs := services.NewSubscriptionService(subRepo)
-	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds)
+	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook))
 	cleanup := services.NewSubscriptionCleanupService(subRepo, logger, cfg.SubscriptionCleanupIntervalSeconds)
 	scheduler := services.NewSchedulerService(
 		repo,
@@ -101,6 +104,8 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		cfg.ResultWebhookMaxAttempts,
 		cfg.ResultWebhookBaseBackoffSeconds,
 		cfg.ResultWebhookMaxBackoffSeconds,
+		limiter,
+		ratelimit.Bucket(cfg.RateLimit.Webhook),
 	)
 	results := services.NewResultsService(resultRepo, uploader, resultCallback, logger, time.Now, loc)
 
@@ -110,13 +115,14 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	go cleanup.Start(context.Background())
 
 	app := &Application{
-		Config:    cfg,
-		Engine:    engine,
-		Scheduler: scheduler,
-		Results:   results,
-		Subs:      subs,
-		Logger:    logger,
-		TZ:        loc,
+		Config:      cfg,
+		Engine:      engine,
+		Scheduler:   scheduler,
+		Results:     results,
+		Subs:        subs,
+		Logger:      logger,
+		TZ:          loc,
+		RateLimiter: limiter,
 	}
 
 	// Apply options

@@ -59,6 +59,15 @@ var (
 		},
 		[]string{"kind", "command", "outcome"},
 	)
+
+	RateLimitHitsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "rate_limit_hits_total",
+			Help:      "Total number of rate limit rejections, labeled by scope and operation.",
+		},
+		[]string{"scope", "operation"},
+	)
 )
 
 func init() {
@@ -69,5 +78,6 @@ func init() {
 		TaskProcessingLatencySeconds,
 		LeaseExpiredTotal,
 		WebhookDeliveriesTotal,
+		RateLimitHitsTotal,
 	)
 }
