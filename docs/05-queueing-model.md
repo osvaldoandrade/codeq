@@ -15,7 +15,24 @@ Each command and tenant combination is represented by a set of queues:
 
 ## Time-based scheduling
 
-Delayed visibility is used for retries. The delayed ZSET score is `visibleAt`. Claim-time repair moves due tasks from delayed to pending.
+Delayed visibility is used for retries and scheduled tasks. The delayed ZSET score is `visibleAt` (Unix timestamp). 
+
+**Delayed→Pending Migration:**
+
+During claim-time repair, the system automatically migrates due tasks from the delayed queue to pending using `MoveDueDelayed()`. This operation:
+
+- Queries delayed ZSET for tasks with `score ≤ now` using ZRANGEBYSCORE
+- Reads each task JSON once to determine priority and tenant
+- Atomically removes from delayed (ZREM) and pushes to appropriate pending queue (LPUSH)
+- Batch-updates all task status fields and TTL indices in a single pipeline
+
+This migration is **batched and optimized** for high-volume scenarios (O(M) operations for M tasks). The `limit` parameter (default: 200) controls how many delayed tasks are processed per claim operation.
+
+**Performance characteristics:**
+- Single-pass read: Each task JSON read exactly once
+- Pipelined writes: All updates batched together
+- Best-effort: Continues on individual task errors
+- Tenant-aware: Respects multi-tenancy isolation
 
 ## Priority scheduling
 

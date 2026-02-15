@@ -250,7 +250,7 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
   - `Enqueue()`: Add task to pending queue (LPUSH with priority)
   - `Get()`: Fetch task by ID (HGET)
   - `Claim()`: Atomic claim move from pending to in-progress SET (Lua `RPOP` + `SADD`), includes inline repair loop that samples in-progress via `SRANDMEMBER` + pipelined `TTL` checks
-  - `MoveDueDelayed()`: Requeue due tasks from delayed ZSET (ZRANGEBYSCORE + LPUSH)
+  - `MoveDueDelayed()`: Batched delayed→pending migration. Reads each task JSON once (HGET), updates status in-memory, moves to pending (ZREM + LPUSH), then batch-writes all task updates in single pipeline (HSET + ZADD for TTL). Reduces O(3M) round-trips to O(M) for M due tasks. Uses guarded Lua update to prevent resurrecting deleted tasks.
   - `Heartbeat()`: Extend lease TTL (EXPIRE)
   - `Abandon()`: Return task to pending queue (SREM + LPUSH)
   - `Nack()`: Requeue with backoff or move to DLQ (SREM + ZADD or LPUSH)
