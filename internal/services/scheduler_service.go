@@ -15,8 +15,8 @@ import (
 )
 
 type SchedulerService interface {
-	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int) (*domain.Task, error)
-	ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int) (*domain.Task, bool, error)
+	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
+	ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error)
 	Heartbeat(ctx context.Context, taskID, workerID string, extendSeconds int) error
 	Abandon(ctx context.Context, taskID, workerID string) error
 	NackTask(ctx context.Context, taskID, workerID string, delaySeconds int, reason string) (int, bool, error)
@@ -70,7 +70,7 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 	}
 }
 
-func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int) (*domain.Task, error) {
+func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
 	if strings.TrimSpace(string(cmd)) == "" {
 		return nil, errors.New("invalid command")
 	}
@@ -91,7 +91,7 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 		visibleAt = s.now().Add(time.Duration(delaySeconds) * time.Second)
 	}
 
-	task, err := s.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt)
+	task, err := s.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 	return task, nil
 }
 
-func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int) (*domain.Task, bool, error) {
+func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error) {
 	if workerID == "" {
 		return nil, false, errors.New("workerId is required")
 	}
@@ -117,7 +117,7 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		leaseSeconds = s.defaultLease
 	}
 	if waitSeconds <= 0 {
-		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault)
+		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
 		if ok && task != nil {
 			metrics.TaskClaimedTotal.WithLabelValues(string(task.Command)).Inc()
 		}
@@ -128,7 +128,7 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 	}
 	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
 	for {
-		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault)
+		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
 		if err != nil || ok {
 			if ok && task != nil {
 				metrics.TaskClaimedTotal.WithLabelValues(string(task.Command)).Inc()

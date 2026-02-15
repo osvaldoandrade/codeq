@@ -61,4 +61,8 @@ func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims)
 		role = "USER"
 	}
 	c.Set("userRole", role)
+
+	// Extract tenant ID from JWT claims
+	tenantID := extractTenantID(claims)
+	c.Set("tenantID", tenantID)
 }
