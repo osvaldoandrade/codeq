@@ -8,6 +8,9 @@
   - `application.go`: Main application struct, server initialization
   - `url_mappings.go`: HTTP route definitions
   - `integration_test.go`: End-to-end integration tests
+- **`pkg/auth`**: Authentication plugin system
+  - `interface.go`: Plugin interface definitions (Validator, Claims)
+  - `jwks/`: Default JWKS-based authentication plugin
 - **`pkg/config`**: Configuration loading and validation
   - `config.go`: Config struct, YAML/env parsing, defaults
 - **`pkg/domain`**: Core domain entities
@@ -28,8 +31,8 @@
   - `create_subscription_controller.go`, `heartbeat_subscription_controller.go`: Webhook subscription management
   - `queue_admin_controller.go`, `queue_stats_controller.go`, `cleanup_expired_controller.go`: Admin operations
 - **`internal/middleware`**: Authentication and request processing
-  - `auth.go`: Producer token validation (Tikti/Identity JWKS)
-  - `worker_auth.go`: Worker JWT validation (JWKS)
+  - `auth.go`: Producer token validation (JWKS-based via plugin system)
+  - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
   - `worker_scope.go`: Event type authorization filter
   - `require_admin.go`: Admin endpoint protection
   - `any_auth.go`: Either producer or worker token
@@ -55,7 +58,7 @@
 ## Components
 
 - HTTP API: Gin-based router with JSON binding.
-- Auth: producer token validation via Identity, worker token validation via JWKS.
+- Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
 - Scheduler core: orchestrates queue and task state transitions.
 - Result processor: validates completion payloads and stores results.
 - Storage: KVRocks via Redis API.

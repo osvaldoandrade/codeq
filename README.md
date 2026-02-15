@@ -21,7 +21,8 @@ codeQ provides:
 - NACK + backoff + delayed queues.
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
-- Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
+- Worker auth via JWT (JWKS), producer auth via JWT access tokens (JWKS).
+- Pluggable authentication system - use the default JWKS plugin or implement your own.
 
 ## Get started
 
@@ -57,7 +58,7 @@ cd codeq
 helm install codeq ./helm/codeq \
   --set secrets.enabled=true \
   --set secrets.webhookHmacSecret=YOUR_SECRET \
-  --set config.identityServiceUrl=https://api.storifly.ai \
+  --set config.identityServiceUrl=https://your-auth-server.com \
   --set config.workerJwksUrl=https://your-jwks \
   --set config.workerIssuer=https://issuer
 ```
