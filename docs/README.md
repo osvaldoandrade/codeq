@@ -50,3 +50,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 ### Migration Guides (Task-Oriented)
 
 23. `docs/23-migration-plugin-system.md` - Migration from identity-middleware to plugin system
+
+### Design Documents (Architecture Planning)
+
+24. `docs/24-queue-sharding-hld.md` - Queue sharding high-level design and RFC
