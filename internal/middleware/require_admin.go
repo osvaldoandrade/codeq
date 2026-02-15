@@ -11,7 +11,7 @@ import (
 func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if v, ok := c.Get("userClaims"); ok {
-			if claims, ok := v.(*identitymw.Claims); ok && claims != nil {
+			if claims, ok := v.(*auth.Claims); ok && claims != nil {
 				if claims.HasScope(adminScope) {
 					c.Next()
 					return

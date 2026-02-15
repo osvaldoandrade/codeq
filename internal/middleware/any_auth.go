@@ -3,16 +3,16 @@ package middleware
 import (
 	"net/http"
 
+	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
 )
 
-func AnyAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
-	workerValidator, werr := newWorkerValidator(cfg)
-	producerValidator, _ := newProducerValidator(cfg)
+// AnyAuthMiddleware creates middleware that accepts either worker or producer tokens
+func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if werr == nil && workerValidator != nil {
+		if workerValidator != nil {
 			claims, err := validateBearer(workerValidator, c.GetHeader("Authorization"))
 			if err == nil && len(claims.EventTypes) > 0 {
 				c.Set("workerClaims", claims)

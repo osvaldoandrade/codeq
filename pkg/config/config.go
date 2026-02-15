@@ -1,47 +1,53 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Port                               int    `yaml:"port"`
-	RedisAddr                          string `yaml:"redisAddr"`
-	RedisPassword                      string `yaml:"redisPassword"`
-	IdentityServiceURL                 string `yaml:"identityServiceUrl"`
-	IdentityServiceApiKey              string `yaml:"identityServiceApiKey"`
-	IdentityJwksURL                    string `yaml:"identityJwksUrl"`
-	IdentityIssuer                     string `yaml:"identityIssuer"`
-	IdentityAudience                   string `yaml:"identityAudience"`
-	Timezone                           string `yaml:"timezone"`
-	LogLevel                           string `yaml:"logLevel"`
-	LogFormat                          string `yaml:"logFormat"`
-	Env                                string `yaml:"env"`
-	DefaultLeaseSeconds                int    `yaml:"defaultLeaseSeconds"`
-	RequeueInspectLimit                int    `yaml:"requeueInspectLimit"`
-	LocalArtifactsDir                  string `yaml:"localArtifactsDir"`
-	MaxAttemptsDefault                 int    `yaml:"maxAttemptsDefault"`
-	BackoffPolicy                      string `yaml:"backoffPolicy"`
-	BackoffBaseSeconds                 int    `yaml:"backoffBaseSeconds"`
-	BackoffMaxSeconds                  int    `yaml:"backoffMaxSeconds"`
-	WorkerJwksURL                      string `yaml:"workerJwksUrl"`
-	WorkerAudience                     string `yaml:"workerAudience"`
-	WorkerIssuer                       string `yaml:"workerIssuer"`
-	AllowedClockSkewSeconds            int    `yaml:"allowedClockSkewSeconds"`
-	AllowProducerAsWorker              bool   `yaml:"allowProducerAsWorker"`
-	WebhookHmacSecret                  string `yaml:"webhookHmacSecret"`
-	SubscriptionMinIntervalSeconds     int    `yaml:"subscriptionMinIntervalSeconds"`
-	SubscriptionCleanupIntervalSeconds int    `yaml:"subscriptionCleanupIntervalSeconds"`
-	ResultWebhookMaxAttempts           int    `yaml:"resultWebhookMaxAttempts"`
-	ResultWebhookBaseBackoffSeconds    int    `yaml:"resultWebhookBaseBackoffSeconds"`
-	ResultWebhookMaxBackoffSeconds     int    `yaml:"resultWebhookMaxBackoffSeconds"`
+	Port                               int             `yaml:"port"`
+	RedisAddr                          string          `yaml:"redisAddr"`
+	RedisPassword                      string          `yaml:"redisPassword"`
+	IdentityServiceURL                 string          `yaml:"identityServiceUrl"`
+	IdentityServiceApiKey              string          `yaml:"identityServiceApiKey"`
+	IdentityJwksURL                    string          `yaml:"identityJwksUrl"`
+	IdentityIssuer                     string          `yaml:"identityIssuer"`
+	IdentityAudience                   string          `yaml:"identityAudience"`
+	ProducerAuthProvider               string          `yaml:"producerAuthProvider"`
+	ProducerAuthConfig                 json.RawMessage `yaml:"producerAuthConfig"`
+	Timezone                           string          `yaml:"timezone"`
+	LogLevel                           string          `yaml:"logLevel"`
+	LogFormat                          string          `yaml:"logFormat"`
+	Env                                string          `yaml:"env"`
+	DefaultLeaseSeconds                int             `yaml:"defaultLeaseSeconds"`
+	RequeueInspectLimit                int             `yaml:"requeueInspectLimit"`
+	LocalArtifactsDir                  string          `yaml:"localArtifactsDir"`
+	MaxAttemptsDefault                 int             `yaml:"maxAttemptsDefault"`
+	BackoffPolicy                      string          `yaml:"backoffPolicy"`
+	BackoffBaseSeconds                 int             `yaml:"backoffBaseSeconds"`
+	BackoffMaxSeconds                  int             `yaml:"backoffMaxSeconds"`
+	WorkerJwksURL                      string          `yaml:"workerJwksUrl"`
+	WorkerAudience                     string          `yaml:"workerAudience"`
+	WorkerIssuer                       string          `yaml:"workerIssuer"`
+	WorkerAuthProvider                 string          `yaml:"workerAuthProvider"`
+	WorkerAuthConfig                   json.RawMessage `yaml:"workerAuthConfig"`
+	AllowedClockSkewSeconds            int             `yaml:"allowedClockSkewSeconds"`
+	AllowProducerAsWorker              bool            `yaml:"allowProducerAsWorker"`
+	WebhookHmacSecret                  string          `yaml:"webhookHmacSecret"`
+	SubscriptionMinIntervalSeconds     int             `yaml:"subscriptionMinIntervalSeconds"`
+	SubscriptionCleanupIntervalSeconds int             `yaml:"subscriptionCleanupIntervalSeconds"`
+	ResultWebhookMaxAttempts           int             `yaml:"resultWebhookMaxAttempts"`
+	ResultWebhookBaseBackoffSeconds    int             `yaml:"resultWebhookBaseBackoffSeconds"`
+	ResultWebhookMaxBackoffSeconds     int             `yaml:"resultWebhookMaxBackoffSeconds"`
 }
 
 func LoadConfig(filePath string) (*Config, error) {
@@ -224,6 +230,36 @@ func LoadConfig(filePath string) (*Config, error) {
 
 	log.Printf("Scheduler Config: {Port:%d Redis:%s Identity:%s TZ:%s Lease:%ds Inspect:%d}\n",
 		c.Port, c.RedisAddr, c.IdentityServiceURL, c.Timezone, c.DefaultLeaseSeconds, c.RequeueInspectLimit)
+
+	// Backward compatibility: auto-configure auth providers if not explicitly set
+	if c.ProducerAuthProvider == "" && c.IdentityJwksURL != "" {
+		c.ProducerAuthProvider = "jwks"
+		if c.ProducerAuthConfig == nil {
+			cfg := map[string]interface{}{
+				"jwksUrl":     c.IdentityJwksURL,
+				"issuer":      c.IdentityIssuer,
+				"audience":    c.IdentityAudience,
+				"clockSkew":   time.Duration(c.AllowedClockSkewSeconds) * time.Second,
+				"httpTimeout": 5 * time.Second,
+			}
+			c.ProducerAuthConfig, _ = json.Marshal(cfg)
+		}
+	}
+
+	if c.WorkerAuthProvider == "" && c.WorkerJwksURL != "" {
+		c.WorkerAuthProvider = "jwks"
+		if c.WorkerAuthConfig == nil {
+			cfg := map[string]interface{}{
+				"jwksUrl":     c.WorkerJwksURL,
+				"issuer":      c.WorkerIssuer,
+				"audience":    c.WorkerAudience,
+				"clockSkew":   time.Duration(c.AllowedClockSkewSeconds) * time.Second,
+				"httpTimeout": 5 * time.Second,
+			}
+			c.WorkerAuthConfig, _ = json.Marshal(cfg)
+		}
+	}
+
 	return &c, nil
 }
 
