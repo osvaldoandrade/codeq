@@ -28,6 +28,7 @@ A Task is a stateful record stored in the task hash. It includes:
 
 - `id`, `command`, `payload`, `priority`
 - `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`
+- `lastKnownLocation`: hint for targeted cleanup (`PENDING_LIST`, `DELAYED_ZSET`, `INPROG_SET`, `DLQ_SET`, `NONE`)
 - `workerId`: current owner
 - `leaseUntil`: advisory timestamp
 - `resultKey`: link to the result record
@@ -37,6 +38,8 @@ A Task is a stateful record stored in the task hash. It includes:
 - `maxAttempts`: policy limit
 
 The `tenantId` field enables complete queue isolation in multi-tenant deployments. It is automatically populated from JWT claims during task creation and used to namespace all queue operations. For single-tenant deployments, this field contains the JWT subject identifier.
+
+The `lastKnownLocation` field is an optimization hint that tracks where a task was last placed in the queue system. This allows the admin cleanup operation to avoid expensive O(N) list scans when removing tasks. The field is not authoritative and may be out of sync if tasks are moved by external processes.
 
 ## Result
 
