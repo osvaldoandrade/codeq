@@ -243,11 +243,11 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 - `task_repository.go`: Task CRUD and queue operations
   - `CreateTask()`, `GetTask()`, `UpdateTask()`
   - `PushReady()`: Add to ready queue (LPUSH)
-  - `PopReady()`: Claim from ready queue (RPOPLPUSH)
+  - `Claim()`: Atomic claim move from pending to in-progress (Lua `RPOP` + `SADD`)
   - `PushDelayed()`: Schedule for future (ZADD with score = runAt)
   - `MoveDelayedToReady()`: Requeue due tasks (ZRANGEBYSCORE + LPUSH)
   - `GetInProgressExpired()`: Find expired leases (ZRANGEBYSCORE)
-  - `GetQueueStats()`: Count tasks by status (LLEN, ZCARD)
+  - `GetQueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
 
 - `result_repository.go`: Result storage
   - `SaveResult()`, `GetResult()`
@@ -423,7 +423,7 @@ Kubernetes deployment configuration. See `helm/codeq/README.md` for usage.
 
 ### GitHub Workflows (`.github/workflows/`)
 
-CI/CD automation. See `docs/17-workflows.md` for workflow details.
+CI/CD automation. See `docs/16-workflows.md` for workflow details.
 
 ---
 

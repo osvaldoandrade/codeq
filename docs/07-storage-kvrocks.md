@@ -20,10 +20,11 @@ All keys are prefixed with `codeq:`.
 ## Command usage
 
 - Hash: `HSET`, `HGET`, `HDEL`
-- Lists: `LPUSH`, `RPOP`, `LRANGE`, `LLEN`, `LREM`
-- Sets: `SADD`, `SREM`, `SCARD`, `SRANDMEMBER`
+- Lists: `LPUSH`, `RPOP`, `LLEN`, `LREM` (pending + dlq)
+- Sets: `SADD`, `SREM`, `SCARD`, `SRANDMEMBER` (in-progress tracking)
 - ZSET: `ZADD`, `ZRANGEBYSCORE`, `ZREM`
 - Keys: `SETEX`, `TTL`, `EXPIRE`, `DEL`
+- Lua: `EVAL` (atomic claim move: `RPOP` + `SADD`)
 
 ## Retention
 

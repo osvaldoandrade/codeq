@@ -46,7 +46,7 @@
   - `notifier_service.go`: Worker availability webhook dispatch
   - `subscription_cleanup_service.go`: Expired subscription removal
 - **`internal/repository`**: Data access layer (Redis operations)
-  - `task_repository.go`: Task CRUD, queue operations (RPOPLPUSH, delayed queue)
+  - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
   - `result_repository.go`: Result storage and retrieval
   - `subscription_repository.go`: Subscription storage
 - **`internal/providers`**: External integrations
@@ -82,7 +82,7 @@
 1. Worker submits claim request with `commands` and optional `leaseSeconds`.
 2. Service validates token and filters event types by token claims.
 3. Service runs the requeue logic for each command.
-4. Service moves one ID from pending list to in-progress list using `RPOPLPUSH`.
+4. Service atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`).
 5. Service sets a lease key with `SETEX` and updates task status to `IN_PROGRESS`.
 6. Service returns the task record. If no task is available, returns `204`.
 
@@ -91,7 +91,7 @@
 1. Worker submits result with `COMPLETED` or `FAILED`.
 2. Service verifies task ownership and status.
 3. Service persists artifacts (optional), stores the result record, updates task status, and clears the lease.
-4. Service removes the task from the in-progress list.
+4. Service removes the task from the in-progress set.
 5. Service posts webhook if the task contains a webhook URL.
 
 ## NACK flow

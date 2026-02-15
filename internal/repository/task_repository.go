@@ -187,9 +187,9 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 				pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, p, tenantID), 0, id)
 			}
 		}
-		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt, tenantID), id)
-		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt, tenantID), id)
-		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), 0, id)
+		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt), id)
+		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt), id)
+		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt), 0, id)
 	} else {
 		// Try both with and without tenant to ensure cleanup when tenant is unknown
 		// This handles cases where we don't know which tenant the task belongs to
@@ -200,9 +200,9 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 				// Note: Cannot enumerate all possible tenants, so orphaned tenant-specific
 				// tasks would need manual cleanup or a separate background job
 			}
-			pipe.SRem(ctx, r.keyQueueInprog(c, ""), id)
-			pipe.ZRem(ctx, r.keyQueueDelayed(c, ""), id)
-			pipe.LRem(ctx, r.keyQueueDLQ(c, ""), 0, id)
+			pipe.SRem(ctx, r.keyQueueInprog(c), id)
+			pipe.ZRem(ctx, r.keyQueueDelayed(c), id)
+			pipe.LRem(ctx, r.keyQueueDLQ(c), 0, id)
 		}
 	}
 	_, err := pipe.Exec(ctx)
@@ -317,10 +317,10 @@ end
 return false
 `)
 
-func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int, tenantID string) (int, error) {
-	inprog := r.keyQueueInprog(cmd, tenantID)
+func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int) (int, error) {
+	inprog := r.keyQueueInprog(cmd)
 	if inspectLimit <= 0 {
-		inspectLimit = defaultInspectLimit
+		inspectLimit = 200
 	}
 	ids, err := r.rdb.SRandMemberN(ctx, inprog, int64(inspectLimit)).Result()
 	if err != nil && err != redis.Nil {
@@ -513,7 +513,7 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 		dst := r.keyQueueInprog(cmd, tenantID)
 
 		for i := 0; i < inspectLimit; i++ {
-			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
+			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, inspectLimit).Result()
 			if err == redis.Nil {
 				return nil, false, nil // empty queue
 			}
@@ -522,7 +522,7 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 			}
 			id, ok := res.(string)
 			if !ok || id == "" {
-				return nil, false, nil // empty queue / no unique id found
+				return nil, false, nil // fila vazia / no unique id found
 			}
 
 			// Carrega JSON; pode ter sido limpo por admin endpoint
@@ -793,7 +793,7 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 		}
 		ready += n
 	}
-	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd, "")).Result()
+	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd)).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
