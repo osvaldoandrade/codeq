@@ -473,6 +473,166 @@ HGETALL task:550e8400-e29b-41d4-a716-446655440000
 - Check token issuer and audience claims
 - Review middleware logs for JWT validation errors
 
+## Adding Metrics
+
+codeQ uses Prometheus for observability. Follow these guidelines when adding new metrics:
+
+### Metric Types
+
+**Counters** (always increasing):
+- Use for event counts (tasks created, webhooks sent, errors)
+- Increment at the point where the event occurs
+- Label sparingly to avoid high cardinality
+
+**Histograms** (latency distributions):
+- Use for duration measurements (request latency, processing time)
+- Record in seconds (not milliseconds)
+- Choose appropriate buckets for expected latency range
+
+**Gauges** (instantaneous values):
+- Use for current state (queue depth, active connections)
+- Prefer custom collectors for values derived from Redis/DB
+- Avoid updating gauges on every operation (query on scrape instead)
+
+### Adding a Counter
+
+1. **Define the metric** in `internal/metrics/metrics.go`:
+
+````go
+TaskAbandoned = prometheus.NewCounterVec(
+    prometheus.CounterOpts{
+        Namespace: namespace,  // "codeq"
+        Name:      "task_abandoned_total",
+        Help:      "Total number of tasks abandoned by workers.",
+    },
+    []string{"command"},
+)
+````
+
+2. **Register the metric** in the `init()` function:
+
+````go
+func init() {
+    prometheus.MustRegister(
+        // ... existing metrics ...
+        TaskAbandoned,
+    )
+}
+````
+
+3. **Instrument the code** at the appropriate location (service or repository layer):
+
+````go
+// In scheduler_service.go
+func (s *schedulerService) AbandonTask(ctx context.Context, req AbandonTaskRequest) error {
+    // ... business logic ...
+    
+    metrics.TaskAbandoned.WithLabelValues(string(task.Command)).Inc()
+    
+    return nil
+}
+````
+
+### Adding a Histogram
+
+````go
+// 1. Define in metrics.go
+WebhookLatencySeconds = prometheus.NewHistogramVec(
+    prometheus.HistogramOpts{
+        Namespace: namespace,
+        Name:      "webhook_latency_seconds",
+        Help:      "Webhook HTTP request latency in seconds.",
+        Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+    },
+    []string{"kind", "outcome"},
+)
+
+// 2. Register in init()
+func init() {
+    prometheus.MustRegister(WebhookLatencySeconds)
+}
+
+// 3. Instrument with timing
+start := time.Now()
+resp, err := http.Post(url, "application/json", body)
+duration := time.Since(start).Seconds()
+
+outcome := "success"
+if err != nil {
+    outcome = "failure"
+}
+metrics.WebhookLatencySeconds.WithLabelValues(kind, outcome).Observe(duration)
+````
+
+### Best Practices
+
+**Label cardinality:**
+- Keep label cardinality low (< 1000 unique combinations per metric)
+- ❌ Bad: `{task_id="abc-123"}` (unbounded)
+- ✅ Good: `{command="GENERATE_MASTER"}` (2 values)
+- ❌ Bad: `{worker_id="worker-12345"}` (high cardinality if many workers)
+- ✅ Good: `{queue="ready"}` (4 values: ready, delayed, in_progress, dlq)
+
+**Naming conventions:**
+- Use `snake_case`: `task_created_total`, not `taskCreatedTotal`
+- Counter suffix: `_total` (e.g., `task_created_total`)
+- Histogram/Summary suffix: units (e.g., `_seconds`, `_bytes`)
+- Gauge: no suffix (e.g., `queue_depth`)
+
+**Instrumentation location:**
+- Increment counters close to the event (service or repository layer)
+- Avoid instrumenting in controllers (middleware can handle HTTP metrics)
+- Record latency at the outermost boundary (end-to-end, not internal steps)
+
+**Testing:**
+- Verify metrics are exposed: `curl http://localhost:8080/metrics | grep codeq_`
+- Check label values: `codeq_task_created_total{command="GENERATE_MASTER"} 42`
+- Test in integration tests if metric is critical
+
+**Documentation:**
+- Update `docs/10-operations.md` metric reference table
+- Add PromQL examples for new metrics
+- Document expected cardinality and scrape performance impact
+
+### Custom Collectors
+
+For metrics derived from external state (Redis, database), use a custom collector instead of updating gauges continuously.
+
+**Example**: The `redisCollector` queries Redis on each scrape instead of updating gauges on every queue operation:
+
+````go
+type myCollector struct {
+    db   *sql.DB
+    desc *prometheus.Desc
+}
+
+func (c *myCollector) Describe(ch chan<- *prometheus.Desc) {
+    ch <- c.desc
+}
+
+func (c *myCollector) Collect(ch chan<- prometheus.Metric) {
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    
+    value, err := c.queryDatabase(ctx)
+    if err != nil {
+        return  // Fail silently; scrape continues
+    }
+    
+    ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, value)
+}
+
+// Register once at startup
+prometheus.MustRegister(&myCollector{db: db, desc: desc})
+````
+
+**When to use custom collectors:**
+- Queue depths from Redis (avoids updating gauges on every operation)
+- Connection pool stats from database drivers
+- External system state (Kubernetes, cloud APIs)
+
+**See**: `internal/metrics/redis_collector.go` for a complete example
+
 ## Additional Resources
 
 - **[Architecture](03-architecture.md)**: High-level system design

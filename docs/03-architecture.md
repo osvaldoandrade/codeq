@@ -51,6 +51,9 @@
   - `uploader.go`: Artifact storage (local filesystem)
 - **`internal/backoff`**: Retry logic
   - `backoff.go`: Backoff policies (fixed, linear, exponential, jitter)
+- **`internal/metrics`**: Observability and monitoring
+  - `metrics.go`: Prometheus metric definitions (counters, histograms, gauges)
+  - `redis_collector.go`: Custom Prometheus collector for Redis-backed queue metrics
 
 ## Components
 
@@ -62,6 +65,7 @@
 - Artifact storage: local filesystem uploader.
 - Notifier: optional webhook signal dispatcher.
 - Requeue loop: claim-time repair during `Claim`.
+- Metrics: Prometheus instrumentation with custom Redis collector.
 
 ## Enqueue flow
 
@@ -105,3 +109,38 @@ codeQ emits two independent webhook classes:
 - **Worker availability notifications**: Workers register a callback URL for event types. When new work becomes ready, codeQ sends a signal containing the event type and a recommended claim URL. The signal is advisory; the worker must still claim. Delivery can be `fanout`, `group` (one per group), or `hash` (deterministic selection) to balance notification load across worker fleets.
 
 - **Result callbacks**: Producers can set a task-level webhook URL. When a task completes or fails, codeQ posts a result payload and retries with backoff. This replaces polling `GET /tasks/:id/result`.
+
+## Metrics Architecture
+
+codeQ exposes Prometheus metrics via the `/metrics` endpoint (unauthenticated by default). The metrics subsystem consists of two components:
+
+### Standard Metrics (`internal/metrics/metrics.go`)
+
+Application-level metrics are instrumented throughout the codebase:
+
+- **Counters**: Task lifecycle events (created, claimed, completed) incremented at service/repository boundaries
+- **Histograms**: End-to-end task processing latency captured on completion
+- **Custom collector**: Redis-backed queue depth gauges (see below)
+
+Instrumentation points:
+- `internal/repository/task_repository.go`: Task creation counter
+- `internal/services/scheduler_service.go`: Task claim counter
+- `internal/services/results_service.go`: Completion counter and latency histogram
+- `internal/repository/task_repository.go`: Lease expiration counter
+
+### Custom Redis Collector (`internal/metrics/redis_collector.go`)
+
+Queue depth metrics are gathered dynamically during Prometheus scrapes rather than updated continuously. This design avoids high write volume to metrics storage.
+
+**Collector behavior:**
+- Registered once at application bootstrap (`pkg/app/application.go`)
+- Executes Redis pipeline queries on each scrape (2-second timeout)
+- Queries queue depths for all commands across all sharding buckets (priority 0-9)
+- Aggregates pending, delayed, in-progress, and DLQ counts
+- Exposes as gauges: `codeq_queue_depth`, `codeq_dlq_depth`, `codeq_subscriptions_active`
+
+**Multi-replica considerations:**
+- All API replicas report the same queue depth values (Redis is the single source of truth)
+- Use `max by (...)` aggregation in PromQL to deduplicate when multiple replicas are scraped
+
+See `docs/10-operations.md` for complete metric reference.

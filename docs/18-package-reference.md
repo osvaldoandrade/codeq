@@ -313,6 +313,64 @@ delay := backoff.ComputeBackoff("exp_full_jitter", 5, 900, 3)
 
 ---
 
+### `internal/metrics`
+
+**Purpose**: Observability and Prometheus instrumentation
+
+**Key files**:
+- `metrics.go`: Prometheus metric definitions and registration
+- `redis_collector.go`: Custom Prometheus collector for queue depth metrics
+
+**Metric types exposed**:
+
+- **Counters** (cumulative counts):
+  - `codeq_task_created_total`: Tasks enqueued, labeled by `command`
+  - `codeq_task_claimed_total`: Tasks claimed by workers, labeled by `command`
+  - `codeq_task_completed_total`: Tasks completed, labeled by `command` and `status` (COMPLETED/FAILED)
+  - `codeq_lease_expired_total`: Lease expirations detected, labeled by `command`
+  - `codeq_webhook_deliveries_total`: Webhook deliveries, labeled by `kind`, `command`, `outcome`
+
+- **Histograms** (latency distribution):
+  - `codeq_task_processing_latency_seconds`: End-to-end task processing time (creation to completion)
+
+- **Gauges** (instantaneous values):
+  - `codeq_queue_depth`: Current queue depth, labeled by `command` and `queue` (ready/delayed/in_progress/dlq)
+  - `codeq_dlq_depth`: DLQ depth by command (equivalent to `codeq_queue_depth{queue="dlq"}`)
+  - `codeq_subscriptions_active`: Active webhook subscriptions by command
+
+**Custom collector pattern**:
+
+The `redisCollector` implements `prometheus.Collector` interface to query Redis on-demand during scrapes:
+
+````go
+// Registered at application bootstrap
+metrics.RegisterRedisCollector(redisClient, logger)
+
+// Collector queries Redis on each scrape with 2s timeout
+func (c *redisCollector) Collect(ch chan<- prometheus.Metric) {
+    ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+    defer cancel()
+    
+    // Pipeline queries for all queue depths across commands and priorities
+    // Emits gauge metrics for ready, delayed, in_progress, dlq queues
+}
+````
+
+**Instrumentation points**:
+- Task creation: `internal/repository/task_repository.go` increments `TaskCreatedTotal`
+- Task claim: `internal/services/scheduler_service.go` increments `TaskClaimedTotal`
+- Task completion: `internal/services/results_service.go` increments `TaskCompletedTotal` and records latency
+- Lease expiry: `internal/repository/task_repository.go` increments `LeaseExpiredTotal`
+- Webhooks: `internal/services/notifier_service.go` and `result_callback_service.go` increment `WebhookDeliveriesTotal`
+
+**Multi-replica considerations**:
+
+Queue depth gauges are collected from Redis, so all API replicas report identical values. Use `max by (command, queue)` in PromQL to deduplicate.
+
+**See**: `docs/10-operations.md` for complete metric reference and PromQL examples
+
+---
+
 ## CLI Package (`cmd/codeq`)
 
 ### `cmd/codeq/main.go`
