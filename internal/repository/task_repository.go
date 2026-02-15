@@ -192,10 +192,14 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt, tenantID), id)
 		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), 0, id)
 	} else {
-		// Try both with and without tenant to ensure cleanup
+		// Try both with and without tenant to ensure cleanup when tenant is unknown
+		// This handles cases where we don't know which tenant the task belongs to
 		for _, c := range r.allCommands() {
 			for p := maxPriority; p >= minPriority; p-- {
+				// Try legacy queue (no tenant)
 				pipe.LRem(ctx, r.keyQueuePending(c, p, ""), 0, id)
+				// Note: Cannot enumerate all possible tenants, so orphaned tenant-specific
+				// tasks would need manual cleanup or a separate background job
 			}
 			pipe.LRem(ctx, r.keyQueueInprog(c, ""), 0, id)
 			pipe.ZRem(ctx, r.keyQueueDelayed(c, ""), id)
@@ -350,7 +354,6 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 	pipe := r.rdb.TxPipeline()
 	moveIDs := make([]string, 0, len(ids))
 	priorities := make(map[string]int, len(ids))
-	tenants := make(map[string]string, len(ids))
 	for _, id := range ids {
 		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 		if err == redis.Nil || js == "" {
@@ -367,7 +370,6 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		}
 		prio := normalizePriority(t.Priority)
 		priorities[id] = prio
-		tenants[id] = t.TenantID
 		moveIDs = append(moveIDs, id)
 		pipe.ZRem(ctx, delayed, id)
 		pipe.LPush(ctx, r.keyQueuePending(cmd, prio, t.TenantID), id)
