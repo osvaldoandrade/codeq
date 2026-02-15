@@ -104,7 +104,9 @@ func (s *resultCallbackService) sendWithRetry(ctx context.Context, cmd domain.Co
 			_ = resp.Body.Close()
 		}
 		delay := s.backoffDelay(attempt)
-		_ = sleepOrDone(ctx, delay)
+		if sleepOrDone(ctx, delay) != nil {
+			return
+		}
 	}
 	metrics.WebhookDeliveriesTotal.WithLabelValues("task_result", string(cmd), "failure").Inc()
 	s.logger.Warn("result callback failed", "url", url)
