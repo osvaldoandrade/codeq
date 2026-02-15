@@ -32,19 +32,18 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
-22. `docs/22-developer-guide.md` - Developer guide for contributors
+21. `docs/21-developer-guide.md` - Developer guide for contributors
 
 ### Integration Guides
 
-21. `docs/integrations/21-java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
-22. `docs/integrations/22-nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
+- `docs/integrations/21-java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
+- `docs/integrations/22-nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
 - `sdks/README.md` - SDK overview and quick start guide
 - `examples/` - Working example applications
 
 ### Explanation (Understanding-Oriented)
 
-20. `docs/20-authentication-plugins.md` - Authentication plugin system architecture
-23. `docs/23-developer-guide.md` - Contributing and internal architecture guide
+- `docs/21-developer-guide.md` - Contributing and internal architecture guide
 - `docs/migration.md` - General migration guide
 
 ### Migration Guides (Task-Oriented)
