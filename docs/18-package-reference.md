@@ -269,10 +269,10 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 **Example**:
 ````go
 // Enqueue a task
-task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt)
+task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 
 // Claim a task (includes inline repair of expired leases via SRANDMEMBER + pipelined TTL)
-task, claimed, err := taskRepo.Claim(ctx, workerID, []domain.Command{domain.CmdGenerateMaster}, leaseSeconds, inspectLimit, maxAttemptsDefault)
+task, claimed, err := taskRepo.Claim(ctx, workerID, []domain.Command{domain.CmdGenerateMaster}, leaseSeconds, inspectLimit, maxAttemptsDefault, tenantID)
 
 // Move delayed tasks to pending
 moved, err := taskRepo.MoveDueDelayed(ctx, domain.CmdGenerateMaster, limit)
