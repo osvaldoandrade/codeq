@@ -1,61 +1,35 @@
 # Sharding
 
-## Status
+## Current Status
 
-**Design Phase**: Complete  
-**Implementation Phase**: Not started  
-**Design Document**: [Queue Sharding HLD](24-queue-sharding-hld.md)  
-**Implementation Tracking**: Issue #31
+Sharding is not yet implemented in the current codeQ service. All queues operate on a single KVRocks instance, and queue keys do not include shard segments.
 
-## Overview
+## Future Implementation
 
-Queue sharding is designed but not yet implemented in the current codeQ service. All queues currently operate on a single KVRocks instance with logical tenant isolation but no physical distribution across multiple storage backends.
+A comprehensive High-Level Design (HLD) and RFC for queue sharding has been developed to enable horizontal scaling beyond single-node KVRocks deployments. The design addresses:
 
-## Design Summary
+- **Scaling constraints** when workloads exceed single-instance capacity
+- **Sharding strategies** (hash-based, range-based, and explicit sharding)
+- **Architecture proposal** with a pluggable ShardSupplier interface
+- **Implementation phases** for gradual adoption with rollback points
+- **Strategic alternatives** for different operational scenarios
 
-The sharding design introduces horizontal scaling capability through:
+For complete details on the sharding design, including:
+- Problem analysis and scaling requirements
+- Proposed ShardSupplier interface and static configuration
+- Storage backend mapping and key format evolution
+- Atomicity implications and Lua script constraints
+- Migration strategies and deployment patterns
+- Performance characteristics and resource implications
 
-- **Explicit Sharding**: Pluggable `ShardSupplier` interface that maps commands to storage backends
-- **Phased Approach**: 
-  - Near-term: Independent KVRocks backends per shard
-  - Long-term: RAFT-based consensus storage (e.g., TiKV) for strong consistency and automatic failover
-- **Tenant Isolation**: Maintained across physical shards
-- **Backward Compatibility**: Single-instance deployments continue as single-shard configurations
+See the full design document: **[docs/24-queue-sharding-hld.md](24-queue-sharding-hld.md)**
 
-For comprehensive design details, architecture diagrams, migration strategy, and trade-off analysis, see:
+## Summary of Recommended Approach
 
-**[📋 Queue Sharding High-Level Design (HLD) and RFC](24-queue-sharding-hld.md)**
+The HLD recommends **explicit sharding** through a configuration-driven ShardSupplier interface, with three strategic implementation paths:
 
-## Current Architecture
+1. **Option 1: Vertical Scaling Only** - Continue scaling single instances (recommended until instance limits)
+2. **Option 2: Independent Stacks per Tenant** - Deploy separate codeQ+KVRocks pairs (near-term pragmatic solution)
+3. **Option 3: RAFT-Based Consensus** - Implement distributed coordination layer (long-term aspiration)
 
-All queue operations target a single Redis-compatible backend:
-
-- Queue keys use tenant isolation: `codeq:q:{command}:{tenantID}:{queue-type}:{priority}`
-- No shard segment in key structure
-- Single storage instance = single point of scale
-- Vertical scaling only
-
-## When Sharding Implementation Completes
-
-Once implemented, the system will support:
-
-- **Multi-shard deployments**: Distribute commands across N storage backends
-- **Explicit routing control**: Operators manually assign commands to shards based on traffic patterns
-- **Zero-downtime migration**: Gradual rollout from single-shard to multi-shard configurations
-- **Flexible strategies**: Hash-based, range-based, or custom routing via `ShardSupplier` implementations
-
-## Interim Scaling Strategy
-
-Until sharding implementation completes:
-
-1. **Vertical Scaling**: Use larger KVRocks instance types (more CPU, RAM, disk)
-2. **Isolated Deployments**: Deploy separate codeQ+KVRocks pairs per region or major tenant
-3. **Command Separation**: Run distinct codeQ clusters for different command namespaces
-4. **Performance Tuning**: Optimize connection pools, lease durations, and Bloom filter configurations (see [Performance Tuning](17-performance-tuning.md))
-
-## Related Documentation
-
-- [Domain Model: ShardSupplier Interface](02-domain-model.md#shardsupplier) - Interface specification
-- [Architecture](03-architecture.md) - Current single-shard architecture
-- [Performance Tuning](17-performance-tuning.md) - Scaling considerations and bottleneck analysis
-- [Queue Sharding HLD](24-queue-sharding-hld.md) - Complete design specification and RFC
+Organizations should continue with vertical scaling until approaching instance limits, then evaluate Options 2 or 3 based on their specific workload characteristics and operational constraints.

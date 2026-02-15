@@ -304,6 +304,43 @@ The Bloom filter is currently hardcoded with production defaults:
 - False positive rate: 1%
 - Rotation interval: 30 minutes
 
+### Ghost Bloom filter optimization (Claim path)
+
+codeQ uses a second Bloom filter called the "ghost Bloom" to skip expensive HGET operations for deleted tasks during the claim operation.
+
+**Problem it solves:**
+
+When admin cleanup removes tasks, it deletes the task hash entry but may leave task IDs lingering in pending/delayed queues temporarily. Without the ghost Bloom, every claim would attempt an HGET for these deleted tasks, wasting Redis round-trips.
+
+**How it works:**
+
+1. When a task is administratively deleted via `removeTaskFully()`, its ID is added to the ghost Bloom filter
+2. During `Claim()`, before performing HGET, check if the task ID is in the ghost Bloom
+3. If definitely deleted (ghost Bloom returns "present"), skip the HGET and continue to next task
+4. If not in ghost Bloom, proceed with normal HGET
+
+**Key characteristics:**
+
+- **Ultra-precise**: 2M keys capacity, 1e-12 false positive rate (~4.8 MB RAM per filter, ~9.6 MB total)
+- **Longer rotation**: 6-hour rotation interval (vs 30min for idempotency Bloom)
+- **Dual updates**: Populated both in `removeTaskFully()` and when HGET returns Nil during claim
+- **Thread-safe**: Lock-free atomic operations
+
+**Performance impact:**
+
+- **Benefit**: Eliminates HGET round-trips for deleted task IDs still in queues
+- **Typical improvement**: Varies by cleanup rate; most impactful after bulk admin cleanup operations
+- **Memory footprint**: ~9.6 MB per API server instance
+- **CPU overhead**: Minimal
+
+**When it helps:**
+
+- ✅ After admin cleanup operations that remove many tasks
+- ✅ High-throughput deployments with frequent task deletions
+- ✅ Scenarios where queue cleanup lags behind task deletion
+- ❌ No benefit if admin cleanup is infrequent
+- ❌ Minimal impact if tasks are always completed (not deleted)
+
 Future releases may expose these as configuration options if needed.
 
 ### Webhook settings
@@ -515,23 +552,25 @@ kvrocks:
 
 ### Sharding considerations
 
-**Current status:** Sharding is designed but not yet implemented. See **[Sharding Status](06-sharding.md)** and **[Queue Sharding HLD](24-queue-sharding-hld.md)** for design details.
+**Current limitation:** Sharding is not yet implemented. A comprehensive HLD/RFC has been developed (see `docs/24-queue-sharding-hld.md`).
 
 **When sharding becomes necessary:**
 
 - Single KVRocks instance saturates CPU (> 80%)
 - Memory requirements exceed 64 GB
 - Network bandwidth bottleneck (> 1 Gbps sustained)
+- Storage capacity approaches instance limits
+- Failover recovery times become unacceptable
 
-**Planned sharding strategy:**
+**Recommended sharding approach (from HLD):**
 
-The HLD defines a phased approach:
-- Explicit routing via pluggable `ShardSupplier` interface
-- Near-term: Independent KVRocks backends per shard
-- Long-term: RAFT-backed consensus storage (TiKV) for strong consistency
-- Zero-downtime migration from single-shard to multi-shard configurations
+- **Near-term:** Deploy independent codeQ+KVRocks pairs per tenant/workload (Option 2)
+- **Long-term:** Explicit sharding via ShardSupplier interface with pluggable strategies
+- Shard by `command` type or tenant for balanced distribution
+- Preserve Lua script atomicity within shard boundaries
+- See full design: `docs/24-queue-sharding-hld.md`
 
-**Interim workarounds (until implementation completes):**
+**Current workarounds:**
 
 - Deploy independent codeQ+KVRocks pairs per region/tenant
 - Partition workloads by command type manually
@@ -1068,8 +1107,8 @@ High-cardinality labels can degrade Prometheus performance.
 - Webhooks: `docs/12-webhooks.md`
 - Backoff policies: `docs/11-backoff.md`
 - Operations: `docs/10-operations.md`
-- Sharding design: `docs/24-queue-sharding-hld.md` (HLD/RFC)
-- Sharding status: `docs/06-sharding.md`
+- Sharding overview: `docs/06-sharding.md`
+- Sharding HLD/RFC: `docs/24-queue-sharding-hld.md`
 - Helm chart: `helm/codeq/values.yaml`
 
 ## 10) Idempotency Bloom Filter Tuning
