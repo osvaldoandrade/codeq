@@ -37,7 +37,8 @@ func TestLoadConfigOptional_WhitespacePath(t *testing.T) {
 
 // TestLoadConfigOptional_FileNotExist tests loading when file does not exist
 func TestLoadConfigOptional_FileNotExist(t *testing.T) {
-	nonExistentPath := "/tmp/config-does-not-exist-12345.yaml"
+	// Use a non-existent path within a valid temp directory for cross-platform compatibility
+	nonExistentPath := filepath.Join(t.TempDir(), "config-does-not-exist.yaml")
 	
 	cfg, err := LoadConfigOptional(nonExistentPath)
 	if err != nil {
