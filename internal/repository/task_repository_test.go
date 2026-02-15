@@ -15,6 +15,10 @@ import (
 
 type redisCmdCountHook struct {
 	gets  atomic.Int64
+	lrems atomic.Int64
+	hdels atomic.Int64
+	zrems atomic.Int64
+	dels  atomic.Int64
 	hgets atomic.Int64
 }
 
@@ -23,8 +27,17 @@ func (h *redisCmdCountHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) 
 }
 
 func (h *redisCmdCountHook) AfterProcess(ctx context.Context, cmd redis.Cmder) error {
-	if strings.EqualFold(cmd.Name(), "get") {
+	switch strings.ToLower(cmd.Name()) {
+	case "get":
 		h.gets.Add(1)
+	case "lrem":
+		h.lrems.Add(1)
+	case "hdel":
+		h.hdels.Add(1)
+	case "zrem":
+		h.zrems.Add(1)
+	case "del":
+		h.dels.Add(1)
 	}
 	if strings.EqualFold(cmd.Name(), "hget") {
 		h.hgets.Add(1)
@@ -337,6 +350,65 @@ func TestCleanupExpired(t *testing.T) {
 	}
 	if _, err := repo.Get(ctx, task2.ID); err == nil {
 		t.Fatalf("expected task2 to be deleted")
+	}
+}
+
+func TestCleanupExpiredBloomSkipsAlreadyRemovedIDs(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis start: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	hook := &redisCmdCountHook{}
+	rdb.AddHook(hook)
+
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	r := repo.(*taskRedisRepo)
+	ctx := context.Background()
+	cmd := domain.CmdGenerateMaster
+
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Simulate that another cleanup already removed this task fully, but this cleanup run
+	// still observes the same ID (e.g., concurrent cleanup cycles / stale read).
+	if err := r.removeTaskFully(ctx, task.ID); err != nil {
+		t.Fatalf("removeTaskFully: %v", err)
+	}
+	expiredScore := float64(time.Now().Add(-1 * time.Hour).UTC().Unix())
+	if err := rdb.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: expiredScore, Member: task.ID}).Err(); err != nil {
+		t.Fatalf("ZADD ttl-index: %v", err)
+	}
+
+	hook.lrems.Store(0)
+	hook.hdels.Store(0)
+	hook.zrems.Store(0)
+	hook.dels.Store(0)
+
+	deleted, err := repo.CleanupExpired(ctx, 10, time.Now())
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("expected 0 deletions (skipped via bloom), got %d", deleted)
+	}
+	if got := hook.lrems.Load(); got != 0 {
+		t.Fatalf("expected 0 LREM calls when skipping, got %d", got)
+	}
+	if got := hook.hdels.Load(); got != 0 {
+		t.Fatalf("expected 0 HDEL calls when skipping, got %d", got)
+	}
+	if got := hook.zrems.Load(); got != 0 {
+		t.Fatalf("expected 0 ZREM calls when skipping, got %d", got)
+	}
+	if got := hook.dels.Load(); got != 0 {
+		t.Fatalf("expected 0 DEL calls when skipping, got %d", got)
 	}
 }
 

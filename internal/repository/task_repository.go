@@ -48,6 +48,7 @@ type taskRedisRepo struct {
 	backoffMaxSeconds  int
 	rng                *rand.Rand
 	idempoBloom        *idempotencyBloom
+	cleanupBloom       *idempotencyBloom
 	ghostBloom         *idempotencyBloom
 }
 
@@ -71,6 +72,9 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		// Best-effort local filter to avoid negative idempotency GETs.
 		// Defaults target a small memory footprint (~a few MB) and a short rolling window.
 		idempoBloom: newIdempotencyBloom(1_000_000, 0.01, 30*time.Minute),
+		// Best-effort local filter to skip redundant cleanup work when the same expired IDs
+		// are observed multiple times (e.g., concurrent or repeated cleanup cycles).
+		cleanupBloom: newIdempotencyBloom(2_000_000, 0.01, 6*time.Hour),
 		// Best-effort local filter to short-circuit "ghost" task IDs already known to be deleted.
 		// This reduces Claim-path Redis HGET pressure when admin cleanup leaves stale IDs in queues.
 		ghostBloom: newIdempotencyBloom(2_000_000, 1e-12, 6*time.Hour),
@@ -219,6 +223,8 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 		}
 	}
 	_, err := pipe.Exec(ctx)
+	if err == nil && r.cleanupBloom != nil {
+		r.cleanupBloom.Add(id)
 	if err == nil && r.ghostBloom != nil {
 		r.ghostBloom.Add(id)
 	}
@@ -943,6 +949,9 @@ func (r *taskRedisRepo) CleanupExpired(ctx context.Context, limit int, before ti
 	}
 	deleted := 0
 	for _, id := range ids {
+		if r.cleanupBloom != nil && r.cleanupBloom.MaybeHas(id) {
+			continue
+		}
 		if err := r.removeTaskFully(ctx, id); err == nil {
 			deleted++
 		}
