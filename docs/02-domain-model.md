@@ -28,6 +28,7 @@ A Task is a stateful record stored in the task hash. It includes:
 
 - `id`, `command`, `payload`, `priority`
 - `status`: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`
+- `lastKnownLocation` (optional): optimization hint for admin cleanup (values: `PENDING_LIST`, `DELAYED_ZSET`, `INPROG_SET`, `DLQ_SET`, `NONE`)
 - `workerId`: current owner
 - `leaseUntil`: advisory timestamp
 - `resultKey`: link to the result record
