@@ -263,9 +263,9 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 
 **Key files**:
 - `task_repository.go`: Task CRUD and queue operations
-  - `Enqueue()`: Add task to pending queue (LPUSH with priority). Uses in-process Bloom filter to optimize idempotent enqueues by skipping Redis GET on fast path for fresh keys.
+  - `Enqueue()`: Add task to pending queue (LPUSH with priority). Uses in-process **idempotency Bloom filter** to optimize idempotent enqueues by skipping Redis GET on fast path for fresh keys.
   - `Get()`: Fetch task by ID (HGET)
-  - `Claim()`: Atomic claim move from pending to in-progress SET (Lua `RPOP` + `SADD`), includes inline repair loop that samples in-progress via `SRANDMEMBER` + pipelined `TTL` checks
+  - `Claim()`: Atomic claim move from pending to in-progress SET (Lua `RPOP` + `SADD`), includes **ghost Bloom filter** check to skip HGET for deleted tasks, plus inline repair loop that samples in-progress via `SRANDMEMBER` + pipelined `TTL` checks
   - `MoveDueDelayed()`: Batched delayed→pending migration. Reads each task JSON once (HGET), updates status in-memory, moves to pending (ZREM + LPUSH), then batch-writes all task updates in single pipeline (HSET + ZADD for TTL). Reduces O(3M) round-trips to O(M) for M due tasks. Uses guarded Lua update to prevent resurrecting deleted tasks.
   - `Heartbeat()`: Extend lease TTL (EXPIRE)
   - `Abandon()`: Return task to pending queue (SREM + LPUSH)
@@ -273,9 +273,9 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
   - `QueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
   - `CleanupExpired()`: Admin cleanup of expired tasks (ZRANGEBYSCORE on TTL index)
 
-- `idempotency_bloom.go`: Rotating Bloom filter for idempotency enqueue optimization
-  - Best-effort probabilistic filter (1M capacity, 1% false positive rate, 30min rotation)
-  - Eliminates negative Redis lookups for fresh idempotency keys (20-30% enqueue latency reduction)
+- `idempotency_bloom.go`: Rotating Bloom filters for performance optimization
+  - **Idempotency Bloom**: Best-effort probabilistic filter (1M capacity, 1% FP rate, 30min rotation) for Enqueue fast-path. Eliminates negative Redis lookups for fresh idempotency keys (20-30% enqueue latency reduction).
+  - **Ghost Bloom**: Ultra-precise filter (2M capacity, 1e-12 FP rate, 6hr rotation) for Claim fast-path. Skips HGET for administratively deleted tasks whose IDs remain in queues.
 
 - `result_repository.go`: Result storage
   - `SaveResult()`: Store task result (HSET)

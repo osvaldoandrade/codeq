@@ -93,6 +93,8 @@ See: `pkg/domain/domain_test.go`
 
 **Task Repository**:
 - Enqueue with idempotency
+- Idempotency Bloom filter optimization (skip negative GET)
+- Ghost Bloom filter optimization (skip HGET for deleted tasks)
 - Priority-based claim
 - Nack with DLQ handling
 - Delayed queue scheduling
@@ -116,6 +118,24 @@ See: `pkg/domain/domain_test.go`
 - Cleanup expired subscriptions
 
 See: `internal/repository/*_test.go`
+
+**Bloom Filter Optimization Tests**:
+
+The repository includes specific tests for both Bloom filter optimizations:
+
+1. **`TestEnqueueIdempotentBloomSkipsNegativeGet`** (`task_repository_test.go:83`):
+   - Validates that first-time idempotency keys skip Redis GET entirely
+   - Uses `redisCmdCountHook` to verify zero GET operations on first enqueue
+   - Confirms fallback to Redis GET on subsequent duplicate enqueue
+   - Tests the idempotency Bloom filter fast-path optimization
+
+2. **`TestClaimGhostBloomSkipsHGet`** (`task_repository_test.go:143`):
+   - Simulates administratively deleted task (HDEL) with stale ID in queue
+   - Uses `redisCmdCountHook` to verify HGET is skipped after ghost filter learns the deletion
+   - Tests that ghost Bloom filter reduces wasted HGET operations during Claim
+   - Validates queue cleanup (SREM) when ghost task is detected
+
+These tests ensure the Bloom filter optimizations deliver measurable Redis operation reductions without compromising correctness.
 
 ### Services Layer (66.7%)
 

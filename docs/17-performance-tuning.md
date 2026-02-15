@@ -1185,6 +1185,124 @@ memory: ~3.6 MB
 - False positives are handled by standard Redis conflict resolution
 - SETNX remains the source of truth for idempotency
 
+## 11) Ghost Task Bloom Filter Optimization
+
+### Overview
+
+The ghost Bloom filter is a second in-process optimization that accelerates the Claim path by skipping Redis HGET operations for tasks that have been administratively deleted but whose IDs remain in pending queues.
+
+**What are ghost tasks?**
+
+When administrators use cleanup endpoints to delete old tasks, the task JSON is removed from the hash (`HDEL`), but stale task IDs may remain in various queues (pending, delayed, in-progress). These "ghost" IDs cause unnecessary Redis HGET operations during Claim that return nil/empty results.
+
+**How it works:**
+
+During the Claim flow:
+
+1. **RPOP + SADD**: Atomic Lua script moves ID from pending to in-progress
+2. **Ghost filter check**: Query `ghostBloom.MaybeHas(id)` before HGET
+3. **If definitely deleted**: Skip HGET, clean up queue references (SREM), and continue
+4. **If maybe exists**: Proceed with standard HGET to load task JSON
+5. **On HGET nil**: Add ID to ghost filter for future claims
+
+**Key characteristics:**
+
+- **Ultra-low false positive rate**: 1e-12 (one in a trillion) to minimize unnecessary HGETs
+- **Larger capacity**: 2M keys to track deleted task history over longer periods
+- **Longer rotation**: 6 hours (vs 30 minutes for idempotency) to retain ghost knowledge
+- **Thread-safe**: Uses atomic operations for lock-free concurrent access
+- **Default sizing**: 2M keys capacity, 1e-12 false positive rate (~4.3 MB RAM per filter, ~8.6 MB total)
+
+**Performance impact:**
+
+- **Benefit**: Eliminates Redis HGET round-trip for deleted tasks still in queues
+- **Typical improvement**: Reduces wasted Claim iterations when pending queues have stale IDs
+- **Memory footprint**: ~8.6 MB per API server instance (acceptable for optimization)
+- **CPU overhead**: Minimal (simple bit operations)
+
+**When it helps:**
+
+- ✅ Frequent administrative cleanup operations
+- ✅ Long-lived queues with accumulated stale task IDs
+- ✅ High Claim throughput (reduces Redis load)
+- ❌ No benefit for fresh systems without cleanup history
+- ❌ Limited benefit for workloads with infrequent admin deletions
+
+**Monitoring:**
+
+The ghost Bloom filter operates transparently. Indirect benefits can be observed via:
+
+````bash
+# Claim success rate (should increase if ghost tasks were causing retries)
+sum(rate(codeq_task_claimed_total[5m])) / sum(rate(codeq_claim_attempts_total[5m]))
+
+# Redis HGET operations (should decrease for queues with stale IDs)
+rate(redis_commands_total{cmd="hget"}[5m])
+````
+
+**Configuration:**
+
+The ghost Bloom filter is currently hardcoded with strict defaults:
+
+````go
+// internal/repository/task_repository.go
+ghostBloom: newIdempotencyBloom(
+    2_000_000,     // n: capacity for deleted task history
+    1e-12,         // fpRate: extremely low false positive rate
+    6*time.Hour,   // rotateEvery: long retention window
+)
+````
+
+**Design rationale:**
+
+- **Higher capacity (2M vs 1M)**: Tracks more deleted tasks over longer periods
+- **Lower FP rate (1e-12 vs 0.01)**: Minimizes false positives (wasteful HGETs are worse here)
+- **Longer rotation (6hr vs 30min)**: Deleted task IDs need longer-term memory
+
+### Memory Footprint
+
+The ghost Bloom filter memory usage calculation:
+
+````
+memory_bytes = ceil(-(2,000,000 × ln(1e-12)) / (ln(2)²)) / 8
+             ≈ 4.3 MB per filter
+             ≈ 8.6 MB total (current + previous)
+````
+
+**Comparison with idempotency Bloom filter:**
+
+| Filter Type   | Capacity | FP Rate | Rotation | Memory  | Use Case                    |
+|---------------|----------|---------|----------|---------|----------------------------|
+| Idempotency   | 1M       | 0.01    | 30min    | ~2.4 MB | Skip GET on fresh keys     |
+| Ghost         | 2M       | 1e-12   | 6hr      | ~8.6 MB | Skip HGET on deleted tasks |
+| **Total**     | -        | -       | -        | **~11 MB** | Per API server instance |
+
+### Trade-offs
+
+**Benefits:**
+- Eliminates HGET for deleted tasks during Claim
+- Reduces wasted Claim iterations in queues with stale IDs
+- Zero impact on correctness (HGET nil check remains authoritative)
+- Lock-free concurrent access
+
+**Costs:**
+- Memory overhead (~8.6 MB per server)
+- Small CPU overhead for hashing (negligible)
+- Extremely rare false positives (~1 in 1 trillion) force HGET fallback
+
+**Correctness guarantees:**
+- False negatives are impossible (Bloom filter property)
+- False positives are extremely rare and handled by standard nil check
+- HGET remains the source of truth for task existence
+
+### Future Configuration Support
+
+These parameters may become configurable:
+
+- `GHOST_BLOOM_CAPACITY`: Number of deleted task IDs to track (default: 2,000,000)
+- `GHOST_BLOOM_FP_RATE`: False positive rate (default: 1e-12)
+- `GHOST_BLOOM_ROTATE_HOURS`: Rotation interval in hours (default: 6)
+
 ## Summary
 
 Performance tuning requires balancing throughput, latency, and resource costs. Start with recommended defaults, monitor key metrics, and adjust based on observed bottlenecks. Scale API servers horizontally and KVRocks vertically. Use decision trees to select appropriate lease durations, backoff policies, and webhook configurations. For extreme scale, plan for sharding or multi-region deployments.
