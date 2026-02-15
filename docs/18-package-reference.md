@@ -470,7 +470,7 @@ Queue depth gauges are collected from Redis, so all API replicas report identica
 
 **Purpose**: Legacy JWKS validator copied from the private `codecompany/identity-middleware` package.
 
-**Replacement**: Use [`pkg/auth/jwks`](../pkg/auth/jwks) instead. The new plugin-based authentication system provides cleaner interfaces and better extensibility.
+**Replacement**: Use [`pkg/auth/jwks/validator.go`](../pkg/auth/jwks/validator.go) instead. The new plugin-based authentication system provides cleaner interfaces and better extensibility.
 
 **Why it exists**: This code was copied to remove the private dependency and allow anyone to build codeQ without access to private repositories. It served as a reference implementation during migration.
 
