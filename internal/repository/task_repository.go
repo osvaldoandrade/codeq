@@ -17,9 +17,16 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	minPriority           = 0
+	maxPriority           = 9
+	taskRetention         = 24 * time.Hour
+	defaultInspectLimit   = 200 // Default number of tasks to inspect for lease expiration
+)
+
 type TaskRepository interface {
-	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time) (*domain.Task, error)
-	Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int) (*domain.Task, bool, error)
+	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
+	Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error)
 	Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error
 	Abandon(ctx context.Context, taskID string, workerID string) error
 	Nack(ctx context.Context, taskID string, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error)
@@ -62,30 +69,34 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 	}
 }
 
-// ===== Retenção lógica (não TTL nativo) =====
-const taskRetention = 24 * time.Hour // 24h conforme solicitado
-
-const (
-	minPriority = 0
-	maxPriority = 9
-)
-
 // ===== Chaves Redis =====
 func (r *taskRedisRepo) keyTasksHash() string { return "codeq:tasks" }     // HASH único: field = id, value = JSON
 func (r *taskRedisRepo) keyTTLIndex() string  { return "codeq:tasks:ttl" } // ZSET: member=id, score=expireAt (epoch)
 
 func (r *taskRedisRepo) keyLease(id string) string { return fmt.Sprintf("codeq:lease:%s", id) }
-func (r *taskRedisRepo) keyQueuePending(cmd domain.Command, priority int) string {
-	return fmt.Sprintf("codeq:q:%s:pending:%d", strings.ToLower(string(cmd)), priority)
+func (r *taskRedisRepo) keyQueuePending(cmd domain.Command, priority int, tenantID string) string {
+	if tenantID == "" {
+		return fmt.Sprintf("codeq:q:%s:pending:%d", strings.ToLower(string(cmd)), priority)
+	}
+	return fmt.Sprintf("codeq:q:%s:%s:pending:%d", strings.ToLower(string(cmd)), tenantID, priority)
 }
-func (r *taskRedisRepo) keyQueueInprog(cmd domain.Command) string {
-	return fmt.Sprintf("codeq:q:%s:inprog", strings.ToLower(string(cmd)))
+func (r *taskRedisRepo) keyQueueInprog(cmd domain.Command, tenantID string) string {
+	if tenantID == "" {
+		return fmt.Sprintf("codeq:q:%s:inprog", strings.ToLower(string(cmd)))
+	}
+	return fmt.Sprintf("codeq:q:%s:%s:inprog", strings.ToLower(string(cmd)), tenantID)
 }
-func (r *taskRedisRepo) keyQueueDelayed(cmd domain.Command) string {
-	return fmt.Sprintf("codeq:q:%s:delayed", strings.ToLower(string(cmd)))
+func (r *taskRedisRepo) keyQueueDelayed(cmd domain.Command, tenantID string) string {
+	if tenantID == "" {
+		return fmt.Sprintf("codeq:q:%s:delayed", strings.ToLower(string(cmd)))
+	}
+	return fmt.Sprintf("codeq:q:%s:%s:delayed", strings.ToLower(string(cmd)), tenantID)
 }
-func (r *taskRedisRepo) keyQueueDLQ(cmd domain.Command) string {
-	return fmt.Sprintf("codeq:q:%s:dlq", strings.ToLower(string(cmd)))
+func (r *taskRedisRepo) keyQueueDLQ(cmd domain.Command, tenantID string) string {
+	if tenantID == "" {
+		return fmt.Sprintf("codeq:q:%s:dlq", strings.ToLower(string(cmd)))
+	}
+	return fmt.Sprintf("codeq:q:%s:%s:dlq", strings.ToLower(string(cmd)), tenantID)
 }
 func (r *taskRedisRepo) keyIdempotency(key string) string {
 	return fmt.Sprintf("codeq:idempo:%s", key)
@@ -148,12 +159,15 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 	// tenta descobrir a fila pelo JSON antes de deletar
 	var cmdOpt *domain.Command
 	var prioOpt *int
+	var tenantIDOpt *string
 	if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
 		if t, err2 := unmarshalTask(js); err2 == nil {
 			cmd := t.Command
 			cmdOpt = &cmd
 			prio := normalizePriority(t.Priority)
 			prioOpt = &prio
+			tid := t.TenantID
+			tenantIDOpt = &tid
 		}
 	}
 
@@ -162,24 +176,33 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 	pipe.ZRem(ctx, r.keyTTLIndex(), id)
 	pipe.Del(ctx, r.keyLease(id))
 	if cmdOpt != nil {
+		tenantID := ""
+		if tenantIDOpt != nil {
+			tenantID = *tenantIDOpt
+		}
 		if prioOpt != nil {
-			pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, *prioOpt), 0, id)
+			pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, *prioOpt, tenantID), 0, id)
 		} else {
 			for p := maxPriority; p >= minPriority; p-- {
-				pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, p), 0, id)
+				pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, p, tenantID), 0, id)
 			}
 		}
-		pipe.LRem(ctx, r.keyQueueInprog(*cmdOpt), 0, id)
-		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt), id)
-		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt), 0, id)
+		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt, tenantID), id)
+		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt, tenantID), id)
+		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), 0, id)
 	} else {
+		// Try both with and without tenant to ensure cleanup when tenant is unknown
+		// This handles cases where we don't know which tenant the task belongs to
 		for _, c := range r.allCommands() {
 			for p := maxPriority; p >= minPriority; p-- {
-				pipe.LRem(ctx, r.keyQueuePending(c, p), 0, id)
+				// Try legacy queue (no tenant)
+				pipe.LRem(ctx, r.keyQueuePending(c, p, ""), 0, id)
+				// Note: Cannot enumerate all possible tenants, so orphaned tenant-specific
+				// tasks would need manual cleanup or a separate background job
 			}
-			pipe.LRem(ctx, r.keyQueueInprog(c), 0, id)
-			pipe.ZRem(ctx, r.keyQueueDelayed(c), id)
-			pipe.LRem(ctx, r.keyQueueDLQ(c), 0, id)
+			pipe.SRem(ctx, r.keyQueueInprog(c, ""), id)
+			pipe.ZRem(ctx, r.keyQueueDelayed(c, ""), id)
+			pipe.LRem(ctx, r.keyQueueDLQ(c, ""), 0, id)
 		}
 	}
 	_, err := pipe.Exec(ctx)
@@ -188,15 +211,15 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 
 // ===== Implementação =====
 
-func (r *taskRedisRepo) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time) (*domain.Task, error) {
+func (r *taskRedisRepo) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
 	if strings.TrimSpace(idempotencyKey) != "" {
-		return r.enqueueIdempotent(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt)
+		return r.enqueueIdempotent(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 	}
 	id := uuid.NewString()
-	return r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt)
+	return r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
 }
 
-func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time) (*domain.Task, error) {
+func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
 	idKey := r.keyIdempotency(idempotencyKey)
 	if existingID, err := r.rdb.Get(ctx, idKey).Result(); err == nil && existingID != "" {
 		if task, err := r.Get(ctx, existingID); err == nil {
@@ -217,7 +240,7 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 		}
 		return nil, fmt.Errorf("idempotency conflict")
 	}
-	task, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt)
+	task, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
 	if err != nil {
 		_ = r.rdb.Del(ctx, idKey).Err()
 		return nil, err
@@ -225,7 +248,7 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 	return task, nil
 }
 
-func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time) (*domain.Task, error) {
+func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, error) {
 	now := r.now()
 	priority = normalizePriority(priority)
 
@@ -238,6 +261,7 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 		Attempts:    0,
 		MaxAttempts: maxAttempts,
 		Status:      domain.StatusPending,
+		TenantID:    tenantID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -256,11 +280,11 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 	// Enfileira na lista pending (imediato) ou no ZSET delayed (agendado).
 	if !visibleAt.IsZero() && visibleAt.After(now) {
 		visibleAtUnix := visibleAt.UTC().Unix()
-		if err := r.rdb.ZAdd(ctx, r.keyQueueDelayed(cmd), &redis.Z{Score: float64(visibleAtUnix), Member: id}).Err(); err != nil {
+		if err := r.rdb.ZAdd(ctx, r.keyQueueDelayed(cmd, tenantID), &redis.Z{Score: float64(visibleAtUnix), Member: id}).Err(); err != nil {
 			return nil, fmt.Errorf("redis ZADD delayed: %w", err)
 		}
 	} else {
-		if err := r.rdb.LPush(ctx, r.keyQueuePending(cmd, priority), id).Err(); err != nil {
+		if err := r.rdb.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID), id).Err(); err != nil {
 			return nil, fmt.Errorf("redis LPUSH queue: %w", err)
 		}
 	}
@@ -269,16 +293,56 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 	return &task, nil
 }
 
-func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int) (int, error) {
-	inprog := r.keyQueueInprog(cmd)
-	ids, err := r.rdb.LRange(ctx, inprog, 0, int64(inspectLimit-1)).Result()
-	if err != nil && err != redis.Nil {
-		return 0, fmt.Errorf("LRange inprog: %w", err)
+// claimMoveScript atomically pops one ID from the pending list and tracks it in the in-progress set.
+//
+// It also skips duplicate IDs that may exist in pending while already in in-progress (best-effort
+// self-healing for rare duplication bugs).
+//
+// KEYS[1] = pending list key
+// KEYS[2] = in-progress set key
+// ARGV[1] = max inner iterations (int)
+var claimMoveScript = redis.NewScript(`
+local src = KEYS[1]
+local dst = KEYS[2]
+local maxIter = tonumber(ARGV[1]) or 1
+for i=1,maxIter do
+  local id = redis.call("RPOP", src)
+  if not id then
+    return false
+  end
+  if redis.call("SADD", dst, id) == 1 then
+    return id
+  end
+end
+return false
+`)
+
+func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int, tenantID string) (int, error) {
+	inprog := r.keyQueueInprog(cmd, tenantID)
+	if inspectLimit <= 0 {
+		inspectLimit = defaultInspectLimit
 	}
-	moved := 0
+	ids, err := r.rdb.SRandMemberN(ctx, inprog, int64(inspectLimit)).Result()
+	if err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("SRANDMEMBER inprog: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	pipe := r.rdb.Pipeline()
+	ttlCmds := make([]*redis.DurationCmd, 0, len(ids))
 	for _, id := range ids {
-		ttl, err := r.rdb.TTL(ctx, r.keyLease(id)).Result()
-		if err != nil {
+		ttlCmds = append(ttlCmds, pipe.TTL(ctx, r.keyLease(id)))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("pipeline TTL leases: %w", err)
+	}
+
+	moved := 0
+	for i, id := range ids {
+		ttl, err := ttlCmds[i].Result()
+		if err != nil && err != redis.Nil {
 			return moved, fmt.Errorf("TTL lease: %w", err)
 		}
 		if ttl <= 0 {
@@ -296,10 +360,10 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 			_, _, err := r.Nack(ctx, id, "", delaySeconds, maxAttemptsDefault, "LEASE_EXPIRED")
 			if err != nil {
 				// fallback to pending if nack fails
-				if err := r.rdb.LRem(ctx, inprog, 0, id).Err(); err != nil {
-					return moved, fmt.Errorf("LREM inprog: %w", err)
+				if err := r.rdb.SRem(ctx, inprog, id).Err(); err != nil {
+					return moved, fmt.Errorf("SREM inprog: %w", err)
 				}
-				if err := r.rdb.LPush(ctx, r.keyQueuePending(cmd, priority), id).Err(); err != nil {
+				if err := r.rdb.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID), id).Err(); err != nil {
 					return moved, fmt.Errorf("LPUSH pending: %w", err)
 				}
 			}
@@ -310,7 +374,9 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 }
 
 func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
-	delayed := r.keyQueueDelayed(cmd)
+	// For backwards compatibility, check both legacy and tenant-specific queues
+	// This handles tasks created before tenant isolation was implemented
+	delayed := r.keyQueueDelayed(cmd, "")
 	if limit <= 0 {
 		limit = 200
 	}
@@ -345,7 +411,7 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		priorities[id] = prio
 		moveIDs = append(moveIDs, id)
 		pipe.ZRem(ctx, delayed, id)
-		pipe.LPush(ctx, r.keyQueuePending(cmd, prio), id)
+		pipe.LPush(ctx, r.keyQueuePending(cmd, prio, t.TenantID), id)
 	}
 	if _, err := pipe.Exec(ctx); err != nil {
 		return 0, err
@@ -367,35 +433,103 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 	return len(moveIDs), nil
 }
 
-func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int) (*domain.Task, bool, error) {
+// moveDueDelayedForTenant moves due tasks from delayed queue to pending for a specific tenant
+func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.Command, limit int, tenantID string) (int, error) {
+	delayed := r.keyQueueDelayed(cmd, tenantID)
+	if limit <= 0 {
+		limit = 200
+	}
+	maxTS := strconv.FormatInt(r.now().UTC().Unix(), 10)
+	zrange := &redis.ZRangeBy{Min: "-inf", Max: maxTS, Offset: 0, Count: int64(limit)}
+
+	ids, err := r.rdb.ZRangeByScore(ctx, delayed, zrange).Result()
+	if err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("ZRANGEBYSCORE delayed: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	pipe := r.rdb.TxPipeline()
+	moveIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
+		if err == redis.Nil || js == "" {
+			pipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("HGET task json: %w", err)
+		}
+		t, err := unmarshalTask(js)
+		if err != nil {
+			pipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		prio := normalizePriority(t.Priority)
+		moveIDs = append(moveIDs, id)
+		pipe.ZRem(ctx, delayed, id)
+		pipe.LPush(ctx, r.keyQueuePending(cmd, prio, tenantID), id)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+
+	for _, id := range moveIDs {
+		if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
+			if t, err2 := unmarshalTask(js); err2 == nil {
+				t.Status = domain.StatusPending
+				t.WorkerID = ""
+				t.LeaseUntil = ""
+				t.UpdatedAt = r.now()
+				_ = r.rdb.HSet(ctx, r.keyTasksHash(), id, marshal(t)).Err()
+			}
+		}
+		r.bumpTTL(ctx, id)
+	}
+
+	return len(moveIDs), nil
+}
+
+func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
 	// Move delayed to pending (due tasks) and requeue expired leases
 	for _, cmd := range commands {
+		// Check legacy queue for backward compatibility
 		if _, err := r.MoveDueDelayed(ctx, cmd, inspectLimit); err != nil {
 			return nil, false, err
 		}
-		if _, err := r.requeueExpired(ctx, cmd, inspectLimit, maxAttemptsDefault); err != nil {
+		// Check tenant-specific queue
+		if tenantID != "" {
+			if _, err := r.moveDueDelayedForTenant(ctx, cmd, inspectLimit, tenantID); err != nil {
+				return nil, false, err
+			}
+		}
+		if _, err := r.requeueExpired(ctx, cmd, inspectLimit, maxAttemptsDefault, tenantID); err != nil {
 			return nil, false, err
 		}
 	}
 
 	tryPop := func(cmd domain.Command, priority int) (*domain.Task, bool, error) {
-		src := r.keyQueuePending(cmd, priority)
-		dst := r.keyQueueInprog(cmd)
+		src := r.keyQueuePending(cmd, priority, tenantID)
+		dst := r.keyQueueInprog(cmd, tenantID)
 
 		for i := 0; i < inspectLimit; i++ {
-			id, err := r.rdb.RPopLPush(ctx, src, dst).Result()
+			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, inspectLimit).Result()
 			if err == redis.Nil {
-				return nil, false, nil // fila vazia
+				return nil, false, nil // empty queue
 			}
 			if err != nil {
-				return nil, false, fmt.Errorf("RPOPLPUSH: %w", err)
+				return nil, false, fmt.Errorf("claim move script: %w", err)
+			}
+			id, ok := res.(string)
+			if !ok || id == "" {
+				return nil, false, nil // fila vazia / no unique id found
 			}
 
 			// Carrega JSON; pode ter sido limpo por admin endpoint
 			js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 			if err == redis.Nil || js == "" {
 				// remove da inprog e tenta novamente
-				_ = r.rdb.LRem(ctx, dst, 0, id).Err()
+				_ = r.rdb.SRem(ctx, dst, id).Err()
 				continue
 			}
 			if err != nil {
@@ -403,14 +537,14 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 			}
 			t, err := unmarshalTask(js)
 			if err != nil {
-				_ = r.rdb.LRem(ctx, dst, 0, id).Err()
+				_ = r.rdb.SRem(ctx, dst, id).Err()
 				continue
 			}
 
 			leaseKey := r.keyLease(id)
 			if err := r.rdb.SetEX(ctx, leaseKey, workerID, time.Duration(leaseSeconds)*time.Second).Err(); err != nil {
 				// Falha ao setar lease → desfaz o move e segue
-				_ = r.rdb.LRem(ctx, dst, 0, id).Err()
+				_ = r.rdb.SRem(ctx, dst, id).Err()
 				_ = r.rdb.LPush(ctx, src, id).Err()
 				return nil, false, fmt.Errorf("SETEX lease: %w", err)
 			}
@@ -490,14 +624,14 @@ func (r *taskRedisRepo) Abandon(ctx context.Context, taskID string, workerID str
 	if err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
-	inprog := r.keyQueueInprog(t.Command)
-	pending := r.keyQueuePending(t.Command, normalizePriority(t.Priority))
+	inprog := r.keyQueueInprog(t.Command, t.TenantID)
+	pending := r.keyQueuePending(t.Command, normalizePriority(t.Priority), t.TenantID)
 
 	if t.WorkerID != workerID {
 		return fmt.Errorf("not-owner")
 	}
-	if err := r.rdb.LRem(ctx, inprog, 0, taskID).Err(); err != nil {
-		return fmt.Errorf("LREM inprog: %w", err)
+	if err := r.rdb.SRem(ctx, inprog, taskID).Err(); err != nil {
+		return fmt.Errorf("SREM inprog: %w", err)
 	}
 	if err := r.rdb.LPush(ctx, pending, taskID).Err(); err != nil {
 		return fmt.Errorf("LPUSH pending: %w", err)
@@ -544,9 +678,9 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 		t.MaxAttempts = 1
 	}
 
-	inprog := r.keyQueueInprog(t.Command)
-	delayed := r.keyQueueDelayed(t.Command)
-	dlq := r.keyQueueDLQ(t.Command)
+	inprog := r.keyQueueInprog(t.Command, t.TenantID)
+	delayed := r.keyQueueDelayed(t.Command, t.TenantID)
+	dlq := r.keyQueueDLQ(t.Command, t.TenantID)
 
 	t.Attempts++
 
@@ -561,7 +695,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 		t.UpdatedAt = r.now()
 
 		pipe := r.rdb.TxPipeline()
-		pipe.LRem(ctx, inprog, 0, taskID)
+		pipe.SRem(ctx, inprog, taskID)
 		pipe.Del(ctx, r.keyLease(taskID))
 		pipe.LPush(ctx, dlq, taskID)
 		pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
@@ -589,7 +723,7 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 	t.UpdatedAt = r.now()
 
 	pipe := r.rdb.TxPipeline()
-	pipe.LRem(ctx, inprog, 0, taskID)
+	pipe.SRem(ctx, inprog, taskID)
 	pipe.Del(ctx, r.keyLease(taskID))
 	pipe.ZAdd(ctx, delayed, &redis.Z{Score: float64(visibleAt), Member: taskID})
 	pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
@@ -618,29 +752,29 @@ func (r *taskRedisRepo) Get(ctx context.Context, taskID string) (*domain.Task, e
 func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
 	for _, cmd := range r.allCommands() {
-		ki := r.keyQueueInprog(cmd)
+		ki := r.keyQueueInprog(cmd, "")
 		for p := maxPriority; p >= minPriority; p-- {
-			kp := r.keyQueuePending(cmd, p)
+			kp := r.keyQueuePending(cmd, p, "")
 			lp, err := r.rdb.LLen(ctx, kp).Result()
 			if err != nil && err != redis.Nil {
 				return nil, err
 			}
 			out[kp] = lp
 		}
-		li, err := r.rdb.LLen(ctx, ki).Result()
+		li, err := r.rdb.SCard(ctx, ki).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
 		out[ki] = li
 
-		kd := r.keyQueueDelayed(cmd)
+		kd := r.keyQueueDelayed(cmd, "")
 		ld, err := r.rdb.ZCard(ctx, kd).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
 		out[kd] = ld
 
-		kdlq := r.keyQueueDLQ(cmd)
+		kdlq := r.keyQueueDLQ(cmd, "")
 		ldlq, err := r.rdb.LLen(ctx, kdlq).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
@@ -653,21 +787,21 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
 	var ready int64
 	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p)).Result()
+		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "")).Result()
 		if err != nil && err != redis.Nil {
 			return nil, err
 		}
 		ready += n
 	}
-	inprog, err := r.rdb.LLen(ctx, r.keyQueueInprog(cmd)).Result()
+	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd)).Result()
+	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
-	dlq, err := r.rdb.LLen(ctx, r.keyQueueDLQ(cmd)).Result()
+	dlq, err := r.rdb.LLen(ctx, r.keyQueueDLQ(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
@@ -683,7 +817,7 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 func (r *taskRedisRepo) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
 	var total int64
 	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p)).Result()
+		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "")).Result()
 		if err != nil && err != redis.Nil {
 			return 0, err
 		}

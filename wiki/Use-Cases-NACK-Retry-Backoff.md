@@ -36,7 +36,7 @@ sequenceDiagram
     Q->>K: Move to DLQ + mark FAILED(MAX_ATTEMPTS)
   else attempts < maxAttempts
     Q->>K: ZADD delayed visibleAt id
-    Q->>K: Clear lease + LREM inprog
+    Q->>K: Clear lease + SREM inprog
     Q->>K: Mark task PENDING (retry)
   end
   Q-->>W: 200 OK

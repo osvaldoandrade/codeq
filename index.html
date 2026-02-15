@@ -419,10 +419,10 @@
                         <div class="text-xl font-bold text-white mb-2">SCHEDULER</div>
                     </div>
                     <div class="flex-1 flex items-center justify-center relative">
-                         <!-- Visual representation of RPOPLPUSH -->
-                         <div class="absolute inset-0 border border-dashed border-slate-700 rounded-full animate-[spin_10s_linear_infinite]"></div>
-                         <i class="fa-solid fa-arrows-rotate text-3xl text-slate-600"></i>
-                         <div class="absolute bg-slate-900 px-2 text-[10px] font-mono text-cyan-400">RPOPLPUSH</div>
+	                     <!-- Visual representation of atomic claim move -->
+	                         <div class="absolute inset-0 border border-dashed border-slate-700 rounded-full animate-[spin_10s_linear_infinite]"></div>
+	                         <i class="fa-solid fa-arrows-rotate text-3xl text-slate-600"></i>
+	                         <div class="absolute bg-slate-900 px-2 text-[10px] font-mono text-cyan-400">EVAL (RPOP + SADD)</div>
                     </div>
                 </div>
 
@@ -537,13 +537,13 @@
                 nodes: ["node-worker", "node-api"],
                 links: [["node-worker", "node-api"]]
             },
-            {
-                title: "4. Atomic Lease",
-                tag: "LOGIC",
-                content: "O <strong>Scheduler</strong> executa `RPOPLPUSH` atômico. Move a tarefa de <strong>Pending</strong> para <strong>In-Progress</strong> e cria uma chave de Lease com TTL.",
-                nodes: ["node-api", "node-scheduler", "node-pending", "node-leases"],
-                links: [["node-api", "node-scheduler"], ["node-scheduler", "node-pending"], ["node-scheduler", "node-leases"]]
-            },
+	            {
+	                title: "4. Atomic Lease",
+	                tag: "LOGIC",
+	                content: "O <strong>Scheduler</strong> executa um Lua script atômico (`RPOP` + `SADD`). Remove a tarefa de <strong>Pending</strong>, registra em <strong>In-Progress</strong> (SET) e cria uma chave de Lease com TTL.",
+	                nodes: ["node-api", "node-scheduler", "node-pending", "node-leases"],
+	                links: [["node-api", "node-scheduler"], ["node-scheduler", "node-pending"], ["node-scheduler", "node-leases"]]
+	            },
             {
                 title: "5. Execution",
                 tag: "PROCESSING",

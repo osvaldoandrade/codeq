@@ -1,6 +1,6 @@
 # Storage layout (KVRocks)
 
-KVRocks implements the Redis protocol and persists to disk. codeQ uses lists, hashes, sorted sets, and TTL keys. Each operation is atomic at the command level.
+KVRocks implements the Redis protocol and persists to disk. codeQ uses lists, hashes, sorted sets, sets, and TTL keys. Each operation is atomic at the command level.
 
 ## Keyspace
 
@@ -10,7 +10,7 @@ All keys are prefixed with `codeq:`.
 - `codeq:results` (hash): field = task ID, value = result JSON.
 - `codeq:tasks:ttl` (ZSET): member = task ID, score = retention cutoff epoch seconds.
 - `codeq:q:<command>:pending:<priority>` (list)
-- `codeq:q:<command>:inprog` (list)
+- `codeq:q:<command>:inprog` (set)
 - `codeq:q:<command>:delayed` (ZSET)
 - `codeq:q:<command>:dlq` (list)
 - `codeq:lease:<id>` (string)
@@ -20,9 +20,11 @@ All keys are prefixed with `codeq:`.
 ## Command usage
 
 - Hash: `HSET`, `HGET`, `HDEL`
-- Lists: `LPUSH`, `RPOPLPUSH`, `LRANGE`, `LLEN`, `LREM`
+- Lists: `LPUSH`, `RPOP`, `LLEN`, `LREM` (pending + dlq)
+- Sets: `SADD`, `SREM`, `SCARD`, `SRANDMEMBER` (in-progress tracking)
 - ZSET: `ZADD`, `ZRANGEBYSCORE`, `ZREM`
 - Keys: `SETEX`, `TTL`, `EXPIRE`, `DEL`
+- Lua: `EVAL` (atomic claim move: `RPOP` + `SADD`)
 
 ## Retention
 

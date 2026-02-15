@@ -421,8 +421,8 @@ Performance varies based on workload, infrastructure, and configuration. These b
 
 **Observations:**
 
-- Claim operations are more expensive due to `RPOPLPUSH` + lease creation
-- Claim-time repair adds latency when in-progress queue is large
+- Claim operations are more expensive due to atomic queue moves (Lua `RPOP` + `SADD`) + lease creation
+- Claim-time repair adds latency when in-progress is large (bounded scan with pipelined `TTL` checks)
 - Reduce `requeueInspectLimit` to improve claim latency under load
 
 **Result submission throughput:**

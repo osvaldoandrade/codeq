@@ -151,8 +151,8 @@ Key references:
 - **Backoff and retries**: `docs/11-backoff.md` - Retry logic
 - **Webhooks**: `docs/12-webhooks.md` - Push notifications
 - **Configuration**: `docs/14-configuration.md` - Config reference
-- **Performance**: `docs/17-performance-tuning.md` - Optimization guide
 - **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
+- **Performance**: `docs/17-performance-tuning.md` - Optimization guide
 - **Migration**: `docs/migration.md` - Upgrade guide
 - **Contributing**: `CONTRIBUTING.md` - Contribution guidelines
 
