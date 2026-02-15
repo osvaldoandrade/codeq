@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the test coverage strategy for the codeq project.
+This document describes the test coverage strategy for the codeq project. The project has comprehensive test coverage for all testable packages, excluding those with private dependencies.
 
 ## Current Coverage
 
@@ -16,6 +16,15 @@ This document describes the test coverage strategy for the codeq project.
 | internal/services | 66.7% | ✅ Good |
 | internal/providers | 76.9% | ✅ Good |
 | pkg/config | 0.0% | ⚠️ Hard to test (env vars) |
+
+### Excluded Packages
+
+The following packages are excluded from coverage metrics due to private dependencies:
+
+- `internal/controllers` - Requires private `identity-middleware`
+- `internal/middleware` - Requires private `identity-middleware`
+- `pkg/app` - Integration package with private dependencies
+- `cmd/codeq` - CLI application (tested separately in release workflow)
 
 ## Test Infrastructure
 
@@ -228,6 +237,7 @@ To reach 70% overall coverage:
 
 ## Notes
 
+- Controllers and middleware cannot be tested without private dependencies
 - The `pkg/config` package is difficult to test due to environment variable parsing
 - CLI tests are run separately in the release workflow
 - Focus is on testable business logic: backoff, repository, services, domain, providers
