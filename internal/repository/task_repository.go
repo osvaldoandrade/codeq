@@ -74,7 +74,7 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		idempoBloom: newIdempotencyBloom(1_000_000, 0.01, 30*time.Minute),
 		// Best-effort local filter to skip redundant cleanup work when the same expired IDs
 		// are observed multiple times (e.g., concurrent or repeated cleanup cycles).
-		cleanupBloom: newIdempotencyBloom(2_000_000, 1e-12, 6*time.Hour),
+		cleanupBloom: newIdempotencyBloom(2_000_000, 0.01, 6*time.Hour),
 		// Best-effort local filter to short-circuit "ghost" task IDs already known to be deleted.
 		// This reduces Claim-path Redis HGET pressure when admin cleanup leaves stale IDs in queues.
 		ghostBloom: newIdempotencyBloom(2_000_000, 1e-12, 6*time.Hour),
