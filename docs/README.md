@@ -21,7 +21,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 3. `docs/03-architecture.md` - System architecture and components
 4. `docs/04-http-api.md` - HTTP API reference
 5. `docs/05-queueing-model.md` - Queue semantics and behavior
-6. `docs/06-sharding.md` - Sharding overview and design reference
+6. `docs/06-sharding.md` - Sharding strategy (future)
 7. `docs/07-storage-kvrocks.md` - KVRocks storage layout
 8. `docs/08-consistency.md` - Consistency guarantees
 9. `docs/09-security.md` - Authentication and authorization
