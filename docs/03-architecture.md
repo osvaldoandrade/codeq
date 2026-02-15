@@ -33,13 +33,13 @@
 - **`internal/middleware`**: Authentication and request processing
   - `auth.go`: Producer token validation (JWKS-based via plugin system)
   - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
-  - `rate_limit.go`: Token bucket rate limiting per bearer token
-  - `tenant.go`: Tenant ID extraction from JWT claims
-  - `worker_scope.go`: Event type authorization filter
-  - `require_admin.go`: Admin endpoint protection
-  - `any_auth.go`: Either producer or worker token
-  - `logger.go`: Request logging
-  - `request_id.go`: Correlation ID injection
+  - `any_auth.go`: Accepts either producer OR worker tokens for read-only endpoints (GET `/tasks/:id`, GET `/tasks/:id/result`)
+  - `rate_limit.go`: Token bucket rate limiting per bearer token (applies to producer enqueue, worker claim, admin cleanup)
+  - `tenant.go`: Tenant ID extraction from JWT claims for multi-tenant isolation
+  - `worker_scope.go`: Event type authorization filter (validates JWT scopes like `codeq:claim`, `codeq:result`)
+  - `require_admin.go`: Admin endpoint protection (requires `admin:true` claim)
+  - `logger.go`: Request logging middleware
+  - `request_id.go`: Correlation ID injection via `X-Request-Id` header (generates 16-byte hex random ID if not provided by client)
 - **`internal/services`**: Business logic layer
   - `scheduler_service.go`: Task claim, NACK, repair, requeue logic
   - `results_service.go`: Result storage and validation

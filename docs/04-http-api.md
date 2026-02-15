@@ -6,7 +6,7 @@ All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 
 - `Content-Type: application/json`
 - `Authorization: Bearer <token>`
-- `X-Request-Id` (optional)
+- `X-Request-Id` (optional): Correlation ID for request tracing. If not provided, the server generates a 16-byte hex random ID and includes it in the response header for log correlation.
 
 ## Tenant Isolation
 

@@ -64,6 +64,8 @@ Rate limit configuration is per scope (producer, worker, webhook, admin). Each s
 
 Both values must be greater than zero to enable rate limiting for a scope.
 
+**Note:** The `webhook` scope is currently reserved for future use and is not yet implemented in the codebase. Only `producer`, `worker`, and `admin` scopes are actively enforced.
+
 ### YAML configuration
 
 ````yaml
@@ -93,8 +95,8 @@ rateLimit:
 ### Metrics
 
 Rate limit rejections are tracked by the `codeq_rate_limit_hits_total` counter with labels:
-- `scope`: `producer`, `worker`, `webhook`, or `admin`
-- `operation`: `create_task`, `claim`, `queue_ready`, `task_result`, or `cleanup`
+- `scope`: `producer`, `worker`, or `admin` (webhook scope reserved for future use)
+- `operation`: `create_task`, `claim`, or `cleanup`
 
 ### Example: setting producer limits
 
