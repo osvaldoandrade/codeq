@@ -10,6 +10,20 @@ This document defines a safe migration path from the legacy scheduler/results st
 - Pending queue keys now include priority tier: `pending:<priority>`.
 - Result records are stored in `codeq:results` (new).
 
+## ⚠️ Breaking Changes
+
+**In-progress queue data structure change (v1.1.0+)**:
+
+The in-progress queue changed from Redis LIST to SET for O(1) removal performance:
+- **Old**: `codeq:q:<command>:inprog` was a LIST (RPOPLPUSH, LREM)
+- **New**: `codeq:q:<command>:inprog` is a SET (RPOP + SADD via Lua, SREM)
+
+**Migration impact**: Existing deployments with in-progress tasks **must drain or convert** before upgrading:
+- **Recommended**: Drain all in-progress queues before upgrade (Option A below)
+- **Alternative**: Manual conversion using `LRANGE` + `SADD` + `DEL` during freeze window
+
+This change significantly improves claim-time repair performance by eliminating O(N) LREM operations.
+
 ## Key mapping
 
 | Legacy key | New key | Notes |
@@ -28,7 +42,7 @@ This document defines a safe migration path from the legacy scheduler/results st
 ### Option A: drain and cut over (recommended)
 
 1. **Freeze producers** that write to the legacy scheduler.
-2. **Let workers drain** the legacy queues until pending lists and in-progress sets are empty.
+2. **Let workers drain** the legacy queues until pending sets and in-progress sets are empty.
 3. **Deploy codeQ** and point producers/workers to `/v1/codeq`.
 4. **Verify** new tasks are stored under `codeq:`.
 
