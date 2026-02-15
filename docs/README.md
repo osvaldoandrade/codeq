@@ -38,8 +38,8 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Integration Guides
 
-- `docs/integrations/21-java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
-- `docs/integrations/22-nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
+- `docs/integrations/java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
+- `docs/integrations/nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
 - `sdks/README.md` - SDK overview and quick start guide
 - `examples/` - Working example applications
 

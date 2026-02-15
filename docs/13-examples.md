@@ -295,7 +295,7 @@ public class OrderWorker {
 
 **Full example**: [examples/java/springboot](../examples/java/springboot/)
 
-**Integration guide**: [Java Integration Guide](integrations/21-java-integration.md)
+**Integration guide**: [Java Integration Guide](integrations/java-integration.md)
 
 ---
 
@@ -377,7 +377,7 @@ export class OrderWorker {
 
 **Full example**: [examples/nodejs/nestjs](../examples/nodejs/nestjs/)
 
-**Integration guide**: [Node.js Integration Guide](integrations/22-nodejs-integration.md)
+**Integration guide**: [Node.js Integration Guide](integrations/nodejs-integration.md)
 
 ## Additional Resources
 
@@ -386,6 +386,6 @@ export class OrderWorker {
 - **CLI Reference**: [15-cli-reference.md](15-cli-reference.md)
 - **All Examples**: [examples/](../examples/)
 - **Integration Guides**:
-  - [Java Integration](integrations/21-java-integration.md)
-  - [Node.js Integration](integrations/22-nodejs-integration.md)
+  - [Java Integration](integrations/java-integration.md)
+  - [Node.js Integration](integrations/nodejs-integration.md)
 

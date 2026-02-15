@@ -85,13 +85,13 @@ This PR introduces comprehensive SDK support and integration examples for Java a
 ### 3. Documentation
 
 #### Integration Guides
-- `docs/integrations/21-java-integration.md`: Complete Java guide
+- `docs/integrations/java-integration.md`: Complete Java guide
   - SDK installation
   - Spring Boot, Quarkus, Micronaut integration
   - Best practices
   - Troubleshooting
 
-- `docs/integrations/22-nodejs-integration.md`: Complete Node.js guide
+- `docs/integrations/nodejs-integration.md`: Complete Node.js guide
   - SDK installation
   - Express, NestJS, React integration
   - Best practices
@@ -383,8 +383,8 @@ Fully backward compatible. Existing HTTP API clients continue to work unchanged.
    - Review `examples/nodejs/nestjs/`
 
 3. **Documentation**:
-   - Read `docs/integrations/21-java-integration.md`
-   - Read `docs/integrations/22-nodejs-integration.md`
+   - Read `docs/integrations/java-integration.md`
+   - Read `docs/integrations/nodejs-integration.md`
 
 4. **Deployment**:
    - Review `deploy/kubernetes/`
