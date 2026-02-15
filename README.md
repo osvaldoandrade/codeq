@@ -23,6 +23,7 @@ codeQ provides:
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
 - **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
 
 ## Get started
 
