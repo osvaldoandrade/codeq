@@ -31,7 +31,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
 17. `docs/17-performance-tuning.md` - Performance optimization guide
 18. `docs/18-developer-guide.md` - Contributing and internal architecture
-18. `docs/18-package-reference.md` - Package structure and codebase guide
+- `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
 20. `docs/20-authentication-plugins.md` - Plugin-based authentication system
 
@@ -41,14 +41,6 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 22. `docs/integrations/22-nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
 - `sdks/README.md` - SDK overview and quick start guide
 - `examples/` - Working example applications
-
-### Explanation (Understanding-Oriented)
-
-17. `docs/17-performance-tuning.md` - Performance optimization and scaling
-18. `docs/18-developer-guide.md` - Contributing and internal architecture
-18. `docs/18-package-reference.md` - Package structure and codebase guide
-19. `docs/19-testing.md` - Test coverage and testing strategy
-20. `docs/20-authentication-plugins.md` - Plugin-based authentication system
 
 ### Migration Guides
 
