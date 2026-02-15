@@ -331,10 +331,8 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 }
 
 func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
-	// For backwards compatibility, we need to move tasks from both tenant-specific
-	// and non-tenant queues. This method doesn't receive tenantID, so we'll just
-	// handle the legacy case. For tenant-specific delayed queue moves, we would need
-	// a new method or to update this signature in a future refactor.
+	// For backwards compatibility, check both legacy and tenant-specific queues
+	// This handles tasks created before tenant isolation was implemented
 	delayed := r.keyQueueDelayed(cmd, "")
 	if limit <= 0 {
 		limit = 200
@@ -394,11 +392,75 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 	return len(moveIDs), nil
 }
 
+// moveDueDelayedForTenant moves due tasks from delayed queue to pending for a specific tenant
+func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.Command, limit int, tenantID string) (int, error) {
+	delayed := r.keyQueueDelayed(cmd, tenantID)
+	if limit <= 0 {
+		limit = 200
+	}
+	maxTS := strconv.FormatInt(r.now().UTC().Unix(), 10)
+	zrange := &redis.ZRangeBy{Min: "-inf", Max: maxTS, Offset: 0, Count: int64(limit)}
+
+	ids, err := r.rdb.ZRangeByScore(ctx, delayed, zrange).Result()
+	if err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("ZRANGEBYSCORE delayed: %w", err)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	pipe := r.rdb.TxPipeline()
+	moveIDs := make([]string, 0, len(ids))
+	for _, id := range ids {
+		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
+		if err == redis.Nil || js == "" {
+			pipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		if err != nil {
+			return 0, fmt.Errorf("HGET task json: %w", err)
+		}
+		t, err := unmarshalTask(js)
+		if err != nil {
+			pipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		prio := normalizePriority(t.Priority)
+		moveIDs = append(moveIDs, id)
+		pipe.ZRem(ctx, delayed, id)
+		pipe.LPush(ctx, r.keyQueuePending(cmd, prio, tenantID), id)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+
+	for _, id := range moveIDs {
+		if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
+			if t, err2 := unmarshalTask(js); err2 == nil {
+				t.Status = domain.StatusPending
+				t.WorkerID = ""
+				t.LeaseUntil = ""
+				t.UpdatedAt = r.now()
+				_ = r.rdb.HSet(ctx, r.keyTasksHash(), id, marshal(t)).Err()
+			}
+		}
+		r.bumpTTL(ctx, id)
+	}
+
+	return len(moveIDs), nil
+}
+
 func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
 	// Move delayed to pending (due tasks) and requeue expired leases
 	for _, cmd := range commands {
+		// Check legacy queue for backward compatibility
 		if _, err := r.MoveDueDelayed(ctx, cmd, inspectLimit); err != nil {
 			return nil, false, err
+		}
+		// Check tenant-specific queue
+		if tenantID != "" {
+			if _, err := r.moveDueDelayedForTenant(ctx, cmd, inspectLimit, tenantID); err != nil {
+				return nil, false, err
+			}
 		}
 		if _, err := r.requeueExpired(ctx, cmd, inspectLimit, maxAttemptsDefault, tenantID); err != nil {
 			return nil, false, err
