@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +12,32 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 )
+
+type redisCmdCountHook struct {
+	gets atomic.Int64
+}
+
+func (h *redisCmdCountHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (h *redisCmdCountHook) AfterProcess(ctx context.Context, cmd redis.Cmder) error {
+	if strings.EqualFold(cmd.Name(), "get") {
+		h.gets.Add(1)
+	}
+	return nil
+}
+
+func (h *redisCmdCountHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
+	return ctx, nil
+}
+
+func (h *redisCmdCountHook) AfterProcessPipeline(ctx context.Context, cmds []redis.Cmder) error {
+	for _, cmd := range cmds {
+		_ = h.AfterProcess(ctx, cmd)
+	}
+	return nil
+}
 
 func setupRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redis.Client, TaskRepository) {
 	return setupRepoWithBackoff(t, "exp_full_jitter", 1, 10)
@@ -46,6 +73,40 @@ func TestEnqueueIdempotent(t *testing.T) {
 	key := "codeq:q:" + strings.ToLower(string(cmd)) + ":pending:0"
 	if n, _ := rdb.LLen(ctx, key).Result(); n != 1 {
 		t.Fatalf("expected 1 pending item, got %d", n)
+	}
+}
+
+func TestEnqueueIdempotentBloomSkipsNegativeGet(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis start: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	hook := &redisCmdCountHook{}
+	rdb.AddHook(hook)
+
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	ctx := context.Background()
+	cmd := domain.CmdGenerateMaster
+
+	_, err = repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-uniq-1", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("enqueue 1: %v", err)
+	}
+	if got := hook.gets.Load(); got != 0 {
+		t.Fatalf("expected 0 Redis GETs on first-seen idempotency key, got %d", got)
+	}
+
+	_, err = repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-uniq-1", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("enqueue 2: %v", err)
+	}
+	if got := hook.gets.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 Redis GET on second enqueue, got %d", got)
 	}
 }
 
