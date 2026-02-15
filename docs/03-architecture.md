@@ -33,6 +33,7 @@
 - **`internal/middleware`**: Authentication and request processing
   - `auth.go`: Producer token validation (JWKS-based via plugin system)
   - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
+  - `tenant.go`: Tenant ID extraction from JWT claims
   - `worker_scope.go`: Event type authorization filter
   - `require_admin.go`: Admin endpoint protection
   - `any_auth.go`: Either producer or worker token
@@ -100,6 +101,46 @@
 2. Service verifies ownership and status.
 3. Service computes backoff delay and moves the task to the delayed queue.
 4. Service clears lease and removes the task from in-progress.
+
+## Multi-Tenant Architecture
+
+CodeQ implements complete tenant isolation at the queue level to support multi-tenant deployments.
+
+### Isolation Guarantees
+
+- **Queue isolation**: Each tenant has dedicated queues for pending, in-progress, delayed, and dead-letter tasks
+- **Data isolation**: Tasks, results, and leases are scoped to tenant IDs
+- **Worker isolation**: Workers can only claim and process tasks from their own tenant
+- **No cross-tenant visibility**: Tenants cannot see or access tasks from other tenants
+
+### Tenant Identification
+
+The tenant ID is automatically extracted from JWT claims during authentication:
+
+1. Checks `tenantId`, `tenant_id`, `organizationId`, or `organization_id` claims
+2. Falls back to JWT `sub` (subject) for single-tenant deployments
+3. Injected into request context via middleware
+4. Used to namespace all queue operations
+
+### Queue Key Namespacing
+
+Queue keys include the tenant ID segment:
+
+- Multi-tenant: `codeq:q:{command}:{tenantID}:pending:{priority}`
+- Single-tenant (backward compatible): `codeq:q:{command}:pending:{priority}`
+
+### Performance Considerations
+
+Tenant isolation does not significantly impact performance:
+
+- Queue operations remain O(1) or O(log n)
+- Redis memory scales linearly with tenant count
+- Each tenant's queues are independent (no cross-tenant contention)
+
+For deployment guidance and multi-tenant configuration, see:
+- Security configuration: `docs/09-security.md`
+- Storage layout: `docs/07-storage-kvrocks.md`
+- Queue semantics: `docs/05-queueing-model.md`
 
 ## Repair flows
 
