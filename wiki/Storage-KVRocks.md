@@ -1,6 +1,6 @@
 # Storage layout (KVRocks)
 
-KVRocks implements the Redis protocol and persists to disk. codeQ uses lists, hashes, sorted sets, and TTL keys. Each operation is atomic at the command level.
+KVRocks implements the Redis protocol and persists to disk. codeQ uses lists, hashes, sorted sets, sets, and TTL keys. Each operation is atomic at the command level.
 
 ## Keyspace
 
@@ -12,7 +12,7 @@ All keys are prefixed with `codeq:`.
 - `codeq:q:<command>:pending:<priority>` (list)
 - `codeq:q:<command>:inprog` (set)
 - `codeq:q:<command>:delayed` (ZSET)
-- `codeq:q:<command>:dlq` (list)
+- `codeq:q:<command>:dlq` (set)
 - `codeq:lease:<id>` (string)
 - `codeq:idempo:<key>` (string)
 - `codeq:subs:<event>` (ZSET): webhook subscriptions with TTL score
@@ -20,8 +20,8 @@ All keys are prefixed with `codeq:`.
 ## Command usage
 
 - Hash: `HSET`, `HGET`, `HDEL`
-- Lists: `LPUSH`, `RPOP`, `LLEN`, `LREM` (pending + dlq)
-- Sets: `SADD`, `SREM`, `SCARD`, `SRANDMEMBER` (in-progress tracking)
+- Lists: `LPUSH`, `RPOP`, `LLEN`, `LREM` (pending)
+- Sets: `SADD`, `SREM`, `SCARD`, `SRANDMEMBER` (in-progress tracking + DLQ)
 - ZSET: `ZADD`, `ZRANGEBYSCORE`, `ZREM`
 - Keys: `SETEX`, `TTL`, `EXPIRE`, `DEL`
 - Lua: `EVAL` (atomic claim move: `RPOP` + `SADD`)

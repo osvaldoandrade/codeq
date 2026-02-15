@@ -420,5 +420,5 @@ cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
 ## See Also
 
 - [Custom Plugin Examples](../examples/custom-auth-plugin.md) - Complete implementations
-- [Migration Guide](21-migration-plugin-system.md) - Upgrading from identity-middleware
+- [Migration Guide](23-migration-plugin-system.md) - Upgrading from identity-middleware
 - [Configuration Reference](14-configuration.md) - All config options

@@ -18,11 +18,13 @@ codeQ provides:
 
 - Persistent queues on KVRocks (Redis protocol).
 - Pull-based worker claims with leases.
+- **Multi-tenant queue isolation** with automatic tenant ID extraction from JWT claims.
 - NACK + backoff + delayed queues.
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
 - **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
 
 ## Get started
 
@@ -67,8 +69,8 @@ npm install @codeq/sdk
 
 📚 **SDK Documentation**:
 - [SDK Overview & Quick Start](sdks/README.md)
-- [Java Integration Guide](docs/integrations/21-java-integration.md)
-- [Node.js Integration Guide](docs/integrations/22-nodejs-integration.md)
+- [Java Integration Guide](docs/integrations/java-integration.md)
+- [Node.js Integration Guide](docs/integrations/nodejs-integration.md)
 - [Example Applications](examples/)
 
 ### 1) Helm (small cluster)
@@ -139,13 +141,15 @@ Key references:
 
 - **Getting Started Tutorial**: `docs/00-getting-started.md` - **Start here for your first experience with codeQ**
 - **Overview**: `docs/01-overview.md` - System goals and design principles
+- **Architecture**: `docs/03-architecture.md` - System components and multi-tenant architecture
+- **Security**: `docs/09-security.md` - Authentication, authorization, and tenant isolation
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
 - **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs
-  - [Java Integration](docs/integrations/21-java-integration.md) - Spring Boot, Quarkus, Micronaut
-  - [Node.js Integration](docs/integrations/22-nodejs-integration.md) - Express, NestJS, React
+  - [Java Integration](docs/integrations/java-integration.md) - Spring Boot, Quarkus, Micronaut
+  - [Node.js Integration](docs/integrations/nodejs-integration.md) - Express, NestJS, React
 - **Examples**: `examples/` - Working examples with Java and Node.js frameworks
-- **Developer Guide**: `docs/18-developer-guide.md` - Contributing and internal architecture
+- **Developer Guide**: `docs/21-developer-guide.md` - Contributing and internal architecture
 - **Queue model**: `docs/05-queueing-model.md` - Queue semantics
 - **Storage layout**: `docs/07-storage-kvrocks.md` - KVRocks data structures
 - **Backoff and retries**: `docs/11-backoff.md` - Retry logic

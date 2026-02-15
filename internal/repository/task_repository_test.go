@@ -32,11 +32,11 @@ func setupRepoWithBackoff(t *testing.T, policy string, baseSeconds int, maxSecon
 func TestEnqueueIdempotent(t *testing.T) {
 	ctx, _, rdb, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	task1, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123", time.Time{})
+	task1, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue 1: %v", err)
 	}
-	task2, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123", time.Time{})
+	task2, err := repo.Enqueue(ctx, cmd, `{"a":1}`, 0, "", 5, "job-123", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue 2: %v", err)
 	}
@@ -52,20 +52,23 @@ func TestEnqueueIdempotent(t *testing.T) {
 func TestPriorityClaim(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	low, err := repo.Enqueue(ctx, cmd, `{"p":0}`, 0, "", 5, "", time.Time{})
+	low, err := repo.Enqueue(ctx, cmd, `{"p":0}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue low: %v", err)
 	}
-	high, err := repo.Enqueue(ctx, cmd, `{"p":9}`, 9, "", 5, "", time.Time{})
+	high, err := repo.Enqueue(ctx, cmd, `{"p":9}`, 9, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue high: %v", err)
 	}
-	got, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
+	got, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5, "")
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	if !ok {
 		t.Fatalf("expected claim to succeed")
+	}
+	if got.LastKnownLocation != domain.LocationInProgress {
+		t.Fatalf("expected lastKnownLocation=%s, got %s", domain.LocationInProgress, got.LastKnownLocation)
 	}
 	if got.ID != high.ID {
 		t.Fatalf("expected high priority task, got %s (low=%s)", got.ID, low.ID)
@@ -76,12 +79,12 @@ func TestClaimRepairRequeuesExpiredLease(t *testing.T) {
 	ctx, mr, rdb, repo := setupRepoWithBackoff(t, "fixed", 1, 1)
 	cmd := domain.CmdGenerateMaster
 
-	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 1, 50, 5)
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 1, 50, 5, "")
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
@@ -98,7 +101,7 @@ func TestClaimRepairRequeuesExpiredLease(t *testing.T) {
 	mr.FastForward(2 * time.Second)
 
 	// Next claim triggers repair; task is requeued to delayed with backoff.
-	_, ok, err = repo.Claim(ctx, "worker-2", []domain.Command{cmd}, 60, 50, 5)
+	_, ok, err = repo.Claim(ctx, "worker-2", []domain.Command{cmd}, 60, 50, 5, "")
 	if err != nil {
 		t.Fatalf("claim 2: %v", err)
 	}
@@ -119,11 +122,11 @@ func TestClaimRepairRequeuesExpiredLease(t *testing.T) {
 func TestNackDelayedAndDLQ(t *testing.T) {
 	ctx, _, rdb, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 3, "", time.Time{})
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 3, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 3)
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 3, "")
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
@@ -141,12 +144,17 @@ func TestNackDelayedAndDLQ(t *testing.T) {
 	if delay != 0 {
 		t.Fatalf("expected delay 0, got %d", delay)
 	}
+	if storedAfterNack, err := repo.Get(ctx, task.ID); err != nil {
+		t.Fatalf("get after nack: %v", err)
+	} else if storedAfterNack.LastKnownLocation != domain.LocationDelayed {
+		t.Fatalf("expected lastKnownLocation=%s after nack, got %s", domain.LocationDelayed, storedAfterNack.LastKnownLocation)
+	}
 
 	if moved, err := repo.MoveDueDelayed(ctx, cmd, 10); err != nil || moved != 1 {
 		t.Fatalf("move due delayed: moved=%d err=%v", moved, err)
 	}
 
-	claimed2, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 3)
+	claimed2, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 3, "")
 	if err != nil || !ok {
 		t.Fatalf("claim 2: ok=%v err=%v", ok, err)
 	}
@@ -168,8 +176,11 @@ func TestNackDelayedAndDLQ(t *testing.T) {
 	if stored.Status != domain.StatusFailed {
 		t.Fatalf("expected failed status, got %s", stored.Status)
 	}
+	if stored.LastKnownLocation != domain.LocationDLQ {
+		t.Fatalf("expected lastKnownLocation=%s in dlq, got %s", domain.LocationDLQ, stored.LastKnownLocation)
+	}
 	dlqKey := "codeq:q:" + strings.ToLower(string(cmd)) + ":dlq"
-	if n, _ := rdb.LLen(ctx, dlqKey).Result(); n != 1 {
+	if n, _ := rdb.SCard(ctx, dlqKey).Result(); n != 1 {
 		t.Fatalf("expected 1 item in dlq, got %d", n)
 	}
 }
@@ -177,11 +188,11 @@ func TestNackDelayedAndDLQ(t *testing.T) {
 func TestCleanupExpired(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	task1, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	task1, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue 1: %v", err)
 	}
-	task2, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 0, "", 5, "", time.Time{})
+	task2, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue 2: %v", err)
 	}
@@ -205,9 +216,12 @@ func TestEnqueueScheduledGoesToDelayed(t *testing.T) {
 	cmd := domain.CmdGenerateMaster
 	runAt := time.Now().UTC().Add(1 * time.Hour)
 
-	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", runAt)
+	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", runAt, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
+	}
+	if task.LastKnownLocation != domain.LocationDelayed {
+		t.Fatalf("expected lastKnownLocation=%s, got %s", domain.LocationDelayed, task.LastKnownLocation)
 	}
 
 	// Should not be visible in pending yet.
@@ -229,12 +243,12 @@ func TestEnqueueScheduledGoesToDelayed(t *testing.T) {
 func TestHeartbeat(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5, "")
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
@@ -248,12 +262,12 @@ func TestHeartbeat(t *testing.T) {
 func TestAbandon(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5)
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 50, 5, "")
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
@@ -267,7 +281,7 @@ func TestAbandon(t *testing.T) {
 func TestAdminQueues(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -284,7 +298,7 @@ func TestAdminQueues(t *testing.T) {
 func TestQueueStats(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -304,7 +318,7 @@ func TestQueueStats(t *testing.T) {
 func TestPendingLength(t *testing.T) {
 	ctx, _, _, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{})
+	_, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

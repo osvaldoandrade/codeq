@@ -172,5 +172,5 @@ Benefits:
 ## See Also
 
 - [Quarkus Documentation](https://quarkus.io/guides/)
-- [CodeQ Java Integration Guide](../../../docs/integrations/21-java-integration.md)
+- [CodeQ Java Integration Guide](../../../docs/integrations/java-integration.md)
 - [CodeQ SDK](../../../sdks/java/core/)

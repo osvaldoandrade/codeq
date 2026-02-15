@@ -184,6 +184,7 @@ func signWorkerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub string)
 		"exp":        now + 3600,
 		"iat":        now - 10,
 		"jti":        "jid-1",
+		"tenantId":   "test-tenant",
 		"eventTypes": []string{string(domain.CmdGenerateMaster)},
 		"scope":      "codeq:claim codeq:heartbeat codeq:abandon codeq:nack codeq:result codeq:subscribe",
 	}
@@ -208,13 +209,14 @@ func signProducerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub strin
 	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
 	now := time.Now().Unix()
 	payload := map[string]any{
-		"iss":   iss,
-		"aud":   aud,
-		"sub":   sub,
-		"exp":   now + 3600,
-		"iat":   now - 10,
-		"jti":   "jid-1",
-		"email": "test@codeq.local",
+		"iss":      iss,
+		"aud":      aud,
+		"sub":      sub,
+		"exp":      now + 3600,
+		"iat":      now - 10,
+		"jti":      "jid-1",
+		"tenantId": "test-tenant",
+		"email":    "test@codeq.local",
 	}
 	enc := func(v any) string {
 		b, _ := json.Marshal(v)

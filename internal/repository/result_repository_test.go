@@ -61,7 +61,7 @@ func TestResultRepositoryGetTask(t *testing.T) {
 	ctx, _, _, repo, taskRepo := setupResultRepo(t)
 
 	// Create a task
-	task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{})
+	task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("Failed to create task: %v", err)
 	}
@@ -93,8 +93,8 @@ func TestResultRepositorySaveAndGetResult(t *testing.T) {
 	ctx, _, _, repo, taskRepo := setupResultRepo(t)
 
 	// Create a task
-	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{})
-	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5)
+	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
+	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Save a result
 	result := map[string]any{"output": "success"}
@@ -137,8 +137,8 @@ func TestResultRepositoryUpdateTaskOnComplete(t *testing.T) {
 	ctx, _, _, repo, taskRepo := setupResultRepo(t)
 
 	// Create and claim a task
-	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{})
-	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5)
+	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
+	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Update task on complete
 	err := repo.UpdateTaskOnComplete(ctx, claimed.ID, domain.StatusCompleted, "")
@@ -157,8 +157,8 @@ func TestResultRepositoryUpdateTaskOnCompleteFailed(t *testing.T) {
 	ctx, _, _, repo, taskRepo := setupResultRepo(t)
 
 	// Create and claim a task
-	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{})
-	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5)
+	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
+	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Update task on failure
 	err := repo.UpdateTaskOnComplete(ctx, claimed.ID, domain.StatusFailed, "test error")
@@ -178,8 +178,8 @@ func TestResultRepositoryRemoveFromInprogAndClearLease(t *testing.T) {
 	ctx, _, _, repo, taskRepo := setupResultRepo(t)
 
 	// Create and claim a task
-	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{})
-	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5)
+	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
+	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Remove from in-progress and clear lease
 	err := repo.RemoveFromInprogAndClearLease(ctx, claimed.ID, domain.CmdGenerateMaster)

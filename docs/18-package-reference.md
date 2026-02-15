@@ -80,7 +80,7 @@ if err != nil {
 **Purpose**: Core domain types (entities, value objects)
 
 **Key files**:
-- `task.go`: `Task`, `Command` types
+- `task.go`: `Task`, `Command`, `TaskStatus`, `TaskLocation` types
 - `result.go`: `Result`, `Artifact`, `SubmitResultRequest` types
 - `subscription.go`: `Subscription` type (webhook subscriptions)
 - `queue_stats.go`: `QueueStats` type (admin metrics)
@@ -89,19 +89,25 @@ if err != nil {
 - No dependencies on other packages (pure domain layer)
 - Types are serialized to/from JSON and stored in Redis
 - All timestamps use `time.Time` and are serialized as RFC3339
+- `TaskLocation` enum tracks task placement for admin cleanup optimization
 
 **Example**:
 ````go
 import "github.com/osvaldoandrade/codeq/pkg/domain"
 
 task := &domain.Task{
-    ID:       "abc-123",
-    Command:  "GENERATE_MASTER",
-    Payload:  `{"jobId":"j-1"}`,
-    Priority: 5,
-    Status:   "PENDING",
+    ID:                "abc-123",
+    Command:           "GENERATE_MASTER",
+    Payload:           `{"jobId":"j-1"}`,
+    Priority:          5,
+    Status:            domain.StatusPending,
+    LastKnownLocation: domain.LocationPending,
+    MaxAttempts:       3,
 }
 ````
+
+**Task fields**:
+- `LastKnownLocation` (optional): Optimization hint tracking task placement in queue system (`LocationPending`, `LocationDelayed`, `LocationInProgress`, `LocationDLQ`, `LocationNone`). Non-authoritative; used to avoid O(N) list scans during admin cleanup.
 
 **See**: `docs/02-domain-model.md` for entity definitions
 
@@ -241,32 +247,41 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 
 **Key files**:
 - `task_repository.go`: Task CRUD and queue operations
-  - `CreateTask()`, `GetTask()`, `UpdateTask()`
-  - `PushReady()`: Add to ready queue (LPUSH)
-  - `Claim()`: Atomic claim move from pending to in-progress (Lua `RPOP` + `SADD`)
-  - `PushDelayed()`: Schedule for future (ZADD with score = runAt)
-  - `MoveDelayedToReady()`: Requeue due tasks (ZRANGEBYSCORE + LPUSH)
-  - `GetInProgressExpired()`: Find expired leases (ZRANGEBYSCORE)
-  - `GetQueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
+  - `Enqueue()`: Add task to pending queue (LPUSH with priority)
+  - `Get()`: Fetch task by ID (HGET)
+  - `Claim()`: Atomic claim move from pending to in-progress SET (Lua `RPOP` + `SADD`), includes inline repair loop that samples in-progress via `SRANDMEMBER` + pipelined `TTL` checks
+  - `MoveDueDelayed()`: Requeue due tasks from delayed ZSET (ZRANGEBYSCORE + LPUSH)
+  - `Heartbeat()`: Extend lease TTL (EXPIRE)
+  - `Abandon()`: Return task to pending queue (SREM + LPUSH)
+  - `Nack()`: Requeue with backoff or move to DLQ (SREM + ZADD or LPUSH)
+  - `QueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
+  - `CleanupExpired()`: Admin cleanup of expired tasks (ZRANGEBYSCORE on TTL index)
 
 - `result_repository.go`: Result storage
-  - `SaveResult()`, `GetResult()`
+  - `SaveResult()`: Store task result (HSET)
+  - `GetResult()`: Retrieve task result (HGET)
+  - `UpdateTaskOnComplete()`: Update task status on completion
+  - `RemoveFromInprogAndClearLease()`: Clean up in-progress SET and lease key (SREM + DEL)
 
 - `subscription_repository.go`: Subscription storage
-  - `CreateSubscription()`, `GetSubscription()`, `RenewSubscription()`, `DeleteSubscription()`
-  - `FindSubscriptionsByEventType()`: Query for webhook dispatch
+  - `Create()`: Register webhook subscription (HSET + ZADD)
+  - `Get()`: Fetch subscription by ID (HGET)
+  - `Heartbeat()`: Renew subscription TTL (ZADD)
+  - `ListActive()`: Query active subscriptions for event type (ZRANGEBYSCORE)
+  - `CleanupExpired()`: Remove expired subscriptions (ZRANGEBYSCORE + ZREM + HDEL)
 
 **Redis layout**: See `docs/07-storage-kvrocks.md`
 
 **Example**:
 ````go
-// Ready queue operations
-taskRepo.PushReady(ctx, "GENERATE_MASTER", taskID)
-taskID, err := taskRepo.PopReady(ctx, "GENERATE_MASTER", workerID)
+// Enqueue a task
+task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 
-// Delayed queue operations
-taskRepo.PushDelayed(ctx, "GENERATE_MASTER", taskID, runAt)
-dueTaskIDs, _ := taskRepo.MoveDelayedToReady(ctx, "GENERATE_MASTER", time.Now())
+// Claim a task (includes inline repair of expired leases via SRANDMEMBER + pipelined TTL)
+task, claimed, err := taskRepo.Claim(ctx, workerID, []domain.Command{domain.CmdGenerateMaster}, leaseSeconds, inspectLimit, maxAttemptsDefault, tenantID)
+
+// Move delayed tasks to pending
+moved, err := taskRepo.MoveDueDelayed(ctx, domain.CmdGenerateMaster, limit)
 ````
 
 ---

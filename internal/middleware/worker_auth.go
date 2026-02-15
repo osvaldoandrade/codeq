@@ -52,6 +52,11 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 			}
 		}
 		c.Set("workerClaims", claims)
+		
+		// Extract tenant ID from worker JWT claims
+		tenantID := extractTenantID(claims)
+		c.Set("tenantID", tenantID)
+		
 		c.Next()
 	}
 }

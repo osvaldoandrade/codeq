@@ -30,21 +30,24 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 11. `docs/11-backoff.md` - Retry and backoff logic
 12. `docs/12-webhooks.md` - Webhook notifications
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
-17. `docs/17-performance-tuning.md` - Performance optimization guide
+17. `docs/17-performance-tuning.md` - Performance optimization and tuning guide
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
+20. `docs/20-authentication-plugins.md` - Authentication plugin system
+21. `docs/21-developer-guide.md` - Developer guide for contributors
+22. `docs/22-local-development.md` - Local development with docker-compose
 
-### Integration Guides (Framework-Oriented)
+### Integration Guides
 
-21. `docs/integrations/21-java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
-22. `docs/integrations/22-nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
+- `docs/integrations/java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
+- `docs/integrations/nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
 - `sdks/README.md` - SDK overview and quick start guide
 - `examples/` - Working example applications
 
 ### Explanation (Understanding-Oriented)
 
-15. `docs/15-cli-reference.md` - Complete CLI command reference
-17. `docs/17-performance-tuning.md` - Performance optimization and scaling
-18. `docs/18-package-reference.md` - Package structure and codebase guide
-19. `docs/19-testing.md` - Test coverage and testing strategy
-- `docs/migration.md` - Migration guide
+- `docs/migration.md` - General migration guide
+
+### Migration Guides (Task-Oriented)
+
+23. `docs/23-migration-plugin-system.md` - Migration from identity-middleware to plugin system
