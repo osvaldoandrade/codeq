@@ -33,6 +33,7 @@
 - **`internal/middleware`**: Authentication and request processing
   - `auth.go`: Producer token validation (JWKS-based via plugin system)
   - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
+  - `tenant.go`: Tenant ID extraction from JWT claims
   - `worker_scope.go`: Event type authorization filter
   - `require_admin.go`: Admin endpoint protection
   - `any_auth.go`: Either producer or worker token
@@ -46,7 +47,7 @@
   - `notifier_service.go`: Worker availability webhook dispatch
   - `subscription_cleanup_service.go`: Expired subscription removal
 - **`internal/repository`**: Data access layer (Redis operations)
-  - `task_repository.go`: Task CRUD, queue operations (RPOPLPUSH, delayed queue)
+  - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
   - `result_repository.go`: Result storage and retrieval
   - `subscription_repository.go`: Subscription storage
 - **`internal/providers`**: External integrations
@@ -82,7 +83,7 @@
 1. Worker submits claim request with `commands` and optional `leaseSeconds`.
 2. Service validates token and filters event types by token claims.
 3. Service runs the requeue logic for each command.
-4. Service moves one ID from pending list to in-progress list using `RPOPLPUSH`.
+4. Service atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`).
 5. Service sets a lease key with `SETEX` and updates task status to `IN_PROGRESS`.
 6. Service returns the task record. If no task is available, returns `204`.
 
@@ -91,7 +92,7 @@
 1. Worker submits result with `COMPLETED` or `FAILED`.
 2. Service verifies task ownership and status.
 3. Service persists artifacts (optional), stores the result record, updates task status, and clears the lease.
-4. Service removes the task from the in-progress list.
+4. Service removes the task from the in-progress set.
 5. Service posts webhook if the task contains a webhook URL.
 
 ## NACK flow
@@ -100,6 +101,46 @@
 2. Service verifies ownership and status.
 3. Service computes backoff delay and moves the task to the delayed queue.
 4. Service clears lease and removes the task from in-progress.
+
+## Multi-Tenant Architecture
+
+CodeQ implements complete tenant isolation at the queue level to support multi-tenant deployments.
+
+### Isolation Guarantees
+
+- **Queue isolation**: Each tenant has dedicated queues for pending, in-progress, delayed, and dead-letter tasks
+- **Data isolation**: Tasks, results, and leases are scoped to tenant IDs
+- **Worker isolation**: Workers can only claim and process tasks from their own tenant
+- **No cross-tenant visibility**: Tenants cannot see or access tasks from other tenants
+
+### Tenant Identification
+
+The tenant ID is automatically extracted from JWT claims during authentication:
+
+1. Checks `tenantId`, `tenant_id`, `organizationId`, or `organization_id` claims
+2. Falls back to JWT `sub` (subject) for single-tenant deployments
+3. Injected into request context via middleware
+4. Used to namespace all queue operations
+
+### Queue Key Namespacing
+
+Queue keys include the tenant ID segment:
+
+- Multi-tenant: `codeq:q:{command}:{tenantID}:pending:{priority}`
+- Single-tenant (backward compatible): `codeq:q:{command}:pending:{priority}`
+
+### Performance Considerations
+
+Tenant isolation does not significantly impact performance:
+
+- Queue operations remain O(1) or O(log n)
+- Redis memory scales linearly with tenant count
+- Each tenant's queues are independent (no cross-tenant contention)
+
+For deployment guidance and multi-tenant configuration, see:
+- Security configuration: `docs/09-security.md`
+- Storage layout: `docs/07-storage-kvrocks.md`
+- Queue semantics: `docs/05-queueing-model.md`
 
 ## Repair flows
 

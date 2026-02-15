@@ -43,6 +43,10 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Explanation (Understanding-Oriented)
 
-17. `docs/17-performance-tuning.md` - Performance optimization and scaling
-21. `docs/21-migration-plugin-system.md` - Migrating from identity-middleware to plugin system
+20. `docs/20-authentication-plugins.md` - Authentication plugin system architecture
+23. `docs/23-developer-guide.md` - Contributing and internal architecture guide
 - `docs/migration.md` - General migration guide
+
+### Migration Guides (Task-Oriented)
+
+24. `docs/24-migration-plugin-system.md` - Migration from identity-middleware to plugin system

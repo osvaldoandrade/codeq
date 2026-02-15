@@ -23,6 +23,7 @@ codeQ provides:
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
 - **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
 
 ## Get started
 
@@ -145,7 +146,7 @@ Key references:
   - [Java Integration](docs/integrations/21-java-integration.md) - Spring Boot, Quarkus, Micronaut
   - [Node.js Integration](docs/integrations/22-nodejs-integration.md) - Express, NestJS, React
 - **Examples**: `examples/` - Working examples with Java and Node.js frameworks
-- **Developer Guide**: `docs/22-developer-guide.md` - Contributing and internal architecture
+- **Developer Guide**: `docs/23-developer-guide.md` - Contributing and internal architecture
 - **Queue model**: `docs/05-queueing-model.md` - Queue semantics
 - **Storage layout**: `docs/07-storage-kvrocks.md` - KVRocks data structures
 - **Backoff and retries**: `docs/11-backoff.md` - Retry logic

@@ -1,11 +1,15 @@
 # Queueing model
 
+## Tenant Isolation
+
+All queues are isolated per tenant. Each tenant has dedicated queue structures that are completely independent from other tenants. The tenant ID is extracted from JWT claims and used to namespace all queue keys.
+
 ## Queue types
 
-Each command is represented by a set of queues:
+Each command and tenant combination is represented by a set of queues:
 
 - Pending queue: list of IDs available for claim.
-- In-progress queue: list of IDs currently leased.
+- In-progress queue: set of IDs currently leased (implemented as Redis SET for O(1) operations).
 - Delayed queue: ZSET of IDs with `visibleAt` as score.
 - Dead-letter queue: list or ZSET for tasks that exceeded `maxAttempts`.
 
@@ -21,9 +25,11 @@ Alternative: store ready tasks in a ZSET with score `(priority, sequence)` but t
 
 ## Claim semantics
 
-- A claim moves one ID from pending to in-progress using `RPOPLPUSH`.
+- A claim atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`).
+- The in-progress queue uses a Redis SET data structure for O(1) add and remove operations (`SADD`, `SREM`).
 - A lease key is set with TTL `leaseSeconds` and value `workerId`.
 - The task record is updated to `IN_PROGRESS`, `workerId`, and `leaseUntil`.
+- Claims are tenant-scoped: workers can only claim tasks from their own tenant's queues.
 
 ## Ack and completion
 
