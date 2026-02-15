@@ -5,7 +5,8 @@ import (
 	"net/http"
 	"time"
 
-	identitymw "github.com/codecompany/identity-middleware"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+	"github.com/osvaldoandrade/codeq/pkg/auth/jwks"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
@@ -33,7 +34,7 @@ func WorkerAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 			if cfg.AllowProducerAsWorker && producerValidator != nil {
 				pclaims, perr := validateBearer(producerValidator, c.GetHeader("Authorization"))
 				if perr == nil {
-					claims = &identitymw.Claims{
+					claims = &auth.Claims{
 						Subject:    pclaims.Subject,
 						Email:      pclaims.Email,
 						Issuer:     "producer",
@@ -58,8 +59,8 @@ func WorkerAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func newWorkerValidator(cfg *config.Config) (*identitymw.Validator, error) {
-	return identitymw.NewValidator(identitymw.Config{
+func newWorkerValidator(cfg *config.Config) (auth.Validator, error) {
+	return jwks.NewValidator(auth.Config{
 		JwksURL:     cfg.WorkerJwksURL,
 		Issuer:      cfg.WorkerIssuer,
 		Audience:    cfg.WorkerAudience,
@@ -68,11 +69,11 @@ func newWorkerValidator(cfg *config.Config) (*identitymw.Validator, error) {
 	})
 }
 
-func GetWorkerClaims(c *gin.Context) (*identitymw.Claims, bool) {
+func GetWorkerClaims(c *gin.Context) (*auth.Claims, bool) {
 	v, ok := c.Get("workerClaims")
 	if !ok {
 		return nil, false
 	}
-	claims, ok := v.(*identitymw.Claims)
+	claims, ok := v.(*auth.Claims)
 	return claims, ok
 }

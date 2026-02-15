@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	identitymw "github.com/codecompany/identity-middleware"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+	"github.com/osvaldoandrade/codeq/pkg/auth/jwks"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
@@ -32,8 +33,8 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func newProducerValidator(cfg *config.Config) (*identitymw.Validator, error) {
-	return identitymw.NewValidator(identitymw.Config{
+func newProducerValidator(cfg *config.Config) (auth.Validator, error) {
+	return jwks.NewValidator(auth.Config{
 		JwksURL:     cfg.IdentityJwksURL,
 		Issuer:      cfg.IdentityIssuer,
 		Audience:    cfg.IdentityAudience,
@@ -42,7 +43,7 @@ func newProducerValidator(cfg *config.Config) (*identitymw.Validator, error) {
 	})
 }
 
-func validateBearer(validator *identitymw.Validator, authHeader string) (*identitymw.Claims, error) {
+func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, error) {
 	if strings.TrimSpace(authHeader) == "" {
 		return nil, fmt.Errorf("missing Authorization header")
 	}
@@ -53,7 +54,7 @@ func validateBearer(validator *identitymw.Validator, authHeader string) (*identi
 	return validator.Validate(parts[1])
 }
 
-func setProducerContext(c *gin.Context, cfg *config.Config, claims *identitymw.Claims) {
+func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims) {
 	c.Set("userClaims", claims)
 	email := strings.TrimSpace(claims.Email)
 	if email == "" {

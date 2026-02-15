@@ -4,14 +4,14 @@ import (
 	"net/http"
 	"strings"
 
-	identitymw "github.com/codecompany/identity-middleware"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/gin-gonic/gin"
 )
 
 func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if v, ok := c.Get("userClaims"); ok {
-			if claims, ok := v.(*identitymw.Claims); ok && claims != nil {
+			if claims, ok := v.(*auth.Claims); ok && claims != nil {
 				if claims.HasScope(adminScope) {
 					c.Next()
 					return
