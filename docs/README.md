@@ -2,6 +2,8 @@
 
 This specification defines codeQ, a reactive scheduling and completion system built on persistent queues in KVRocks. The design is inspired by Dyno Queues and its use of Dynomite as a lightweight DynamoDB-like storage layer, but codeQ targets KVRocks and is implemented in Go.
 
+> **Note on Documentation Structure**: This `docs/` directory contains the **canonical specification and technical documentation** organized by the [Diátaxis framework](https://diataxis.fr/). The `wiki/` directory contains GitHub Pages content for the project website. When in doubt, refer to `docs/` for the authoritative documentation.
+
 ## Index
 
 ### Tutorials (Learning-Oriented)

@@ -464,6 +464,23 @@ Queue depth gauges are collected from Redis, so all API replicas report identica
 
 ---
 
+### `internal/identitymw` ⚠️ DEPRECATED
+
+**Status**: This package is **deprecated and unused**. It exists for historical reference only.
+
+**Purpose**: Legacy JWKS validator copied from the private `codecompany/identity-middleware` package.
+
+**Replacement**: Use [`pkg/auth/jwks`](../pkg/auth/jwks) instead. The new plugin-based authentication system provides cleaner interfaces and better extensibility.
+
+**Why it exists**: This code was copied to remove the private dependency and allow anyone to build codeQ without access to private repositories. It served as a reference implementation during migration.
+
+**See**:
+- `docs/23-migration-plugin-system.md` - Migration guide explaining the transition
+- `docs/20-authentication-plugins.md` - Current authentication system
+- `internal/identitymw/README.md` - Deprecation notice
+
+---
+
 ## CLI Package (`cmd/codeq`)
 
 ### `cmd/codeq/main.go`
