@@ -199,8 +199,8 @@ func TestIdempotencyBloom_DoubleRotation(t *testing.T) {
 	rotateInterval := 30 * time.Millisecond
 	bloom := newIdempotencyBloom(100, 0.01, rotateInterval)
 
-	// Add a unique key
-	uniqueKey := fmt.Sprintf("unique-key-%d", time.Now().UnixNano())
+	// Add a unique key using test name and counter to ensure uniqueness
+	uniqueKey := fmt.Sprintf("%s-unique-key-0", t.Name())
 	bloom.Add(uniqueKey)
 
 	// Verify it's present
@@ -329,35 +329,41 @@ func TestIdempotencyBloom_ConcurrentRotation(t *testing.T) {
 
 // TestIdempotencyBloom_DefaultParameters tests that default parameters are applied correctly.
 func TestIdempotencyBloom_DefaultParameters(t *testing.T) {
+	const (
+		defaultBloomCapacity   = 1_000_000
+		defaultBloomFPRate     = 0.01
+		defaultBloomRotateTime = 30 * time.Minute
+	)
+
 	// Test with zero values - should use defaults
 	bloom := newIdempotencyBloom(0, 0, 0)
 
-	if bloom.n != 1_000_000 {
-		t.Errorf("expected default n=1000000, got %d", bloom.n)
+	if bloom.n != defaultBloomCapacity {
+		t.Errorf("expected default n=%d, got %d", defaultBloomCapacity, bloom.n)
 	}
-	if bloom.fpRate != 0.01 {
-		t.Errorf("expected default fpRate=0.01, got %f", bloom.fpRate)
+	if bloom.fpRate != defaultBloomFPRate {
+		t.Errorf("expected default fpRate=%f, got %f", defaultBloomFPRate, bloom.fpRate)
 	}
-	if bloom.rotateEvery != 30*time.Minute {
-		t.Errorf("expected default rotateEvery=30m, got %v", bloom.rotateEvery)
+	if bloom.rotateEvery != defaultBloomRotateTime {
+		t.Errorf("expected default rotateEvery=%v, got %v", defaultBloomRotateTime, bloom.rotateEvery)
 	}
 
 	// Test with invalid FP rate (>= 1)
 	bloom = newIdempotencyBloom(1000, 1.5, 1*time.Hour)
-	if bloom.fpRate != 0.01 {
-		t.Errorf("expected fpRate=0.01 for invalid input, got %f", bloom.fpRate)
+	if bloom.fpRate != defaultBloomFPRate {
+		t.Errorf("expected fpRate=%f for invalid input, got %f", defaultBloomFPRate, bloom.fpRate)
 	}
 
 	// Test with invalid FP rate (<= 0)
 	bloom = newIdempotencyBloom(1000, -0.1, 1*time.Hour)
-	if bloom.fpRate != 0.01 {
-		t.Errorf("expected fpRate=0.01 for invalid input, got %f", bloom.fpRate)
+	if bloom.fpRate != defaultBloomFPRate {
+		t.Errorf("expected fpRate=%f for invalid input, got %f", defaultBloomFPRate, bloom.fpRate)
 	}
 
 	// Test with negative rotate interval
 	bloom = newIdempotencyBloom(1000, 0.01, -1*time.Hour)
-	if bloom.rotateEvery != 30*time.Minute {
-		t.Errorf("expected default rotateEvery=30m for invalid input, got %v", bloom.rotateEvery)
+	if bloom.rotateEvery != defaultBloomRotateTime {
+		t.Errorf("expected default rotateEvery=%v for invalid input, got %v", defaultBloomRotateTime, bloom.rotateEvery)
 	}
 }
 
