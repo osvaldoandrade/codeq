@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
-	identitymw "github.com/codecompany/identity-middleware"
+	identitymw "github.com/osvaldoandrade/codeq/internal/identitymw"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
@@ -14,11 +13,11 @@ import (
 
 const adminScope = "codeq:admin"
 
-func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
-	validator, err := newProducerValidator(cfg)
-	if err != nil {
+// AuthMiddleware creates producer authentication middleware with the provided validator
+func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFunc {
+	if validator == nil {
 		return func(c *gin.Context) {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "identity validator not configured"})
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "producer validator not configured"})
 		}
 	}
 	return func(c *gin.Context) {
@@ -32,17 +31,7 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 	}
 }
 
-func newProducerValidator(cfg *config.Config) (*identitymw.Validator, error) {
-	return identitymw.NewValidator(identitymw.Config{
-		JwksURL:     cfg.IdentityJwksURL,
-		Issuer:      cfg.IdentityIssuer,
-		Audience:    cfg.IdentityAudience,
-		ClockSkew:   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
-		HTTPTimeout: 5 * time.Second,
-	})
-}
-
-func validateBearer(validator *identitymw.Validator, authHeader string) (*identitymw.Claims, error) {
+func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, error) {
 	if strings.TrimSpace(authHeader) == "" {
 		return nil, fmt.Errorf("missing Authorization header")
 	}
@@ -53,7 +42,7 @@ func validateBearer(validator *identitymw.Validator, authHeader string) (*identi
 	return validator.Validate(parts[1])
 }
 
-func setProducerContext(c *gin.Context, cfg *config.Config, claims *identitymw.Claims) {
+func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims) {
 	c.Set("userClaims", claims)
 	email := strings.TrimSpace(claims.Email)
 	if email == "" {

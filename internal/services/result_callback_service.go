@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
@@ -62,10 +63,10 @@ func (s *resultCallbackService) Send(ctx context.Context, task domain.Task, rec 
 	}
 
 	b, _ := json.Marshal(payload)
-	go s.sendWithRetry(ctx, task.Webhook, b)
+	go s.sendWithRetry(ctx, task.Command, task.Webhook, b)
 }
 
-func (s *resultCallbackService) sendWithRetry(ctx context.Context, url string, body []byte) {
+func (s *resultCallbackService) sendWithRetry(ctx context.Context, cmd domain.Command, url string, body []byte) {
 	for attempt := 1; attempt <= s.maxAttempts; attempt++ {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -73,6 +74,7 @@ func (s *resultCallbackService) sendWithRetry(ctx context.Context, url string, b
 		resp, err := http.DefaultClient.Do(req)
 		if err == nil && resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			_ = resp.Body.Close()
+			metrics.WebhookDeliveriesTotal.WithLabelValues("task_result", string(cmd), "success").Inc()
 			return
 		}
 		if resp != nil {
@@ -81,6 +83,7 @@ func (s *resultCallbackService) sendWithRetry(ctx context.Context, url string, b
 		delay := s.backoffDelay(attempt)
 		time.Sleep(delay)
 	}
+	metrics.WebhookDeliveriesTotal.WithLabelValues("task_result", string(cmd), "failure").Inc()
 	s.logger.Warn("result callback failed", "url", url)
 }
 

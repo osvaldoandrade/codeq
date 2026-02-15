@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
@@ -41,12 +40,4 @@ func (h *heartbeatController) Handle(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-func atoi(s string, d int) int {
-	v, err := strconv.Atoi(s)
-	if err != nil {
-		return d
-	}
-	return v
 }

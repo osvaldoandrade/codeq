@@ -42,8 +42,6 @@ func (h *nackController) Handle(c *gin.Context) {
 			status = http.StatusNotFound
 		case "not-in-progress":
 			status = http.StatusConflict
-		default:
-			status = http.StatusInternalServerError
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
