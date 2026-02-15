@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,6 +132,7 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 	claimTask(t, ctx, server.URL, workerToken, taskID)
 	submitResult(t, ctx, server.URL, workerToken, taskID)
 	getResult(t, ctx, server.URL, producerToken, taskID)
+	assertMetricsExposed(t, server.URL)
 
 	select {
 	case payload := <-callbackCh:
@@ -142,6 +144,32 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("expected webhook callback")
+	}
+}
+
+func assertMetricsExposed(t *testing.T, baseURL string) {
+	t.Helper()
+	resp, err := http.Get(baseURL + "/metrics")
+	if err != nil {
+		t.Fatalf("metrics request: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status %d body=%s", resp.StatusCode, string(b))
+	}
+	body := string(b)
+	if !strings.Contains(body, `codeq_queue_depth{command="GENERATE_MASTER",queue="ready"}`) {
+		t.Fatalf("expected queue depth metric in /metrics output")
+	}
+	if !strings.Contains(body, `codeq_task_created_total{command="GENERATE_MASTER"}`) {
+		t.Fatalf("expected task created metric in /metrics output")
+	}
+	if !strings.Contains(body, `codeq_task_claimed_total{command="GENERATE_MASTER"}`) {
+		t.Fatalf("expected task claimed metric in /metrics output")
+	}
+	if !strings.Contains(body, `codeq_task_completed_total{command="GENERATE_MASTER",status="COMPLETED"}`) {
+		t.Fatalf("expected task completed metric in /metrics output")
 	}
 }
 

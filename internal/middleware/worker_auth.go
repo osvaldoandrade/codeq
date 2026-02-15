@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/osvaldoandrade/codeq/pkg/auth"
+	identitymw "github.com/osvaldoandrade/codeq/internal/identitymw"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"

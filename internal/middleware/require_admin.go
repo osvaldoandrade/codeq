@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/gin-gonic/gin"
+	identitymw "github.com/osvaldoandrade/codeq/internal/identitymw"
 )
 
 func RequireAdmin() gin.HandlerFunc {

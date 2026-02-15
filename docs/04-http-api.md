@@ -1,6 +1,6 @@
 # HTTP API
 
-All endpoints are under `/v1/codeq` except `/healthz`.
+All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 
 ## Common headers
 

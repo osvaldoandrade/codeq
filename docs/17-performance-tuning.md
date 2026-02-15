@@ -512,7 +512,7 @@ For large worker fleets (> 100 instances), use `group` or `hash` delivery mode.
 
 **codeQ application metrics:**
 
-Currently, codeQ does not expose Prometheus metrics (see `docs/10-operations.md`). Add instrumentation for:
+codeQ exposes Prometheus metrics at `GET /metrics` (see `docs/10-operations.md`). Key metrics to watch:
 
 - Request rate (enqueue, claim, complete) per command
 - Request latency (p50, p95, p99)
@@ -765,6 +765,110 @@ config:
 
 # Use DNS or service mesh routing to direct clients to nearest region
 ```
+
+## 10) Metrics and Monitoring Performance
+
+Prometheus metrics provide observability but have performance implications that should be understood.
+
+### Metrics Scrape Overhead
+
+The `/metrics` endpoint is unauthenticated and performs Redis queries on each scrape via the custom `redisCollector`.
+
+**Scrape behavior:**
+- Each scrape triggers a Redis pipeline with ~20-30 commands (queue depths for all commands × priority buckets)
+- Scrape timeout: 2 seconds (hardcoded in `redis_collector.go`)
+- Default Prometheus scrape interval: 15 seconds
+
+**Cost analysis:**
+````
+Single scrape overhead:
+- Redis commands: ~25 LLEN + ZCARD operations
+- Latency: 1-10ms (depends on KVRocks load and network)
+- CPU: Negligible (all work done in Redis)
+
+Per-replica load (15s scrape interval):
+- 4 scrapes/minute × 25 commands = 100 Redis ops/minute per replica
+- With 10 API replicas: 1000 Redis ops/minute = ~17 ops/sec
+````
+
+**Scaling considerations:**
+
+1. **Many replicas**: Queue depth queries are replicated across all API servers
+   - With 100 replicas: 1700 Redis ops/sec just for metrics
+   - Solution: Reduce scrape frequency or use service-level monitoring (scrape 1 replica)
+
+2. **PromQL deduplication**: All replicas report identical queue depths (Redis is source of truth)
+   - Always use `max by (command, queue)` in dashboards
+   - Example: `max by (command, queue) (codeq_queue_depth)`
+
+3. **Scrape timeout failures**: If Redis is slow, scrapes may timeout
+   - Monitor Prometheus scrape success rate: `up{job="codeq"}`
+   - Increase KVRocks resources if scrapes fail frequently
+   - Consider increasing scrape interval from 15s to 30s or 60s
+
+### Reducing Metrics Overhead
+
+**Reduce scrape frequency:**
+````yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: codeq
+    scrape_interval: 60s  # Default: 15s
+    scrape_timeout: 10s   # Default: 10s
+````
+
+**Service-level monitoring** (scrape only one replica):
+````yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: codeq
+    static_configs:
+      - targets: ['codeq-0.codeq.svc.cluster.local:8080']  # Single pod
+````
+
+**Sidecar pattern** (separate metrics endpoint):
+- Run a dedicated metrics exporter service that queries Redis
+- API servers only expose application-level counters/histograms
+- Reduces load on production API servers
+
+### Metric Cardinality
+
+High-cardinality labels can degrade Prometheus performance.
+
+**Current labels (safe):**
+- `command`: 2 values (CmdGenerateMaster, CmdGenerateCreative)
+- `queue`: 4 values (ready, delayed, in_progress, dlq)
+- `status`: 2 values (COMPLETED, FAILED)
+- `outcome`: 2 values (success, failure)
+- Total cardinality: < 100 unique time series
+
+**Avoid high-cardinality labels:**
+- ❌ Task IDs (unbounded)
+- ❌ Worker IDs (scales with fleet size)
+- ❌ Webhook URLs (potentially thousands)
+- ❌ User IDs (unbounded)
+
+**See**: `docs/18-developer-guide.md#adding-metrics` for best practices
+
+### Monitoring Best Practices
+
+**Essential metrics to monitor:**
+- Task throughput: `rate(codeq_task_created_total[5m])`
+- Queue depth: `max by (command, queue) (codeq_queue_depth)`
+- Completion rate: `rate(codeq_task_completed_total[5m])`
+- DLQ growth: `delta(codeq_dlq_depth[5m])`
+- P95 latency: `histogram_quantile(0.95, rate(codeq_task_processing_latency_seconds_bucket[5m]))`
+
+**Alerting thresholds:**
+- DLQ depth increasing: Sign of persistent failures
+- Queue depth growing faster than completion rate: System overload
+- Lease expiry rate spiking: Workers crashing or hanging
+- Webhook failure rate > 5%: Downstream service issues
+
+**Grafana dashboard:**
+- Import `docs/grafana/codeq-dashboard.json`
+- Includes pre-configured panels for all key metrics
+- Uses multi-replica safe queries with `max by (...)`
 
 ## Further Reading
 

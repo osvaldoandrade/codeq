@@ -6,13 +6,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/osvaldoandrade/codeq/pkg/auth"
-	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks" // Register JWKS provider
-	"github.com/osvaldoandrade/codeq/pkg/config"
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
 )
@@ -73,6 +72,8 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	}
 	logger := slog.New(handler).With("service", "codeq", "env", cfg.Env)
 	slog.SetDefault(logger)
+
+	metrics.RegisterRedisCollector(redisClient, logger)
 
 	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
 	subRepo := repository.NewSubscriptionRepository(redisClient, loc)

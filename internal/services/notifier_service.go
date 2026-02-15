@@ -13,8 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/osvaldoandrade/codeq/pkg/domain"
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
 type NotifierService interface {
@@ -103,10 +104,16 @@ func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription,
 	n.addSignature(req, b)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		metrics.WebhookDeliveriesTotal.WithLabelValues("queue_ready", string(cmd), "failure").Inc()
 		n.logger.Warn("notify failed", "err", err)
 		return
 	}
 	_ = resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		metrics.WebhookDeliveriesTotal.WithLabelValues("queue_ready", string(cmd), "success").Inc()
+		return
+	}
+	metrics.WebhookDeliveriesTotal.WithLabelValues("queue_ready", string(cmd), "failure").Inc()
 }
 
 func (n *notifierService) addSignature(req *http.Request, body []byte) {

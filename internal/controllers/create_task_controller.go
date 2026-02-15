@@ -18,13 +18,13 @@ func NewCreateTaskController(svc services.SchedulerService) *createTaskControlle
 
 type createReq struct {
 	Command     domain.Command `json:"command" binding:"required"`
-	Payload     interface{}    `json:"payload" binding:"required"` // objeto arbitrário
+	Payload     any            `json:"payload" binding:"required"`
 	Priority    int            `json:"priority"`
 	Webhook     string         `json:"webhook,omitempty"`
 	MaxAttempts int            `json:"maxAttempts,omitempty"`
 	Idempotency string         `json:"idempotencyKey,omitempty"`
-	RunAt       string         `json:"runAt,omitempty"`        // RFC3339: when the task becomes visible to workers
-	DelaySecs   int            `json:"delaySeconds,omitempty"` // convenience alternative to runAt
+	RunAt       string         `json:"runAt,omitempty"`
+	DelaySecs   int            `json:"delaySeconds,omitempty"`
 }
 
 func (h *createTaskController) Handle(c *gin.Context) {

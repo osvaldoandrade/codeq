@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/go-redis/redis/v8"
@@ -263,6 +264,8 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 			return nil, fmt.Errorf("redis LPUSH queue: %w", err)
 		}
 	}
+
+	metrics.TaskCreatedTotal.WithLabelValues(string(cmd)).Inc()
 	return &task, nil
 }
 
@@ -279,6 +282,8 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 			return moved, fmt.Errorf("TTL lease: %w", err)
 		}
 		if ttl <= 0 {
+			metrics.LeaseExpiredTotal.WithLabelValues(string(cmd)).Inc()
+
 			delaySeconds := 0
 			priority := minPriority
 			if js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result(); err == nil && js != "" {
@@ -563,6 +568,11 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 		pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
 		if _, err := pipe.Exec(ctx); err != nil {
 			return 0, false, err
+		}
+
+		metrics.TaskCompletedTotal.WithLabelValues(string(t.Command), string(t.Status)).Inc()
+		if d := r.now().Sub(t.CreatedAt).Seconds(); d >= 0 {
+			metrics.TaskProcessingLatencySeconds.WithLabelValues(string(t.Command), string(t.Status)).Observe(d)
 		}
 		return 0, true, nil
 	}
