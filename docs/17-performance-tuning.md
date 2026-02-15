@@ -510,22 +510,25 @@ kvrocks:
 
 ### Sharding considerations
 
-**Current limitation:** Sharding is not implemented. See `docs/06-sharding.md`.
+**Current limitation:** Sharding is not yet implemented. A comprehensive HLD/RFC has been developed (see `docs/24-queue-sharding-hld.md`).
 
 **When sharding becomes necessary:**
 
 - Single KVRocks instance saturates CPU (> 80%)
 - Memory requirements exceed 64 GB
 - Network bandwidth bottleneck (> 1 Gbps sustained)
+- Storage capacity approaches instance limits
+- Failover recovery times become unacceptable
 
-**Future sharding strategy:**
+**Recommended sharding approach (from HLD):**
 
-- Shard by `command` type
-- Use consistent hashing for balanced distribution
-- Implement client-side routing or Redis Cluster mode
-- Monitor shard distribution and rebalance as needed
+- **Near-term:** Deploy independent codeQ+KVRocks pairs per tenant/workload (Option 2)
+- **Long-term:** Explicit sharding via ShardSupplier interface with pluggable strategies
+- Shard by `command` type or tenant for balanced distribution
+- Preserve Lua script atomicity within shard boundaries
+- See full design: `docs/24-queue-sharding-hld.md`
 
-**Workarounds without sharding:**
+**Current workarounds:**
 
 - Deploy independent codeQ+KVRocks pairs per region/tenant
 - Partition workloads by command type manually
@@ -1062,7 +1065,8 @@ High-cardinality labels can degrade Prometheus performance.
 - Webhooks: `docs/12-webhooks.md`
 - Backoff policies: `docs/11-backoff.md`
 - Operations: `docs/10-operations.md`
-- Sharding (future): `docs/06-sharding.md`
+- Sharding overview: `docs/06-sharding.md`
+- Sharding HLD/RFC: `docs/24-queue-sharding-hld.md`
 - Helm chart: `helm/codeq/values.yaml`
 
 ## 10) Idempotency Bloom Filter Tuning
