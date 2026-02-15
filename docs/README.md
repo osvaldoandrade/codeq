@@ -12,6 +12,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 13. `docs/13-examples.md` - Usage examples and common patterns
 14. `docs/14-configuration.md` - Configuration reference
+15. `docs/15-local-development.md` - Local development with docker-compose
 15. `docs/15-cli-reference.md` - Complete CLI command reference
 
 ### Technical Reference (Information-Oriented)

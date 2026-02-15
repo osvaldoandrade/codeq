@@ -59,6 +59,32 @@ func LoadConfig(filePath string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
+	applyEnvAndDefaults(&c)
+	return &c, nil
+}
+
+// LoadConfigOptional loads configuration from a YAML file if present, then applies env overrides and defaults.
+// If filePath is empty or the file does not exist, it still returns a usable config based on env+defaults.
+func LoadConfigOptional(filePath string) (*Config, error) {
+	var c Config
+	if strings.TrimSpace(filePath) != "" {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, err
+			}
+		} else {
+			if err := yaml.Unmarshal(data, &c); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	applyEnvAndDefaults(&c)
+	return &c, nil
+}
+
+func applyEnvAndDefaults(c *Config) {
 	if v := os.Getenv("PORT"); v != "" {
 		if p, err := strconv.Atoi(v); err == nil {
 			c.Port = p
@@ -86,6 +112,18 @@ func LoadConfig(filePath string) (*Config, error) {
 	}
 	if v := os.Getenv("IDENTITY_AUDIENCE"); v != "" {
 		c.IdentityAudience = v
+	}
+	if v := os.Getenv("PRODUCER_AUTH_PROVIDER"); v != "" {
+		c.ProducerAuthProvider = v
+	}
+	if v := os.Getenv("PRODUCER_AUTH_CONFIG"); v != "" {
+		c.ProducerAuthConfig = json.RawMessage(v)
+	}
+	if v := os.Getenv("WORKER_AUTH_PROVIDER"); v != "" {
+		c.WorkerAuthProvider = v
+	}
+	if v := os.Getenv("WORKER_AUTH_CONFIG"); v != "" {
+		c.WorkerAuthConfig = json.RawMessage(v)
 	}
 	if v := os.Getenv("LOCAL_ARTIFACTS_DIR"); v != "" {
 		c.LocalArtifactsDir = v
@@ -259,8 +297,6 @@ func LoadConfig(filePath string) (*Config, error) {
 			c.WorkerAuthConfig, _ = json.Marshal(cfg)
 		}
 	}
-
-	return &c, nil
 }
 
 func (c *Config) Validate() error {

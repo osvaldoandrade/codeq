@@ -1,0 +1,102 @@
+version: "3.8"
+
+services:
+  kvrocks:
+    image: apache/kvrocks:latest
+    ports:
+      - "${KVROCKS_PORT:-6666}:6666"
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks
+    restart: unless-stopped
+
+  codeq:
+    image: golang:1.23
+    working_dir: /app
+    volumes:
+      - ./:/app
+    ports:
+      - "${CODEQ_PORT:-8080}:8080"
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=kvrocks:6666
+      - REDIS_PASSWORD=
+      - ENV=dev
+      - LOG_LEVEL=debug
+      - LOG_FORMAT=text
+      - LOCAL_ARTIFACTS_DIR=/app/.artifacts
+      - PRODUCER_AUTH_PROVIDER=${PRODUCER_AUTH_PROVIDER:-static}
+      - PRODUCER_AUTH_CONFIG=${PRODUCER_AUTH_CONFIG:-{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN"}}}
+      - WORKER_AUTH_PROVIDER=${WORKER_AUTH_PROVIDER:-static}
+      - WORKER_AUTH_CONFIG=${WORKER_AUTH_CONFIG:-{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"]}}
+    depends_on:
+      - kvrocks
+    command: ["sh", "-c", "go run ./cmd/server"]
+    restart: unless-stopped
+
+  seed:
+    image: curlimages/curl:8.6.0
+    depends_on:
+      - codeq
+    environment:
+      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN:-dev-token}
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        echo "[seed] waiting for codeq..."
+        until curl -sf "$${CODEQ_BASE_URL}/metrics" >/dev/null; do sleep 1; done
+        echo "[seed] creating example tasks..."
+        curl -sf -X POST "$${CODEQ_BASE_URL}/v1/codeq/tasks" \
+          -H "Authorization: Bearer $${CODEQ_PRODUCER_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d '{"command":"GENERATE_MASTER","payload":{"seed":true,"n":1},"priority":0,"idempotencyKey":"seed-gm-1"}' >/dev/null
+        curl -sf -X POST "$${CODEQ_BASE_URL}/v1/codeq/tasks" \
+          -H "Authorization: Bearer $${CODEQ_PRODUCER_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d '{"command":"GENERATE_MASTER","payload":{"seed":true,"n":2},"priority":0,"idempotencyKey":"seed-gm-2"}' >/dev/null
+        curl -sf -X POST "$${CODEQ_BASE_URL}/v1/codeq/tasks" \
+          -H "Authorization: Bearer $${CODEQ_PRODUCER_TOKEN}" \
+          -H "Content-Type: application/json" \
+          -d '{"command":"GENERATE_CREATIVE","payload":{"seed":true,"n":1},"priority":0,"idempotencyKey":"seed-gc-1"}' >/dev/null
+        echo "[seed] done"
+    restart: "no"
+
+  prometheus:
+    profiles: ["obs"]
+    image: prom/prometheus:v2.49.1
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./deploy/docker-compose/local-dev/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - codeq
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["obs"]
+    image: grafana/grafana:10.3.1
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS:-admin}
+    volumes:
+      - ./deploy/docker-compose/local-dev/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/grafana:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  jaeger:
+    profiles: ["obs"]
+    image: jaegertracing/all-in-one:1.55
+    ports:
+      - "${JAEGER_UI_PORT:-16686}:16686"
+      - "4317:4317"
+      - "4318:4318"
+    restart: unless-stopped
+
+volumes:
+  kvrocks-data:

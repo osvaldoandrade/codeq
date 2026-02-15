@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: codeq
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: true
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+
