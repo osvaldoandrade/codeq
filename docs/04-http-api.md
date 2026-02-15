@@ -27,7 +27,7 @@ Request body:
 - `priority` (int, optional, default 0)
 - `maxAttempts` (int, optional, default 5)
 - `webhook` (string, optional): result callback URL invoked on `COMPLETED` or `FAILED`
-- `idempotencyKey` (string, optional)
+- `idempotencyKey` (string, optional): deduplication key with 24h TTL. Subsequent requests with same key return existing task. An in-process Bloom filter accelerates lookups for unique keys (see `docs/05-queueing-model.md#idempotency` for optimization details).
 - `runAt` (string, optional): RFC3339 timestamp when the task becomes visible to workers. If `runAt` is in the past, the task is enqueued immediately.
 - `delaySeconds` (int, optional): convenience alternative to `runAt` (relative to server time). If both are provided, `runAt` wins.
 

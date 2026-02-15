@@ -257,6 +257,15 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
   - `QueueStats()`: Count tasks by status (LLEN, SCARD, ZCARD)
   - `CleanupExpired()`: Admin cleanup of expired tasks (ZRANGEBYSCORE on TTL index)
 
+- `idempotency_bloom.go`: In-process Bloom filter for idempotency optimization
+  - `idempotencyBloom`: Rotating double-buffer Bloom filter with configurable capacity, false-positive rate, and rotation interval
+  - `MaybeHas(key)`: Lock-free check if key might exist (false positives possible, false negatives impossible)
+  - `Add(key)`: Thread-safe insertion using atomic CAS operations
+  - `rotateIfNeeded()`: Automatic rotation to prevent unbounded growth
+  - **Thread-safety**: Uses `atomic.Value` for lock-free reads, mutex-protected rotation
+  - **Memory**: ~1-2 MB for 1M keys at 1% FP rate (two filters active)
+  - **Use case**: Accelerates idempotency enqueue by skipping negative Redis GETs
+
 - `result_repository.go`: Result storage
   - `SaveResult()`: Store task result (HSET)
   - `GetResult()`: Retrieve task result (HGET)

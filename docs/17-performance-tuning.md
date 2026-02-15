@@ -952,6 +952,126 @@ High-cardinality labels can degrade Prometheus performance.
 - Sharding (future): `docs/06-sharding.md`
 - Helm chart: `helm/codeq/values.yaml`
 
+## 10) Idempotency Bloom Filter Tuning
+
+### Overview
+
+The Bloom filter optimization eliminates unnecessary Redis GET operations during idempotency checks, reducing latency and load on KVRocks for workloads with high idempotency key uniqueness.
+
+**When it matters:**
+- High-volume enqueue operations (>1000 tasks/sec)
+- Predominantly unique idempotency keys (>95% new keys)
+- Latency-sensitive producer applications
+- KVRocks read throughput approaching limits
+
+**When it doesn't matter:**
+- Low-volume workloads (<100 tasks/sec)
+- High idempotency key collision rate (frequent duplicates)
+- Workloads without idempotency keys
+
+### Memory Footprint
+
+The Bloom filter memory usage depends on capacity (n) and false positive rate (fpRate):
+
+````
+memory_bytes = ceil(-(n × ln(fpRate)) / (ln(2)²)) / 8
+````
+
+**Default configuration:**
+- n = 1,000,000 keys
+- fpRate = 0.01 (1% false positive rate)
+- Memory per filter ≈ 1.2 MB
+- Total memory (current + previous) ≈ 2.4 MB
+
+**Scaling guidelines:**
+
+| Keys/30min | fpRate | Memory/filter | Total Memory |
+|------------|--------|---------------|--------------|
+| 100K       | 0.01   | ~120 KB       | ~240 KB      |
+| 1M         | 0.01   | ~1.2 MB       | ~2.4 MB      |
+| 10M        | 0.01   | ~12 MB        | ~24 MB       |
+| 1M         | 0.001  | ~1.8 MB       | ~3.6 MB      |
+
+### Configuration
+
+The Bloom filter is currently hard-coded with production-friendly defaults:
+
+````go
+// internal/repository/task_repository.go
+idempoBloom: newIdempotencyBloom(
+    1_000_000,      // n: capacity per rotation window
+    0.01,           // fpRate: 1% false positive rate
+    30*time.Minute, // rotateEvery: rotation interval
+)
+````
+
+**Future configuration support:**
+
+These parameters may become configurable via environment variables or config file:
+
+- `IDEMPOTENCY_BLOOM_CAPACITY`: Number of keys to track per window (default: 1,000,000)
+- `IDEMPOTENCY_BLOOM_FP_RATE`: False positive rate 0.001-0.05 (default: 0.01)
+- `IDEMPOTENCY_BLOOM_ROTATE_MINUTES`: Rotation interval in minutes (default: 30)
+
+### Tuning Recommendations
+
+**High-volume (>10K tasks/sec):**
+````
+capacity: 10,000,000
+fpRate: 0.01
+rotateEvery: 15 minutes
+memory: ~24 MB
+````
+
+**Memory-constrained environments:**
+````
+capacity: 100,000
+fpRate: 0.05
+rotateEvery: 15 minutes
+memory: ~400 KB
+````
+
+**Maximum precision (minimize false positives):**
+````
+capacity: 1,000,000
+fpRate: 0.001
+rotateEvery: 30 minutes
+memory: ~3.6 MB
+````
+
+### Monitoring
+
+**Metrics to watch:**
+
+1. **Idempotency hit rate**: Track ratio of duplicate vs unique keys
+2. **Redis GET operations**: Monitor `GET codeq:idem:*` frequency
+3. **Enqueue latency p95/p99**: Should decrease after enabling Bloom filter
+4. **Memory usage**: Track process RSS for Bloom filter overhead
+
+**Expected improvements:**
+
+- **Latency reduction**: 0.5-2ms per enqueue (one fewer Redis round-trip)
+- **KVRocks load reduction**: Up to 50% fewer GET operations for unique keys
+- **Throughput increase**: 10-30% higher enqueue rate capacity
+
+### Trade-offs
+
+**Benefits:**
+- Eliminates negative Redis lookups
+- Lock-free concurrent access
+- Minimal memory footprint
+- Zero impact on correctness (Redis SETNX remains authoritative)
+
+**Costs:**
+- Memory overhead (1-24 MB depending on capacity)
+- Small CPU overhead for hashing (negligible)
+- False positives force Redis GET fallback (~1% by default)
+
+**Correctness guarantees:**
+- False negatives are impossible (Bloom filter property)
+- False positives are handled by standard Redis conflict resolution
+- SETNX remains the source of truth for idempotency
+
 ## Summary
 
 Performance tuning requires balancing throughput, latency, and resource costs. Start with recommended defaults, monitor key metrics, and adjust based on observed bottlenecks. Scale API servers horizontally and KVRocks vertically. Use decision trees to select appropriate lease durations, backoff policies, and webhook configurations. For extreme scale, plan for sharding or multi-region deployments.
