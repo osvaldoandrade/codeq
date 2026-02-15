@@ -29,6 +29,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 11. `docs/11-backoff.md` - Retry and backoff logic
 12. `docs/12-webhooks.md` - Webhook notifications
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
+17. `docs/17-performance-tuning.md` - Performance optimization and tuning guide
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
@@ -43,7 +44,6 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Explanation (Understanding-Oriented)
 
-- `docs/21-developer-guide.md` - Contributing and internal architecture guide
 - `docs/migration.md` - General migration guide
 
 ### Migration Guides (Task-Oriented)
