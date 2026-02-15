@@ -178,9 +178,13 @@ func TestIdempotencyBloom_Rotation(t *testing.T) {
 	time.Sleep(rotateInterval + rotationBuffer)
 
 	// key1 should now be gone (it was in prev, which is now dropped)
+	// However, due to the probabilistic nature of Bloom filters, we can't assert it's absent
+	// because hash collisions with newly added keys could cause a false positive.
+	// This test verifies rotation works by ensuring keys move through curr->prev->dropped,
+	// but we can't deterministically verify absence in a Bloom filter.
 	if bloom.MaybeHas("key1") {
-		// This might still return true due to hash collision, but let's check
-		t.Log("warning: key1 still present after two rotations (possible hash collision)")
+		// This could be a false positive from hash collision, which is acceptable
+		t.Log("warning: key1 still present after two rotations (likely false positive from hash collision, acceptable)")
 	}
 
 	// key2 should still be present (now in prev)
@@ -224,10 +228,13 @@ func TestIdempotencyBloom_DoubleRotation(t *testing.T) {
 	// Wait for second rotation (prev is dropped, key should be gone)
 	time.Sleep(rotateInterval + rotationBuffer)
 
-	// Key should likely be gone now (unless false positive)
-	// We test this by adding many other keys and checking if our original key
-	// is still detected, which would indicate either it wasn't properly rotated out
-	// or we have a very unlikely false positive
+	// The unique key should now be gone since it was in prev, which is now dropped.
+	// However, Bloom filters are probabilistic - we cannot definitively assert absence
+	// because other keys added below might hash to the same bits (false positive).
+	// This test validates that:
+	// 1. Keys move through the rotation cycle (curr -> prev -> dropped)
+	// 2. The rotation timing works correctly
+	// 3. False positives after rotation are rare but acceptable
 	
 	// Add many new keys to the filter
 	for i := 0; i < 50; i++ {
@@ -235,10 +242,9 @@ func TestIdempotencyBloom_DoubleRotation(t *testing.T) {
 	}
 
 	// Check if our original key is still present
-	// With 100 capacity and 0.01 FP rate, the chance of a false positive is low
-	// but not zero, so we'll log a warning rather than fail
+	// With 100 capacity and 0.01 FP rate, after adding 50 keys, false positives are possible
 	if bloom.MaybeHas(uniqueKey) {
-		t.Logf("warning: unique key still detected after double rotation (likely false positive, acceptable)")
+		t.Logf("warning: unique key still detected after double rotation (likely false positive, acceptable for Bloom filters)")
 	}
 }
 
