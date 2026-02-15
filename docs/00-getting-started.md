@@ -45,40 +45,64 @@ You should see the version information displayed.
 
 ## Setting Up Your Environment
 
-### Step 1: Start a Local KVRocks Instance
+### Quick Start with Docker Compose (Recommended)
 
-If you don't have KVRocks available, you can start one using Docker:
+The easiest way to get started is using Docker Compose, which sets up everything you need:
+
+````bash
+# Clone the repository
+git clone https://github.com/osvaldoandrade/codeq
+cd codeq
+
+# Start all services (KVRocks + codeQ API + example tasks)
+docker compose up -d
+
+# Verify the server is running
+curl -sSf http://localhost:8080/metrics | head
+````
+
+This will start:
+- **KVRocks**: Redis-compatible storage on port 6666
+- **codeQ API**: HTTP server on port 8080 with hot reload
+- **Seed service**: Creates example tasks automatically
+
+To view logs:
+
+````bash
+docker compose logs -f codeq
+````
+
+To stop all services:
+
+````bash
+docker compose down
+````
+
+For more details on local development with Docker Compose, including hot reload and observability stack, see [Local Development Guide](22-local-development.md).
+
+### Alternative: Manual Setup
+
+If you prefer manual setup or need more control:
+
+#### Step 1: Start a Local KVRocks Instance
 
 ````bash
 docker run -d -p 6666:6666 --name kvrocks apache/kvrocks:latest
 ````
 
-### Step 2: Configure codeQ Profile
-
-Create a configuration profile for local development:
+#### Step 2: Configure codeQ Profile
 
 ````bash
 codeq config init dev
-````
-
-This creates a profile named "dev" with default settings.
-
-Edit the configuration to point to your KVRocks instance:
-
-````bash
 codeq config set baseUrl http://localhost:8080
 codeq config set redisAddr localhost:6666
 ````
 
-### Step 3: Start the codeQ Server
-
-If running locally, you'll need to start the codeQ server. See the [deployment documentation](03-architecture.md) for production setups.
-
-For development, if you have the codeq-service repository:
+#### Step 3: Start the codeQ Server
 
 ````bash
-# In the codeq-service directory
-go run main.go
+# From the repository root
+go run ./cmd/server
 ````
 
 The server will start on port 8080 by default.
