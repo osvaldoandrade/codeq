@@ -31,7 +31,8 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Explanation (Understanding-Oriented)
 
-<!-- Note: File 16 is intentionally skipped to maintain numbering consistency after merge -->
+<!-- Note: File 16 was originally 16-workflows.md, which was renamed to 17-workflows.md 
+     in the main branch, and later to 18-workflows.md to resolve numbering conflicts -->
 
 17. `docs/17-performance-tuning.md` - Performance optimization and scaling
 18. `docs/18-workflows.md` - GitHub Actions workflows guide
