@@ -82,7 +82,11 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
 	subRepo := repository.NewSubscriptionRepository(redisClient, loc)
 	subs := services.NewSubscriptionService(subRepo)
-	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook))
+	webhookBucket := ratelimit.Bucket{
+		RequestsPerMinute: cfg.RateLimit.Webhook.RequestsPerMinute,
+		BurstSize:         cfg.RateLimit.Webhook.BurstSize,
+	}
+	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, webhookBucket)
 	cleanup := services.NewSubscriptionCleanupService(subRepo, logger, cfg.SubscriptionCleanupIntervalSeconds)
 	scheduler := services.NewSchedulerService(
 		repo,
