@@ -28,14 +28,12 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 10. `docs/10-operations.md` - Operational procedures
 11. `docs/11-backoff.md` - Retry and backoff logic
 12. `docs/12-webhooks.md` - Webhook notifications
-16. `docs/16-workflows.md` - GitHub Actions workflows guide
-17. `docs/17-performance-tuning.md` - Performance optimization guide
 
 ### Explanation (Understanding-Oriented)
 
-15. `docs/15-cli-reference.md` - Complete CLI command reference
-16. `docs/16-performance-tuning.md` - Performance optimization and scaling
+17. `docs/17-performance-tuning.md` - Performance optimization and scaling
 17. `docs/17-workflows.md` - GitHub Actions workflows guide
+18. `docs/18-developer-guide.md` - Developer contribution guide
 18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
-20. `docs/migration.md` - Migration guide
+- `docs/migration.md` - Migration guide
