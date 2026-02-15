@@ -18,6 +18,7 @@ codeQ provides:
 
 - Persistent queues on KVRocks (Redis protocol).
 - Pull-based worker claims with leases.
+- **Multi-tenant queue isolation** with automatic tenant ID extraction from JWT claims.
 - NACK + backoff + delayed queues.
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
@@ -140,6 +141,8 @@ Key references:
 
 - **Getting Started Tutorial**: `docs/00-getting-started.md` - **Start here for your first experience with codeQ**
 - **Overview**: `docs/01-overview.md` - System goals and design principles
+- **Architecture**: `docs/03-architecture.md` - System components and multi-tenant architecture
+- **Security**: `docs/09-security.md` - Authentication, authorization, and tenant isolation
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
 - **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs

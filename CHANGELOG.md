@@ -37,6 +37,16 @@ significantly improving claim latency under high queue depth scenarios.
 
 See: PR #68, Issue #45
 
+### Added
+
+- **Multi-tenant queue isolation** ([#66](https://github.com/osvaldoandrade/codeq/pull/66))
+  - Complete tenant isolation at the queue level for multi-tenant deployments
+  - Automatic tenant ID extraction from JWT claims (`tenantId`, `tenant_id`, `organizationId`, `organization_id`)
+  - Tenant-specific queue namespacing for pending, in-progress, delayed, and dead-letter queues
+  - Prevents cross-tenant task visibility and resource contention
+  - Backward compatible with single-tenant deployments (empty tenant ID)
+  - No performance impact: queue operations remain O(1) or O(log n)
+
 ### Performance Improvements
 
 - **Optimized claim-time repair loop** ([#68](https://github.com/osvaldoandrade/codeq/pull/68))
@@ -49,16 +59,26 @@ See: PR #68, Issue #45
 - In-progress queue storage changed from LIST to SET
 - Atomic claim move now uses Lua script instead of `RPOPLPUSH`
 - Metrics collector updated to use `SCARD` for in-progress queue depth
+- Task struct now includes `tenantId` field for multi-tenant isolation
+- Queue keys include tenant ID segment: `codeq:q:{command}:{tenantID}:{type}`
 
 ### Documentation
 
-- Updated architecture documentation to reflect Lua claim move
-- Updated queueing model docs to specify SET for in-progress queue
-- Updated storage layout documentation with SET operations
-- Updated consistency and complexity analysis
-- Updated performance tuning guide with optimization details
-- Added breaking change warnings to migration guide
-- Updated package reference with new operation names
+- **Tenant isolation** ([#77](https://github.com/osvaldoandrade/codeq/pull/77))
+  - Added multi-tenant architecture section to architecture docs
+  - Documented tenant ID extraction logic in security docs
+  - Updated domain model with tenantId field explanation
+  - Updated HTTP API docs with automatic tenant scoping
+  - Updated queueing model with tenant isolation section
+  - Updated storage layout with tenant-specific queue key patterns
+- **Performance optimizations**
+  - Updated architecture documentation to reflect Lua claim move
+  - Updated queueing model docs to specify SET for in-progress queue
+  - Updated storage layout documentation with SET operations
+  - Updated consistency and complexity analysis
+  - Updated performance tuning guide with optimization details
+  - Added breaking change warnings to migration guide
+  - Updated package reference with new operation names
 
 ---
 
