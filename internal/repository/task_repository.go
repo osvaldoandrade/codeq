@@ -187,9 +187,9 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 				pipe.LRem(ctx, r.keyQueuePending(*cmdOpt, p, tenantID), 0, id)
 			}
 		}
-		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt), id)
-		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt), id)
-		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt), 0, id)
+		pipe.SRem(ctx, r.keyQueueInprog(*cmdOpt, tenantID), id)
+		pipe.ZRem(ctx, r.keyQueueDelayed(*cmdOpt, tenantID), id)
+		pipe.LRem(ctx, r.keyQueueDLQ(*cmdOpt, tenantID), 0, id)
 	} else {
 		// Try both with and without tenant to ensure cleanup when tenant is unknown
 		// This handles cases where we don't know which tenant the task belongs to
@@ -200,9 +200,9 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 				// Note: Cannot enumerate all possible tenants, so orphaned tenant-specific
 				// tasks would need manual cleanup or a separate background job
 			}
-			pipe.SRem(ctx, r.keyQueueInprog(c), id)
-			pipe.ZRem(ctx, r.keyQueueDelayed(c), id)
-			pipe.LRem(ctx, r.keyQueueDLQ(c), 0, id)
+			pipe.SRem(ctx, r.keyQueueInprog(c, ""), id)
+			pipe.ZRem(ctx, r.keyQueueDelayed(c, ""), id)
+			pipe.LRem(ctx, r.keyQueueDLQ(c, ""), 0, id)
 		}
 	}
 	_, err := pipe.Exec(ctx)
@@ -317,10 +317,10 @@ end
 return false
 `)
 
-func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int) (int, error) {
-	inprog := r.keyQueueInprog(cmd)
+func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit int, maxAttemptsDefault int, tenantID string) (int, error) {
+	inprog := r.keyQueueInprog(cmd, tenantID)
 	if inspectLimit <= 0 {
-		inspectLimit = 200
+		inspectLimit = defaultInspectLimit
 	}
 	ids, err := r.rdb.SRandMemberN(ctx, inprog, int64(inspectLimit)).Result()
 	if err != nil && err != redis.Nil {
@@ -793,7 +793,7 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 		}
 		ready += n
 	}
-	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd)).Result()
+	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd, "")).Result()
 	if err != nil && err != redis.Nil {
 		return nil, err
 	}
