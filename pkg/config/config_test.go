@@ -9,8 +9,7 @@ import (
 // TestLoadConfigOptional_EmptyPath tests loading when file path is empty
 func TestLoadConfigOptional_EmptyPath(t *testing.T) {
 	// Set environment variable to verify env override works with empty path
-	os.Setenv("PORT", "9999")
-	defer os.Unsetenv("PORT")
+	t.Setenv("PORT", "9999")
 
 	cfg, err := LoadConfigOptional("")
 	if err != nil {
@@ -136,17 +135,10 @@ logLevel: "info"
 	}
 
 	// Set environment variables that should override file values
-	os.Setenv("PORT", "9090")
-	os.Setenv("REDIS_ADDR", "env-redis:6380")
-	os.Setenv("REDIS_PASSWORD", "env-password")
-	os.Setenv("IDENTITY_SERVICE_URL", "http://env-identity:9090")
-	
-	defer func() {
-		os.Unsetenv("PORT")
-		os.Unsetenv("REDIS_ADDR")
-		os.Unsetenv("REDIS_PASSWORD")
-		os.Unsetenv("IDENTITY_SERVICE_URL")
-	}()
+	t.Setenv("PORT", "9090")
+	t.Setenv("REDIS_ADDR", "env-redis:6380")
+	t.Setenv("REDIS_PASSWORD", "env-password")
+	t.Setenv("IDENTITY_SERVICE_URL", "http://env-identity:9090")
 
 	cfg, err := LoadConfigOptional(configPath)
 	if err != nil {
@@ -174,17 +166,10 @@ logLevel: "info"
 // TestLoadConfigOptional_EnvOverridesEmptyFile tests env overrides work when file path is empty
 func TestLoadConfigOptional_EnvOverridesEmptyFile(t *testing.T) {
 	// Set multiple environment variables
-	os.Setenv("PORT", "7070")
-	os.Setenv("REDIS_ADDR", "redis.local:6379")
-	os.Setenv("IDENTITY_SERVICE_API_KEY", "test-api-key")
-	os.Setenv("PRODUCER_AUTH_PROVIDER", "static")
-	
-	defer func() {
-		os.Unsetenv("PORT")
-		os.Unsetenv("REDIS_ADDR")
-		os.Unsetenv("IDENTITY_SERVICE_API_KEY")
-		os.Unsetenv("PRODUCER_AUTH_PROVIDER")
-	}()
+	t.Setenv("PORT", "7070")
+	t.Setenv("REDIS_ADDR", "redis.local:6379")
+	t.Setenv("IDENTITY_SERVICE_API_KEY", "test-api-key")
+	t.Setenv("PRODUCER_AUTH_PROVIDER", "static")
 
 	cfg, err := LoadConfigOptional("")
 	if err != nil {
