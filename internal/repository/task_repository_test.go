@@ -19,6 +19,7 @@ type redisCmdCountHook struct {
 	hdels atomic.Int64
 	zrems atomic.Int64
 	dels  atomic.Int64
+	hgets atomic.Int64
 }
 
 func (h *redisCmdCountHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
@@ -37,6 +38,9 @@ func (h *redisCmdCountHook) AfterProcess(ctx context.Context, cmd redis.Cmder) e
 		h.zrems.Add(1)
 	case "del":
 		h.dels.Add(1)
+	}
+	if strings.EqualFold(cmd.Name(), "hget") {
+		h.hgets.Add(1)
 	}
 	return nil
 }
@@ -146,6 +150,70 @@ func TestPriorityClaim(t *testing.T) {
 	}
 	if got.ID != high.ID {
 		t.Fatalf("expected high priority task, got %s (low=%s)", got.ID, low.ID)
+	}
+}
+
+func TestClaimGhostBloomSkipsHGet(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis start: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	hook := &redisCmdCountHook{}
+	rdb.AddHook(hook)
+
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	ctx := context.Background()
+	cmd := domain.CmdGenerateMaster
+
+	task, err := repo.Enqueue(ctx, cmd, `{"ghost":true}`, 0, "", 5, "", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	r := repo.(*taskRedisRepo)
+
+	// Create an inconsistent state: task claims it's not pending, but its ID is still present in pending.
+	js, err := rdb.HGet(ctx, r.keyTasksHash(), task.ID).Result()
+	if err != nil {
+		t.Fatalf("HGET task json: %v", err)
+	}
+	t2, err := unmarshalTask(js)
+	if err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+	t2.LastKnownLocation = domain.LocationInProgress
+	if err := rdb.HSet(ctx, r.keyTasksHash(), task.ID, marshal(t2)).Err(); err != nil {
+		t.Fatalf("HSET task json: %v", err)
+	}
+
+	if err := r.removeTaskFully(ctx, task.ID); err != nil {
+		t.Fatalf("removeTaskFully: %v", err)
+	}
+
+	pendingKey := r.keyQueuePending(cmd, 0, "")
+	if n, _ := rdb.LLen(ctx, pendingKey).Result(); n != 1 {
+		t.Fatalf("expected ghost ID to remain in pending, got len=%d", n)
+	}
+
+	hook.hgets.Store(0)
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 10, 5, "")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if ok || claimed != nil {
+		t.Fatalf("expected no task claim, got ok=%v task=%v", ok, claimed)
+	}
+	if got := hook.hgets.Load(); got != 0 {
+		t.Fatalf("expected 0 Redis HGETs when skipping ghost ID, got %d", got)
+	}
+
+	inprogKey := r.keyQueueInprog(cmd, "")
+	if isMember, _ := rdb.SIsMember(ctx, inprogKey, task.ID).Result(); isMember {
+		t.Fatalf("expected ghost ID to be removed from in-progress set")
 	}
 }
 

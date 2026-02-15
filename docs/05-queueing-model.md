@@ -78,3 +78,25 @@ If the lease expires before completion or a worker sends `nack`, the task is ret
 ## Idempotency
 
 When `idempotencyKey` is provided, the service stores a mapping of `idempotencyKey -> taskId` with TTL equal to the retention window. Subsequent requests with the same key return the existing task.
+
+### Bloom Filter Optimization
+
+To accelerate idempotency checks, codeQ uses an in-process rotating Bloom filter that avoids negative Redis GET operations on the fast path:
+
+**Fast-path logic:**
+1. Check local Bloom filter: if `MaybeHas(key)` returns `false`, the key is definitely not present
+2. Skip Redis GET and proceed directly to `SETNX` to claim the idempotency slot
+3. On success, add the key to the Bloom filter
+4. On failure (key already exists), fall back to standard Redis GET for conflict resolution
+
+**Characteristics:**
+- **False positives**: Acceptable—forces fallback to Redis GET (correct but slower)
+- **False negatives**: Impossible by Bloom filter design—never claims a key exists when Redis doesn't have it
+- **Thread-safe**: Uses atomic operations and lock-free reads for concurrent access
+- **Rotating buffers**: Maintains current and previous filter, rotated every 30 minutes by default
+- **Memory footprint**: ~1-2 MB for 1M keys at 1% false positive rate
+
+**Performance impact:**
+- Eliminates one Redis round-trip per enqueue when idempotency key is new
+- Most effective for workloads with high idempotency key uniqueness
+- Minimal overhead for duplicate submissions (Bloom filter check + Redis GET)
