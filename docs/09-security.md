@@ -67,7 +67,7 @@ Webhook registration requires a worker token. codeQ signs webhook notifications 
 
 CodeQ uses a plugin-based authentication system. The default implementation validates JWT tokens using JWKS (JSON Web Key Sets), but you can implement custom authentication plugins for different auth systems.
 
-See [Authentication Plugins](20-authentication-plugins.md) for details on:
+See [Authentication Plugins](21-authentication-plugins.md) for details on:
 - Using the default JWKS plugin
 - Creating custom authentication plugins
 - Plugin interface reference

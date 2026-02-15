@@ -657,7 +657,7 @@ process.on('SIGTERM', () => {
 
 - [HTTP API Reference](04-http-api.md)
 - [Configuration Guide](14-configuration.md)
-- [Performance Tuning](17-performance-tuning.md)
+- [Performance Tuning](18-performance-tuning.md)
 - [Example: Express](../examples/nodejs/express/)
 - [Example: NestJS](../examples/nodejs/nestjs/)
 - [Example: React](../examples/nodejs/react/)

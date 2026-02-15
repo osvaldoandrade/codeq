@@ -248,7 +248,7 @@ If you encounter issues during migration:
 
 1. Check that all tests pass: `go test ./...`
 2. Verify your configuration matches the examples above
-3. Review the [Authentication Plugins documentation](20-authentication-plugins.md)
+3. Review the [Authentication Plugins documentation](21-authentication-plugins.md)
 4. Check the [examples](../examples/custom-auth-plugin.md) for reference implementations
 5. Open an issue on GitHub with details about your setup
 
