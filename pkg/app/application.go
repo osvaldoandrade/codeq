@@ -11,6 +11,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/providers"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"

@@ -52,7 +52,7 @@ Claim includes a repair loop:
 - move due delayed tasks back to ready
 - requeue tasks that are in-progress but have missing/expired leases
 
-Then it moves one ID from pending to in-progress using `RPOPLPUSH`, sets a lease key with TTL, and updates the task record.
+Then it atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`), sets a lease key with TTL, and updates the task record.
 
 ```mermaid
 sequenceDiagram
@@ -63,7 +63,7 @@ sequenceDiagram
   W->>A: POST /v1/codeq/tasks/claim
   A->>A: Validate worker token + filter commands
   A->>A: Claim-time repair (due delayed + expired leases)
-  A->>K: RPOPLPUSH pending -> inprog
+  A->>K: EVAL claim move (RPOP pending + SADD inprog)
   A->>K: SETEX codeq:lease:<id> leaseSeconds workerId
   A->>K: HSET codeq:tasks[id] status=IN_PROGRESS, workerId, leaseUntil
   A-->>W: 200 OK (Task) OR 204 No Content
@@ -86,7 +86,7 @@ sequenceDiagram
   A->>A: Verify ownership + status
   A->>K: HSET codeq:results[id] = Result
   A->>K: DEL codeq:lease:<id>
-  A->>K: LREM codeq:q:<cmd>:inprog id
+  A->>K: SREM codeq:q:<cmd>:inprog id
   A->>K: HSET codeq:tasks[id] status=COMPLETED/FAILED
   alt task has webhook
     A->>H: POST signed callback (best-effort + retry)
@@ -109,7 +109,7 @@ sequenceDiagram
   A->>A: attempts++ and compute delaySeconds
   A->>K: ZADD codeq:q:<cmd>:delayed visibleAt id
   A->>K: DEL codeq:lease:<id>
-  A->>K: LREM codeq:q:<cmd>:inprog id
+  A->>K: SREM codeq:q:<cmd>:inprog id
   A->>K: HSET codeq:tasks[id] status=PENDING, workerId=""
   A-->>W: 200 OK (delaySeconds)
 ```
