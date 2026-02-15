@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -25,6 +26,7 @@ type Validator struct {
 	httpTimeout time.Duration
 	keyCache    map[string]*rsa.PublicKey
 	cacheTime   time.Time
+	cacheMutex  sync.RWMutex
 }
 
 // NewValidator creates a new JWKS validator
@@ -110,7 +112,7 @@ func (v *Validator) Validate(tokenString string) (*auth.Claims, error) {
 	// Validate expiration
 	if exp, ok := claims["exp"].(float64); ok {
 		expTime := time.Unix(int64(exp), 0)
-		if time.Now().Add(v.clockSkew).After(expTime) {
+		if time.Now().After(expTime.Add(v.clockSkew)) {
 			return nil, errors.New("token expired")
 		}
 	}
@@ -149,10 +151,13 @@ func (v *Validator) Validate(tokenString string) (*auth.Claims, error) {
 }
 
 func (v *Validator) getPublicKey(kid string) (*rsa.PublicKey, error) {
-	// Check cache (simple time-based cache)
+	// Check cache (simple time-based cache) with read lock
+	v.cacheMutex.RLock()
 	if key, ok := v.keyCache[kid]; ok && time.Since(v.cacheTime) < 5*time.Minute {
+		v.cacheMutex.RUnlock()
 		return key, nil
 	}
+	v.cacheMutex.RUnlock()
 
 	// Fetch JWKS
 	client := &http.Client{Timeout: v.httpTimeout}
@@ -191,8 +196,11 @@ func (v *Validator) getPublicKey(kid string) (*rsa.PublicKey, error) {
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse RSA key: %w", err)
 			}
+			// Update cache with write lock
+			v.cacheMutex.Lock()
 			v.keyCache[kid] = pubKey
 			v.cacheTime = time.Now()
+			v.cacheMutex.Unlock()
 			return pubKey, nil
 		}
 	}
