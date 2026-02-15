@@ -28,7 +28,7 @@ This document defines a safe migration path from the legacy scheduler/results st
 ### Option A: drain and cut over (recommended)
 
 1. **Freeze producers** that write to the legacy scheduler.
-2. **Let workers drain** the legacy queues until pending/in-progress lists are empty.
+2. **Let workers drain** the legacy queues until pending lists and in-progress sets are empty.
 3. **Deploy codeQ** and point producers/workers to `/v1/codeq`.
 4. **Verify** new tasks are stored under `codeq:`.
 
