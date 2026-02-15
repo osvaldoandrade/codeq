@@ -2,6 +2,44 @@
 
 This guide is for developers who want to contribute to codeQ, extend its functionality, or understand its internal architecture.
 
+## Local Development Setup
+
+The fastest way to start developing codeQ is using Docker Compose with hot reload:
+
+````bash
+# Clone and start all services
+git clone https://github.com/osvaldoandrade/codeq
+cd codeq
+docker compose up -d
+
+# Watch logs during development
+docker compose logs -f codeq
+````
+
+The development environment includes:
+- **KVRocks** on port 6666
+- **codeQ API** on port 8080 (with hot reload via Air)
+- **Automatic recompilation** when you edit Go files in `internal/`, `pkg/`, or `cmd/`
+
+**Making changes:**
+1. Edit any Go file
+2. Air automatically rebuilds and restarts the server
+3. Test your changes immediately at `http://localhost:8080`
+
+**Run tests inside the container:**
+
+````bash
+docker compose exec codeq go test ./...
+````
+
+**With observability stack (Prometheus + Grafana + Jaeger):**
+
+````bash
+docker compose --profile obs up -d
+````
+
+For complete details, see [Local Development Guide](22-local-development.md).
+
 ## Architecture Overview
 
 codeQ follows a layered architecture pattern common in Go web services:

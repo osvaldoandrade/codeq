@@ -28,6 +28,20 @@ codeQ provides:
 
 ## Get started
 
+### Local Development with Docker Compose (Recommended)
+
+The quickest way to try codeQ locally:
+
+```bash
+git clone https://github.com/osvaldoandrade/codeq
+cd codeq
+docker compose up -d
+```
+
+This starts KVRocks, the codeQ API server, and seeds example tasks. Access at `http://localhost:8080`.
+
+See [Local Development Guide](docs/22-local-development.md) for details on hot reload, testing, and observability.
+
 ### Install CLI (macOS/Linux/Windows via Git Bash)
 
 ```bash
