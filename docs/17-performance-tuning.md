@@ -512,7 +512,7 @@ For large worker fleets (> 100 instances), use `group` or `hash` delivery mode.
 
 **codeQ application metrics:**
 
-Currently, codeQ does not expose Prometheus metrics (see `docs/10-operations.md`). Add instrumentation for:
+codeQ exposes Prometheus metrics at `GET /metrics` (see `docs/10-operations.md`). Key metrics to watch:
 
 - Request rate (enqueue, claim, complete) per command
 - Request latency (p50, p95, p99)

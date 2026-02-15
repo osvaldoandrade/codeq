@@ -1,0 +1,188 @@
+# Kubernetes Deployment for Spring Boot + CodeQ
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: springboot-codeq-config
+  namespace: default
+data:
+  application.properties: |
+    server.port=8080
+    codeq.base-url=http://codeq-service:8080
+    logging.level.root=INFO
+    logging.level.io.codeq=DEBUG
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: springboot-codeq-secrets
+  namespace: default
+type: Opaque
+stringData:
+  CODEQ_PRODUCER_TOKEN: "your-producer-token-here"
+  CODEQ_WORKER_TOKEN: "your-worker-token-here"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: springboot-codeq-app
+  namespace: default
+  labels:
+    app: springboot-codeq
+    role: producer-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: springboot-codeq
+  template:
+    metadata:
+      labels:
+        app: springboot-codeq
+        role: producer-worker
+    spec:
+      containers:
+      - name: app
+        image: your-registry/springboot-codeq:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "production"
+        - name: CODEQ_PRODUCER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: springboot-codeq-secrets
+              key: CODEQ_PRODUCER_TOKEN
+        - name: CODEQ_WORKER_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: springboot-codeq-secrets
+              key: CODEQ_WORKER_TOKEN
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: config
+        configMap:
+          name: springboot-codeq-config
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: springboot-codeq-service
+  namespace: default
+  labels:
+    app: springboot-codeq
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: springboot-codeq
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: springboot-codeq-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: springboot-codeq-app
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 30
+      - type: Pods
+        value: 2
+        periodSeconds: 30
+      selectPolicy: Max
+
+---
+# Optional: Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: springboot-codeq-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+  - hosts:
+    - api.example.com
+    secretName: springboot-codeq-tls
+  rules:
+  - host: api.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: springboot-codeq-service
+            port:
+              number: 8080

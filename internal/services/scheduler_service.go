@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
@@ -116,7 +117,11 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		leaseSeconds = s.defaultLease
 	}
 	if waitSeconds <= 0 {
-		return s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault)
+		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault)
+		if ok && task != nil {
+			metrics.TaskClaimedTotal.WithLabelValues(string(task.Command)).Inc()
+		}
+		return task, ok, err
 	}
 	if waitSeconds > 30 {
 		waitSeconds = 30
@@ -125,6 +130,9 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 	for {
 		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault)
 		if err != nil || ok {
+			if ok && task != nil {
+				metrics.TaskClaimedTotal.WithLabelValues(string(task.Command)).Inc()
+			}
 			return task, ok, err
 		}
 		remaining := time.Until(deadline)

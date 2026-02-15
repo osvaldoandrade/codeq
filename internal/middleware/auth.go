@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	identitymw "github.com/codecompany/identity-middleware"
+	identitymw "github.com/osvaldoandrade/codeq/internal/identitymw"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
