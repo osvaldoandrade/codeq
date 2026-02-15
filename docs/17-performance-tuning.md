@@ -107,15 +107,20 @@ tcp-backlog 511
 
 **Current state:** codeQ does not implement sharding. All data resides on a single KVRocks instance or cluster node.
 
-**Future sharding (not yet implemented):**
+**Sharding design (designed, not yet implemented):**
 
-When sharding is introduced:
+A comprehensive sharding design exists for horizontal scaling via explicit shard routing and RAFT-backed consensus storage. Key features:
 
-- Use consistent hashing over command types
-- Shard by `command` key segment
-- Client-side routing or Redis Cluster protocol
+- Pluggable `ShardSupplier` interface for command-to-shard mapping
+- Explicit routing control (manual assignment, hash-based, or custom strategies)
+- Phased approach: near-term independent KVRocks backends, long-term RAFT consensus (TiKV)
+- Zero-downtime migration path from single-shard to multi-shard
 
-For now, scale KVRocks vertically. For horizontal scaling, deploy multiple isolated codeQ+KVRocks pairs per region or tenant.
+See **[Queue Sharding HLD](24-queue-sharding-hld.md)** for complete design specification and **[Sharding Status](06-sharding.md)** for implementation timeline.
+
+**Interim horizontal scaling (until sharding implementation completes):**
+
+Scale KVRocks vertically. For horizontal scaling needs, deploy multiple isolated codeQ+KVRocks pairs per region or tenant.
 
 **Replication (KVRocks native):**
 
