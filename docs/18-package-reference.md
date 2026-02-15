@@ -80,7 +80,7 @@ if err != nil {
 **Purpose**: Core domain types (entities, value objects)
 
 **Key files**:
-- `task.go`: `Task`, `Command` types
+- `task.go`: `Task`, `Command`, `TaskStatus`, `TaskLocation` types
 - `result.go`: `Result`, `Artifact`, `SubmitResultRequest` types
 - `subscription.go`: `Subscription` type (webhook subscriptions)
 - `queue_stats.go`: `QueueStats` type (admin metrics)
@@ -89,19 +89,25 @@ if err != nil {
 - No dependencies on other packages (pure domain layer)
 - Types are serialized to/from JSON and stored in Redis
 - All timestamps use `time.Time` and are serialized as RFC3339
+- `TaskLocation` enum tracks task placement for admin cleanup optimization
 
 **Example**:
 ````go
 import "github.com/osvaldoandrade/codeq/pkg/domain"
 
 task := &domain.Task{
-    ID:       "abc-123",
-    Command:  "GENERATE_MASTER",
-    Payload:  `{"jobId":"j-1"}`,
-    Priority: 5,
-    Status:   "PENDING",
+    ID:                "abc-123",
+    Command:           "GENERATE_MASTER",
+    Payload:           `{"jobId":"j-1"}`,
+    Priority:          5,
+    Status:            domain.StatusPending,
+    LastKnownLocation: domain.LocationPending,
+    MaxAttempts:       3,
 }
 ````
+
+**Task fields**:
+- `LastKnownLocation` (optional): Optimization hint tracking task placement in queue system (`LocationPending`, `LocationDelayed`, `LocationInProgress`, `LocationDLQ`, `LocationNone`). Non-authoritative; used to avoid O(N) list scans during admin cleanup.
 
 **See**: `docs/02-domain-model.md` for entity definitions
 
