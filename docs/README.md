@@ -12,7 +12,6 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 13. `docs/13-examples.md` - Usage examples and common patterns
 14. `docs/14-configuration.md` - Configuration reference
-15. `docs/15-local-development.md` - Local development with docker-compose
 15. `docs/15-cli-reference.md` - Complete CLI command reference
 
 ### Technical Reference (Information-Oriented)
@@ -35,6 +34,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 19. `docs/19-testing.md` - Test coverage and testing strategy
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
+22. `docs/22-local-development.md` - Local development with docker-compose
 
 ### Integration Guides
 
@@ -49,4 +49,4 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Migration Guides (Task-Oriented)
 
-24. `docs/24-migration-plugin-system.md` - Migration from identity-middleware to plugin system
+23. `docs/23-migration-plugin-system.md` - Migration from identity-middleware to plugin system
