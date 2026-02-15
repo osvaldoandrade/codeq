@@ -95,12 +95,13 @@ rateLimit:
 
 ### Applied endpoints
 
-Rate limiting is applied to these endpoints when enabled:
+Rate limiting is currently applied to these endpoints when enabled:
 
 - **Producer scope**: `POST /v1/codeq/tasks` (create task)
 - **Worker scope**: `POST /v1/codeq/tasks/claim` (claim task)
 - **Admin scope**: `POST /v1/codeq/admin/tasks/cleanup` (cleanup expired tasks)
-- **Webhook scope**: Internal webhook deliveries (queue_ready notifications and task result callbacks)
+
+**Note:** The `webhook` scope is configured but not yet implemented. It is reserved for future use to rate-limit internal webhook deliveries (queue_ready notifications and task result callbacks).
 
 ### Monitoring
 
