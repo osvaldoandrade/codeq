@@ -26,6 +26,7 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
 ### Performance Improvements
 
 - **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
+- **Optimized MoveDueDelayed batching**: Eliminated redundant task JSON reads and batch all updates in single pipeline. Reduces O(3M) round-trips to O(M) for M due tasks, achieving 50-70% latency reduction for delayed→pending migrations. ([#96](https://github.com/osvaldoandrade/codeq/pull/96))
 
 ## [1.1.0] - 2026-02-15
 
