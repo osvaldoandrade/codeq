@@ -300,4 +300,3 @@ func TestBearerToken(t *testing.T) {
 		})
 	}
 }
-
