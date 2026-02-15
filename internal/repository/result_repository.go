@@ -126,8 +126,8 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 
 func (r *resultRedisRepo) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command) error {
 	inprog := r.keyQueueInprog(cmd)
-	if err := r.rdb.LRem(ctx, inprog, 0, id).Err(); err != nil && err != redis.Nil {
-		return fmt.Errorf("redis LREM inprog: %w", err)
+	if err := r.rdb.SRem(ctx, inprog, id).Err(); err != nil && err != redis.Nil {
+		return fmt.Errorf("redis SREM inprog: %w", err)
 	}
 	if err := r.rdb.Del(ctx, r.keyLease(id)).Err(); err != nil && err != redis.Nil {
 		return fmt.Errorf("redis DEL lease: %w", err)

@@ -58,7 +58,15 @@ func (h *claimTaskController) Handle(c *gin.Context) {
 			}
 		}
 	}
-	task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, req.WaitSeconds)
+	// Extract tenant ID from the request context
+	tenantID := ""
+	if v, ok := c.Get("tenantID"); ok {
+		if tid, ok := v.(string); ok {
+			tenantID = tid
+		}
+	}
+	
+	task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, req.WaitSeconds, tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

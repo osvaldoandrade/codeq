@@ -34,6 +34,7 @@ type Task struct {
 	MaxAttempts int        `json:"maxAttempts,omitempty"`
 	Error       string     `json:"error,omitempty"`
 	ResultKey   string     `json:"resultKey,omitempty"`
+	TenantID    string     `json:"tenantId,omitempty"` // Tenant isolation
 	CreatedAt   time.Time  `json:"createdAt"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
 }

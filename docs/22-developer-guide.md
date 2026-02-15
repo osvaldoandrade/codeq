@@ -235,34 +235,35 @@ func main() {
 ### Task Lifecycle
 
 ````
-1. Producer creates task → Store in KVRocks with READY status
-2. Add to priority queue (sorted set by priority + timestamp)
-3. Worker claims task → Atomic move from ready to in-progress queue
-4. Set lease expiration using sorted set with TTL timestamp
-5. Worker completes task → Store result, remove from in-progress
+1. Producer creates task → Store in KVRocks with PENDING status (`codeq:tasks`)
+2. Enqueue task ID into a per-command priority pending list (`codeq:q:<command>:pending:<priority>`)
+3. Worker claims task → Atomic move from pending list to in-progress set (Lua `RPOP` + `SADD`)
+4. Set lease key with TTL (`codeq:lease:<id>` via `SETEX`)
+5. Worker completes task → Store result, clear lease, remove from in-progress (`SREM`)
 6. Optional: Trigger result callback webhook
 ````
 
 ### Queue Structure (KVRocks)
 
 **Task storage:**
-- `task:{taskId}`: Hash containing task JSON
-- `task:body:{taskId}`: Large payload storage (if needed)
+- `codeq:tasks` (hash): field = task ID, value = task JSON.
+- `codeq:results` (hash): field = task ID, value = result JSON.
+- `codeq:lease:<id>` (string): value = worker ID, TTL = lease duration.
+- `codeq:tasks:ttl` (ZSET): retention index (logical TTL).
 
 **Queue structures:**
-- `q:{command}:ready`: ZSET scored by priority (higher = first)
-- `q:{command}:delayed`: ZSET scored by run timestamp
-- `q:{command}:inprogress`: ZSET scored by lease expiration
-- `q:{command}:dlq`: ZSET for tasks exceeding max attempts
+- `codeq:q:<command>:pending:<priority>` (list)
+- `codeq:q:<command>:inprog` (set)
+- `codeq:q:<command>:delayed` (ZSET) score = `visibleAt` epoch seconds
+- `codeq:q:<command>:dlq` (list)
 
 **Atomic claim operation:**
 
 ````lua
 -- Lua script executed atomically in Redis
-1. ZPOPMIN from ready queue (highest priority)
-2. Update task status to IN_PROGRESS
-3. ZADD to inprogress queue with lease expiration
-4. Return task data
+1. RPOP from pending list
+2. SADD into in-progress set (skip duplicates if any)
+3. Return task ID
 ````
 
 ### Retry and Backoff
@@ -447,21 +448,25 @@ Use Redis CLI to inspect data:
 redis-cli -h localhost -p 6666
 
 # List all keys
-KEYS *
+KEYS codeq:*
 
-# Inspect a queue
-ZRANGE q:EXAMPLE_TASK:ready 0 -1 WITHSCORES
+# Inspect queues (example: GENERATE_MASTER)
+LLEN codeq:q:generate_master:pending:0
+SCARD codeq:q:generate_master:inprog
+SMEMBERS codeq:q:generate_master:inprog
+ZRANGE codeq:q:generate_master:delayed 0 -1 WITHSCORES
+LRANGE codeq:q:generate_master:dlq 0 -1
 
 # Get task details
-HGETALL task:550e8400-e29b-41d4-a716-446655440000
+HGET codeq:tasks 550e8400-e29b-41d4-a716-446655440000
 ````
 
 ### Common Issues
 
 **Tasks stuck in inprogress queue:**
-- Lease expired but not cleaned up
-- Check lease expiration logic in `scheduler_service.go`
-- Verify background cleanup job is running
+- Lease expired but task ID remains in `codeq:q:<command>:inprog`
+- Claim-time repair should requeue tasks whose `codeq:lease:<id>` is missing/expired
+- Validate worker heartbeats and lease TTLs (`TTL codeq:lease:<id>`)
 
 **Webhooks not triggering:**
 - Check subscription registration: `GET /v1/codeq/workers/subscriptions`

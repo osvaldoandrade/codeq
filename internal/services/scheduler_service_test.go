@@ -69,7 +69,7 @@ func (m *mockSubscriptionRepo) CleanupExpired(ctx context.Context, limit int, be
 func TestCreateTaskSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
-	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "https://example.com/webhook", 3, "", time.Time{}, 0)
+	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "https://example.com/webhook", 3, "", time.Time{}, 0, "")
 	
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
@@ -88,7 +88,7 @@ func TestCreateTaskSuccess(t *testing.T) {
 func TestCreateTaskEmptyCommand(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
-	_, err := svc.CreateTask(ctx, "", `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
+	_, err := svc.CreateTask(ctx, "", `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	
 	if err == nil {
 		t.Fatal("Expected error for empty command")
@@ -112,7 +112,7 @@ func TestCreateTaskInvalidWebhook(t *testing.T) {
 	
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, tt.webhook, 3, "", time.Time{}, 0)
+			_, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, tt.webhook, 3, "", time.Time{}, 0, "")
 			if err == nil {
 				t.Fatal("Expected error for invalid webhook")
 			}
@@ -126,7 +126,7 @@ func TestCreateTaskInvalidWebhook(t *testing.T) {
 func TestCreateTaskDefaultMaxAttempts(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
-	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 0, "", time.Time{}, 0)
+	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 0, "", time.Time{}, 0, "")
 	
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
@@ -139,7 +139,7 @@ func TestCreateTaskDefaultMaxAttempts(t *testing.T) {
 func TestCreateTaskWithDelay(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
-	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 60)
+	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 60, "")
 	
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
@@ -154,7 +154,7 @@ func TestCreateTaskWithRunAt(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	runAt := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)
-	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", runAt, 0)
+	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", runAt, 0, "")
 	
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
@@ -169,12 +169,12 @@ func TestCreateTaskIdempotent(t *testing.T) {
 	
 	idempotencyKey := "test-key-123"
 	
-	task1, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, idempotencyKey, time.Time{}, 0)
+	task1, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, idempotencyKey, time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask 1 failed: %v", err)
 	}
 	
-	task2, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, idempotencyKey, time.Time{}, 0)
+	task2, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, idempotencyKey, time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask 2 failed: %v", err)
 	}
@@ -188,13 +188,13 @@ func TestClaimTaskSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create a task first
-	_, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
+	_, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask failed: %v", err)
 	}
 	
 	// Claim the task
-	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	
 	if err != nil {
 		t.Fatalf("ClaimTask failed: %v", err)
@@ -213,7 +213,7 @@ func TestClaimTaskSuccess(t *testing.T) {
 func TestClaimTaskEmptyWorkerID(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
-	_, _, err := svc.ClaimTask(ctx, "", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _, err := svc.ClaimTask(ctx, "", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	
 	if err == nil {
 		t.Fatal("Expected error for empty workerID")
@@ -227,10 +227,10 @@ func TestClaimTaskDefaultCommands(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create tasks for both default commands
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	
 	// Claim with empty commands (should default)
-	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{}, 60, 0)
+	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{}, 60, 0, "")
 	
 	if err != nil {
 		t.Fatalf("ClaimTask failed: %v", err)
@@ -245,7 +245,7 @@ func TestClaimTaskWithWait(t *testing.T) {
 	
 	// Claim with wait but no tasks available - should timeout quickly
 	start := time.Now()
-	_, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 1)
+	_, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 1, "")
 	duration := time.Since(start)
 	
 	if err != nil {
@@ -263,8 +263,8 @@ func TestHeartbeatSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create and claim a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
-	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
+	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
@@ -280,8 +280,8 @@ func TestHeartbeatDefaultExtend(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create and claim a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
-	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
+	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
@@ -297,8 +297,8 @@ func TestAbandonTask(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create and claim a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
-	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
+	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
@@ -314,8 +314,8 @@ func TestNackTaskSuccess(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create and claim a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
-	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
+	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
@@ -361,8 +361,8 @@ func TestNackTaskWithExplicitDelay(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create and claim a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
-	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
+	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
@@ -382,8 +382,8 @@ func TestNackTaskDelayExceedsMax(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create and claim a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
-	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
+	task, ok, _ := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
 	if !ok {
 		t.Fatal("Failed to claim task")
 	}
@@ -403,7 +403,7 @@ func TestGetTask(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create a task
-	created, _ := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
+	created, _ := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	
 	// Get the task
 	task, err := svc.GetTask(ctx, created.ID)
@@ -433,7 +433,7 @@ func TestQueueStats(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create a task
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	
 	// Get stats
 	stats, err := svc.QueueStats(ctx, domain.CmdGenerateMaster)
@@ -450,7 +450,7 @@ func TestCleanupExpired(t *testing.T) {
 	ctx, _, _, _, svc := setupSchedulerTest(t)
 	
 	// Create some tasks
-	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0)
+	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 	
 	// Cleanup with future date
 	deleted, err := svc.CleanupExpired(ctx, 10, time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC))
