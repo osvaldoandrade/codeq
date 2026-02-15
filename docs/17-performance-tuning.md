@@ -161,7 +161,7 @@ Workers can override per-claim:
 **Requeue inspection limit:**
 
 - `requeueInspectLimit` (default: 200)
-- Limits how many in-progress tasks are scanned during claim-time repair
+- Limits how many in-progress tasks are sampled during claim-time repair
 - Higher values: more thorough repair, increased claim latency
 - Lower values: faster claims, potential for orphaned tasks
 
@@ -175,6 +175,20 @@ Recommended:
 - Low throughput (< 100 tasks/min): 500
 - Medium throughput (100-1000 tasks/min): 200
 - High throughput (> 1000 tasks/min): 50
+
+**Claim loop optimization:**
+
+The claim implementation uses a two-level loop structure optimized for efficiency:
+
+1. **Outer Go loop**: Retries up to `inspectLimit` times to handle duplicate or invalid task IDs
+2. **Inner Lua script**: Checks only **1 task per invocation** (not `inspectLimit`)
+
+This design keeps total work at O(inspectLimit) rather than O(inspectLimit²). The Lua script parameter was fixed in PR #78 to avoid O(n²) complexity that could occur if the script attempted to check multiple tasks per call.
+
+**Performance impact:**
+- With `inspectLimit = 200`, the old implementation could do up to 40,000 operations (200²)
+- The optimized implementation does at most 200 operations per claim
+- This reduces claim latency from potentially seconds to milliseconds under load
 
 ### Batch sizes
 
@@ -856,7 +870,7 @@ High-cardinality labels can degrade Prometheus performance.
 - ❌ Webhook URLs (potentially thousands)
 - ❌ User IDs (unbounded)
 
-**See**: `docs/18-developer-guide.md#adding-metrics` for best practices
+**See**: `docs/23-developer-guide.md#adding-metrics` for best practices
 
 ### Monitoring Best Practices
 

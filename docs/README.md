@@ -29,13 +29,12 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 11. `docs/11-backoff.md` - Retry and backoff logic
 12. `docs/12-webhooks.md` - Webhook notifications
 16. `docs/16-workflows.md` - GitHub Actions workflows guide
-17. `docs/17-performance-tuning.md` - Performance optimization guide
-18. `docs/18-developer-guide.md` - Contributing and internal architecture
-- `docs/18-package-reference.md` - Package structure and codebase guide
+18. `docs/18-package-reference.md` - Package structure and codebase guide
 19. `docs/19-testing.md` - Test coverage and testing strategy
-20. `docs/20-authentication-plugins.md` - Plugin-based authentication system
+20. `docs/20-authentication-plugins.md` - Authentication plugin system
+22. `docs/22-developer-guide.md` - Developer guide for contributors
 
-### Integration Guides (Framework-Oriented)
+### Integration Guides
 
 21. `docs/integrations/21-java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
 22. `docs/integrations/22-nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
@@ -44,5 +43,10 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Migration Guides
 
-- `docs/migration.md` - Migration from legacy scheduler to codeQ
-- `docs/21-migration-plugin-system.md` - Migrating to plugin-based authentication
+20. `docs/20-authentication-plugins.md` - Authentication plugin system architecture
+23. `docs/23-developer-guide.md` - Contributing and internal architecture guide
+- `docs/migration.md` - General migration guide
+
+### Migration Guides (Task-Oriented)
+
+24. `docs/24-migration-plugin-system.md` - Migration from identity-middleware to plugin system

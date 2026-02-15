@@ -8,6 +8,10 @@ All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 - `Authorization: Bearer <token>`
 - `X-Request-Id` (optional)
 
+## Tenant Isolation
+
+All API operations are automatically scoped to the authenticated user's tenant. The tenant ID is extracted from JWT claims and used to isolate queue operations. Producers and workers can only access tasks within their own tenant.
+
 ## Create task
 
 `POST /v1/codeq/tasks`
@@ -41,17 +45,20 @@ Example:
 
 Response `202`:
 
-```json
+````json
 {
   "id": "a5a4d2ad-5f7e-4a55-a070-29a9a4c2a8f4",
   "command": "GENERATE_MASTER",
   "payload": "{\"jobId\":\"j-123\"}",
   "priority": 5,
   "status": "PENDING",
+  "tenantId": "tenant-abc123",
   "createdAt": "2026-01-25T10:00:00-03:00",
   "updatedAt": "2026-01-25T10:00:00-03:00"
 }
-```
+````
+
+The `tenantId` field is automatically populated from JWT claims and cannot be specified in the request. It ensures complete isolation between tenants.
 
 ## Claim task (pull)
 

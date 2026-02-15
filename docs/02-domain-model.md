@@ -31,9 +31,12 @@ A Task is a stateful record stored in the task hash. It includes:
 - `workerId`: current owner
 - `leaseUntil`: advisory timestamp
 - `resultKey`: link to the result record
+- `tenantId`: tenant identifier for multi-tenant isolation
 - `createdAt`, `updatedAt`
 - `attempts`: incremented on each claim
 - `maxAttempts`: policy limit
+
+The `tenantId` field enables complete queue isolation in multi-tenant deployments. It is automatically populated from JWT claims during task creation and used to namespace all queue operations. For single-tenant deployments, this field contains the JWT subject identifier.
 
 ## Result
 
