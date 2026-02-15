@@ -53,25 +53,101 @@ Admin cleanup removes all structures for tasks whose retention timestamp is <= c
 
 ## Rate limiting
 
-Rate limiting is optional and disabled by default. When enabled, API endpoints return `429 Too Many Requests` with a `Retry-After` header.
+Rate limiting is optional and disabled by default. When enabled, CodeQ uses a Redis-backed token bucket algorithm to enforce per-bearer-token rate limits.
+
+### Configuration
+
+Rate limits are configured per scope (producer, worker, webhook, admin). Each scope accepts two parameters:
+
+- `requestsPerMinute`: Maximum sustained request rate per minute (0 = disabled)
+- `burstSize`: Maximum burst capacity in tokens (0 = disabled)
+
+Both values must be greater than zero to enable rate limiting for a scope.
 
 Example configuration:
 
-```yaml
+````yaml
 rateLimit:
   producer:
-    requestsPerMinute: 1000
-    burstSize: 100
+    requestsPerMinute: 1000  # ~16.7 req/sec sustained
+    burstSize: 100           # Allow bursts up to 100 requests
   worker:
-    requestsPerMinute: 600
+    requestsPerMinute: 600   # ~10 req/sec sustained
     burstSize: 50
   webhook:
     requestsPerMinute: 600
     burstSize: 100
   admin:
-    requestsPerMinute: 30
+    requestsPerMinute: 30    # ~0.5 req/sec sustained
     burstSize: 5
-```
+````
+
+### Behavior
+
+- **Token bucket algorithm**: Tokens refill continuously at `requestsPerMinute / 60` per second, up to `burstSize` capacity. Each request consumes 1 token.
+- **Per-bearer-token granularity**: Rate limits are enforced per individual bearer token (SHA256-hashed for privacy in Redis keys).
+- **Fail-open strategy**: If Redis is unreachable or returns an error during rate limit checks, the request is allowed to proceed. This prevents rate limiting infrastructure issues from causing API outages.
+- **HTTP 429 responses**: When rate limit is exceeded, the API returns:
+  - Status: `429 Too Many Requests`
+  - Header: `Retry-After: <seconds>` indicating when to retry
+  - Body: JSON with `error`, `scope`, `operation`, and `retryAfterSeconds` fields
+- **Automatic TTL**: Token bucket state in Redis expires after ~2 refill cycles to prevent unbounded memory growth
+
+### Applied endpoints
+
+Rate limiting is applied to these endpoints when enabled:
+
+- **Producer scope**: `POST /v1/codeq/tasks` (create task)
+- **Worker scope**: `POST /v1/codeq/tasks/claim` (claim task)
+- **Admin scope**: `POST /v1/codeq/admin/tasks/cleanup` (cleanup expired tasks)
+- **Webhook scope**: Internal webhook deliveries (queue_ready notifications and task result callbacks)
+
+### Monitoring
+
+Monitor rate limit rejections using the `codeq_rate_limit_hits_total` counter:
+
+````promql
+# Rate limit hits per scope
+sum by (scope, operation) (rate(codeq_rate_limit_hits_total[5m]))
+
+# Total rate limit rejections across all scopes
+sum(rate(codeq_rate_limit_hits_total[5m]))
+````
+
+Alert when rate limit hits are sustained, which may indicate:
+- Client misconfiguration or aggressive retry logic
+- DDoS or abuse
+- Rate limits set too low for legitimate traffic
+
+### Best practices
+
+**For production deployments:**
+
+1. **Start conservative**: Begin with generous limits and tighten based on actual usage patterns
+2. **Monitor before enforcing**: Deploy with high limits initially, observe metrics, then adjust
+3. **Set burst > sustained**: Configure `burstSize` to handle legitimate traffic spikes (e.g., 2-5x sustained rate)
+4. **Coordinate with clients**: Ensure clients implement proper retry logic with exponential backoff
+5. **Different limits per scope**: Producers typically need higher limits than admin endpoints
+
+**Example: high-throughput producer**
+
+````yaml
+rateLimit:
+  producer:
+    requestsPerMinute: 6000  # 100 req/sec sustained
+    burstSize: 300           # Handle 3-second bursts at max capacity
+````
+
+**Example: rate-limited admin operations**
+
+````yaml
+rateLimit:
+  admin:
+    requestsPerMinute: 60    # 1 req/sec sustained
+    burstSize: 10            # Small burst allowance
+````
+
+See [Configuration](14-configuration.md) for complete rate limiting configuration reference.
 
 ## Scaling
 

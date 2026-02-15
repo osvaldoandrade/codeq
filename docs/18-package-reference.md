@@ -164,7 +164,7 @@ func CreateTaskController(svc *services.SchedulerService) gin.HandlerFunc {
 
 ### `internal/middleware`
 
-**Purpose**: Request preprocessing (auth, logging, correlation IDs)
+**Purpose**: Request preprocessing (auth, logging, correlation IDs, rate limiting)
 
 **Key files**:
 - **Authentication**:
@@ -173,6 +173,13 @@ func CreateTaskController(svc *services.SchedulerService) gin.HandlerFunc {
   - `any_auth.go`: Accept either producer or worker token
   - `require_admin.go`: Admin scope validation
   - `worker_scope.go`: Filter event types by token claims
+  - `tenant.go`: Tenant ID extraction from JWT claims
+
+- **Rate limiting**:
+  - `rate_limit.go`: Token bucket rate limiting per bearer token
+    - `RateLimitProducer()`: Rate limit task creation endpoint
+    - `RateLimitWorkerClaim()`: Rate limit worker claim endpoint
+    - `RateLimitAdminCleanup()`: Rate limit admin cleanup endpoint
 
 - **Request processing**:
   - `logger.go`: Request/response logging
@@ -185,16 +192,25 @@ func CreateTaskController(svc *services.SchedulerService) gin.HandlerFunc {
 4. Extracts identity and scopes (e.g., `codeq:claim`, `eventTypes`)
 5. Stores identity in Gin context for controllers
 
+**Rate limiting flow**:
+1. Extract bearer token from `Authorization` header
+2. Check Redis token bucket for available tokens (SHA256-hashed key)
+3. If allowed: consume token, proceed to handler
+4. If denied: return `429 Too Many Requests` with `Retry-After` header
+
 **Example**:
 ````go
 router.POST("/tasks/claim",
     middleware.WorkerAuth(config),
+    middleware.RateLimitWorkerClaim(limiter, config),
     middleware.WorkerScope("codeq:claim"),
     controllers.ClaimTaskController(svc),
 )
 ````
 
-**See**: `docs/09-security.md` for authentication details
+**See**: 
+- `docs/09-security.md` for authentication details
+- `docs/10-operations.md#rate-limiting` for rate limiting configuration
 
 ---
 
@@ -332,6 +348,63 @@ delay := backoff.ComputeBackoff("exp_full_jitter", 5, 900, 3)
 
 ---
 
+### `internal/ratelimit`
+
+**Purpose**: Redis-backed token bucket rate limiting
+
+**Key files**:
+- `token_bucket.go`: Token bucket algorithm implementation with Lua scripts
+
+**Implementation**:
+- **Token bucket algorithm**: Tokens refill continuously at configured rate, up to burst capacity
+- **Redis Lua script**: Atomic check-and-decrement operation for race-free token consumption
+- **Per-bearer-token**: Rate limits enforced per individual bearer token (SHA256-hashed for privacy)
+- **Fail-open**: Returns allowed=true if Redis is unavailable to prevent outages
+- **Auto-expiring state**: Token buckets expire after ~2 refill cycles to bound memory usage
+
+**Interface**:
+````go
+type Limiter interface {
+    Allow(ctx context.Context, scope string, subject string, bucket Bucket) (Decision, error)
+}
+
+type Bucket struct {
+    RequestsPerMinute int
+    BurstSize         int
+}
+
+type Decision struct {
+    Allowed    bool
+    RetryAfter time.Duration // Only set when Allowed=false
+}
+````
+
+**Example**:
+````go
+limiter := ratelimit.NewTokenBucketLimiter(redisClient)
+bucket := ratelimit.Bucket{
+    RequestsPerMinute: 600,  // 10 req/sec sustained
+    BurstSize:         50,   // Allow bursts up to 50 requests
+}
+
+decision, err := limiter.Allow(ctx, "producer", bearerToken, bucket)
+if err != nil {
+    // Fail open: allow request on Redis errors
+    log.Warn("rate limit check failed", "err", err)
+} else if !decision.Allowed {
+    // Return 429 with Retry-After header
+    return http.StatusTooManyRequests, decision.RetryAfter
+}
+````
+
+**Redis key format**: `codeq:rl:<scope>:<sha256(subject)>`
+
+**See**: 
+- `docs/10-operations.md#rate-limiting` for configuration
+- `docs/17-performance-tuning.md` for capacity planning
+
+---
+
 ### `internal/metrics`
 
 **Purpose**: Observability and Prometheus instrumentation
@@ -348,6 +421,7 @@ delay := backoff.ComputeBackoff("exp_full_jitter", 5, 900, 3)
   - `codeq_task_completed_total`: Tasks completed, labeled by `command` and `status` (COMPLETED/FAILED)
   - `codeq_lease_expired_total`: Lease expirations detected, labeled by `command`
   - `codeq_webhook_deliveries_total`: Webhook deliveries, labeled by `kind`, `command`, `outcome`
+  - `codeq_rate_limit_hits_total`: Rate limit rejections, labeled by `scope` (producer/worker/webhook/admin) and `operation`
 
 - **Histograms** (latency distribution):
   - `codeq_task_processing_latency_seconds`: End-to-end task processing time (creation to completion), labeled by `command` and `status`
