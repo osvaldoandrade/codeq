@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks" // Register JWKS provider
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
@@ -89,11 +90,33 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 		ResultWebhookBaseBackoffSeconds:    1,
 		ResultWebhookMaxBackoffSeconds:     2,
 	}
+	
+	// Setup auth providers config (normally done by LoadConfig)
+	cfg.ProducerAuthProvider = "jwks"
+	cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
+		"jwksUrl":     cfg.IdentityJwksURL,
+		"issuer":      cfg.IdentityIssuer,
+		"audience":    cfg.IdentityAudience,
+		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		"httpTimeout": 5 * time.Second,
+	})
+	cfg.WorkerAuthProvider = "jwks"
+	cfg.WorkerAuthConfig, _ = json.Marshal(map[string]interface{}{
+		"jwksUrl":     cfg.WorkerJwksURL,
+		"issuer":      cfg.WorkerIssuer,
+		"audience":    cfg.WorkerAudience,
+		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		"httpTimeout": 5 * time.Second,
+	})
+	
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config validate: %v", err)
 	}
 
-	app := NewApplication(cfg)
+	app, err := NewApplication(cfg)
+	if err != nil {
+		t.Fatalf("app init: %v", err)
+	}
 	SetupMappings(app)
 	server := httptest.NewServer(app.Engine)
 	t.Cleanup(server.Close)

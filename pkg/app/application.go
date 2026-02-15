@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/pkg/auth"
+	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks" // Register JWKS provider
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
@@ -16,16 +18,37 @@ import (
 )
 
 type Application struct {
-	Config    *config.Config
-	Engine    *gin.Engine
-	Scheduler services.SchedulerService
-	Results   services.ResultsService
-	Subs      services.SubscriptionService
-	Logger    *slog.Logger
-	TZ        *time.Location
+	Config            *config.Config
+	Engine            *gin.Engine
+	Scheduler         services.SchedulerService
+	Results           services.ResultsService
+	Subs              services.SubscriptionService
+	Logger            *slog.Logger
+	TZ                *time.Location
+	ProducerValidator auth.Validator
+	WorkerValidator   auth.Validator
 }
 
-func NewApplication(cfg *config.Config) *Application {
+// ApplicationOption configures the Application
+type ApplicationOption func(*Application) error
+
+// WithProducerValidator sets a custom producer validator
+func WithProducerValidator(validator auth.Validator) ApplicationOption {
+	return func(app *Application) error {
+		app.ProducerValidator = validator
+		return nil
+	}
+}
+
+// WithWorkerValidator sets a custom worker validator
+func WithWorkerValidator(validator auth.Validator) ApplicationOption {
+	return func(app *Application) error {
+		app.WorkerValidator = validator
+		return nil
+	}
+}
+
+func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application, error) {
 	redisClient := providers.NewRedisProvider(cfg.RedisAddr, cfg.RedisPassword)
 
 	loc, err := time.LoadLocation(cfg.Timezone)
@@ -84,7 +107,7 @@ func NewApplication(cfg *config.Config) *Application {
 
 	go cleanup.Start(context.Background())
 
-	return &Application{
+	app := &Application{
 		Config:    cfg,
 		Engine:    engine,
 		Scheduler: scheduler,
@@ -93,4 +116,36 @@ func NewApplication(cfg *config.Config) *Application {
 		Logger:    logger,
 		TZ:        loc,
 	}
+
+	// Apply options
+	for _, opt := range opts {
+		if err := opt(app); err != nil {
+			return nil, err
+		}
+	}
+
+	// Create default validators from config if not provided
+	if app.ProducerValidator == nil && cfg.ProducerAuthProvider != "" {
+		validator, err := auth.NewValidator(auth.ProviderConfig{
+			Type:   cfg.ProducerAuthProvider,
+			Config: cfg.ProducerAuthConfig,
+		})
+		if err != nil {
+			return nil, err
+		}
+		app.ProducerValidator = validator
+	}
+
+	if app.WorkerValidator == nil && cfg.WorkerAuthProvider != "" {
+		validator, err := auth.NewValidator(auth.ProviderConfig{
+			Type:   cfg.WorkerAuthProvider,
+			Config: cfg.WorkerAuthConfig,
+		})
+		if err != nil {
+			return nil, err
+		}
+		app.WorkerValidator = validator
+	}
+
+	return app, nil
 }

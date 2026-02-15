@@ -34,17 +34,3 @@ func (c *Claims) HasScope(scope string) bool {
 type Validator interface {
 	Validate(token string) (*Claims, error)
 }
-
-// ValidatorFactory creates a validator instance
-type ValidatorFactory interface {
-	NewValidator(config Config) (Validator, error)
-}
-
-// Config contains validator configuration
-type Config struct {
-	JwksURL     string
-	Issuer      string
-	Audience    string
-	ClockSkew   time.Duration
-	HTTPTimeout time.Duration
-}

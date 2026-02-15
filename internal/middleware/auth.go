@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/osvaldoandrade/codeq/pkg/auth"
-	"github.com/osvaldoandrade/codeq/pkg/auth/jwks"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
@@ -15,11 +13,11 @@ import (
 
 const adminScope = "codeq:admin"
 
-func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
-	validator, err := newProducerValidator(cfg)
-	if err != nil {
+// AuthMiddleware creates producer authentication middleware with the provided validator
+func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFunc {
+	if validator == nil {
 		return func(c *gin.Context) {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "identity validator not configured"})
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "producer validator not configured"})
 		}
 	}
 	return func(c *gin.Context) {
@@ -31,16 +29,6 @@ func AuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		setProducerContext(c, cfg, claims)
 		c.Next()
 	}
-}
-
-func newProducerValidator(cfg *config.Config) (auth.Validator, error) {
-	return jwks.NewValidator(auth.Config{
-		JwksURL:     cfg.IdentityJwksURL,
-		Issuer:      cfg.IdentityIssuer,
-		Audience:    cfg.IdentityAudience,
-		ClockSkew:   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
-		HTTPTimeout: 5 * time.Second,
-	})
 }
 
 func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, error) {

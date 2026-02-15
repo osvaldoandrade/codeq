@@ -3,19 +3,16 @@ package middleware
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/osvaldoandrade/codeq/pkg/auth"
-	"github.com/osvaldoandrade/codeq/pkg/auth/jwks"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/gin-gonic/gin"
 )
 
-func WorkerAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
-	workerValidator, werr := newWorkerValidator(cfg)
-	producerValidator, _ := newProducerValidator(cfg)
-	if werr != nil {
+// WorkerAuthMiddleware creates worker authentication middleware with the provided validators
+func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *config.Config) gin.HandlerFunc {
+	if workerValidator == nil {
 		return func(c *gin.Context) {
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "worker validator not configured"})
 		}
@@ -57,16 +54,6 @@ func WorkerAuthMiddleware(cfg *config.Config) gin.HandlerFunc {
 		c.Set("workerClaims", claims)
 		c.Next()
 	}
-}
-
-func newWorkerValidator(cfg *config.Config) (auth.Validator, error) {
-	return jwks.NewValidator(auth.Config{
-		JwksURL:     cfg.WorkerJwksURL,
-		Issuer:      cfg.WorkerIssuer,
-		Audience:    cfg.WorkerAudience,
-		ClockSkew:   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
-		HTTPTimeout: 5 * time.Second,
-	})
 }
 
 func GetWorkerClaims(c *gin.Context) (*auth.Claims, bool) {

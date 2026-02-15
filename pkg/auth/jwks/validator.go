@@ -17,6 +17,15 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 )
 
+// Config contains JWKS validator configuration
+type Config struct {
+	JwksURL     string        `json:"jwksUrl"`
+	Issuer      string        `json:"issuer"`
+	Audience    string        `json:"audience"`
+	ClockSkew   time.Duration `json:"clockSkew"`
+	HTTPTimeout time.Duration `json:"httpTimeout"`
+}
+
 // Validator validates JWT tokens using JWKS
 type Validator struct {
 	jwksURL     string
@@ -29,8 +38,22 @@ type Validator struct {
 	cacheMutex  sync.RWMutex
 }
 
+func init() {
+	// Register JWKS provider in the global registry
+	auth.RegisterProvider("jwks", NewValidatorFromJSON)
+}
+
+// NewValidatorFromJSON creates a validator from JSON configuration
+func NewValidatorFromJSON(configJSON json.RawMessage) (auth.Validator, error) {
+	var cfg Config
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, fmt.Errorf("invalid JWKS config: %w", err)
+	}
+	return NewValidator(cfg)
+}
+
 // NewValidator creates a new JWKS validator
-func NewValidator(cfg auth.Config) (auth.Validator, error) {
+func NewValidator(cfg Config) (auth.Validator, error) {
 	if cfg.JwksURL == "" {
 		return nil, errors.New("jwksURL is required")
 	}

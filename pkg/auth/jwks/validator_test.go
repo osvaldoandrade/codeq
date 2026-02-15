@@ -11,8 +11,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/osvaldoandrade/codeq/pkg/auth"
 )
 
 func TestJWKSValidator(t *testing.T) {
@@ -37,7 +35,7 @@ func TestJWKSValidator(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	validator, err := NewValidator(auth.Config{
+	validator, err := NewValidator(Config{
 		JwksURL:     jwksServer.URL,
 		Issuer:      "test-issuer",
 		Audience:    "test-audience",
@@ -107,7 +105,7 @@ func TestJWKSValidatorInvalidIssuer(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	validator, err := NewValidator(auth.Config{
+	validator, err := NewValidator(Config{
 		JwksURL:     jwksServer.URL,
 		Issuer:      "test-issuer",
 		Audience:    "test-audience",
@@ -155,7 +153,7 @@ func TestJWKSValidatorInvalidAudience(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	validator, err := NewValidator(auth.Config{
+	validator, err := NewValidator(Config{
 		JwksURL:     jwksServer.URL,
 		Issuer:      "test-issuer",
 		Audience:    "test-audience",
@@ -203,7 +201,7 @@ func TestJWKSValidatorExpiredToken(t *testing.T) {
 	}))
 	defer jwksServer.Close()
 
-	validator, err := NewValidator(auth.Config{
+	validator, err := NewValidator(Config{
 		JwksURL:     jwksServer.URL,
 		Issuer:      "test-issuer",
 		Audience:    "test-audience",
