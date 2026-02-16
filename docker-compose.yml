@@ -41,8 +41,8 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/metrics || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 5
-      start_period: 10s
+      retries: 20
+      start_period: 120s
 
   seed:
     image: curlimages/curl:8.6.0
@@ -72,6 +72,21 @@ services:
           -d '{"command":"GENERATE_CREATIVE","payload":{"seed":true,"n":1},"priority":0,"idempotencyKey":"seed-gc-1"}' >/dev/null
         echo "[seed] done"
     restart: "no"
+
+  k6:
+    profiles: ["loadtest"]
+    image: grafana/k6:0.49.0
+    depends_on:
+      codeq:
+        condition: service_healthy
+    volumes:
+      - ./loadtest/k6:/scripts:ro
+    environment:
+      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN:-dev-token}
+      - CODEQ_WORKER_TOKEN=${CODEQ_WORKER_TOKEN:-dev-token}
+      - CODEQ_COMMANDS=${CODEQ_COMMANDS:-GENERATE_MASTER}
+    entrypoint: ["k6"]
 
   prometheus:
     profiles: ["obs"]

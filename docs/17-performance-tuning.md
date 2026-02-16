@@ -2,6 +2,13 @@
 
 This guide provides comprehensive tuning recommendations for production codeQ deployments. Follow these guidelines to optimize throughput, reduce latency, and ensure stable operations under load.
 
+## Load Testing
+
+For a practical load testing harness (k6 scenarios + Go benchmarks), see:
+
+- `docs/26-load-testing.md`
+- `loadtest/`
+
 ## 1) KVRocks Configuration
 
 KVRocks is the stateful storage component and often the primary bottleneck. Proper configuration is critical for performance.
