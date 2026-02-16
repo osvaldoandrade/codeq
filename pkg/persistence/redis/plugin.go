@@ -59,7 +59,7 @@ func NewPlugin(config persistence.PluginConfig) (persistence.PluginPersistence, 
 
 // TaskStorage returns the task storage implementation
 func (p *Plugin) TaskStorage() persistence.TaskStorage {
-	return &taskStorageAdapter{repo: p.taskRepo}
+	return newTaskStorageAdapter(p.taskRepo)
 }
 
 // ResultStorage returns the result storage implementation
@@ -69,7 +69,7 @@ func (p *Plugin) ResultStorage() persistence.ResultStorage {
 
 // SubscriptionStorage returns the subscription storage implementation
 func (p *Plugin) SubscriptionStorage() persistence.SubscriptionStorage {
-	return &subscriptionStorageAdapter{repo: p.subscriptionRepo}
+	return newSubscriptionStorageAdapter(p.subscriptionRepo)
 }
 
 // Health checks if Redis is healthy

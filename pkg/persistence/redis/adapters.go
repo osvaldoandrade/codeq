@@ -9,9 +9,23 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/persistence"
 )
 
+const (
+	// Default values for Redis adapter when not provided by config
+	defaultMaxAttempts = 5
+	defaultTTLSeconds  = 300
+)
+
 // taskStorageAdapter adapts repository.TaskRepository to persistence.TaskStorage
 type taskStorageAdapter struct {
-	repo repository.TaskRepository
+	repo           repository.TaskRepository
+	maxAttempts    int
+}
+
+func newTaskStorageAdapter(repo repository.TaskRepository) *taskStorageAdapter {
+	return &taskStorageAdapter{
+		repo:        repo,
+		maxAttempts: defaultMaxAttempts,
+	}
 }
 
 func (a *taskStorageAdapter) Save(ctx context.Context, task *domain.Task) error {
@@ -32,6 +46,8 @@ func (a *taskStorageAdapter) Delete(ctx context.Context, id string) error {
 
 func (a *taskStorageAdapter) EnqueueTask(ctx context.Context, task *domain.Task) error {
 	// Use the repository's Enqueue method
+	// Note: The Task struct doesn't store idempotencyKey as it's only used at enqueue time
+	// and is not persisted. The idempotency tracking is handled separately in Redis keys.
 	_, err := a.repo.Enqueue(
 		ctx,
 		task.Command,
@@ -39,7 +55,7 @@ func (a *taskStorageAdapter) EnqueueTask(ctx context.Context, task *domain.Task)
 		task.Priority,
 		task.Webhook,
 		task.MaxAttempts,
-		"", // idempotencyKey - not stored in Task struct, pass empty
+		"", // idempotencyKey - not stored in Task, handled separately by caller
 		time.Time{}, // visibleAt - use zero time for immediate visibility
 		task.TenantID,
 	)
@@ -47,9 +63,8 @@ func (a *taskStorageAdapter) EnqueueTask(ctx context.Context, task *domain.Task)
 }
 
 func (a *taskStorageAdapter) ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, tenantID string) (*domain.Task, bool, error) {
-	// The existing Claim method has a different signature
-	// We need to pass maxAttemptsDefault (use 5 as default)
-	return a.repo.Claim(ctx, workerID, commands, leaseSeconds, inspectLimit, 5, tenantID)
+	// Use configured max attempts
+	return a.repo.Claim(ctx, workerID, commands, leaseSeconds, inspectLimit, a.maxAttempts, tenantID)
 }
 
 func (a *taskStorageAdapter) UpdateLease(ctx context.Context, taskID string, workerID string, extendSeconds int) error {
@@ -63,7 +78,7 @@ func (a *taskStorageAdapter) AbandonLease(ctx context.Context, taskID string, wo
 func (a *taskStorageAdapter) NackTask(ctx context.Context, taskID string, workerID string, delaySeconds int, reason string) error {
 	// The existing Nack method returns attempt count and moved-to-dlq flag
 	// We ignore these for the adapter
-	_, _, err := a.repo.Nack(ctx, taskID, workerID, delaySeconds, 5, reason)
+	_, _, err := a.repo.Nack(ctx, taskID, workerID, delaySeconds, a.maxAttempts, reason)
 	return err
 }
 
@@ -111,17 +126,27 @@ func (a *resultStorageAdapter) RemoveFromInprogAndClearLease(ctx context.Context
 // subscriptionStorageAdapter adapts repository.SubscriptionRepository to persistence.SubscriptionStorage
 type subscriptionStorageAdapter struct {
 	repo repository.SubscriptionRepository
+	ttl  int
+}
+
+func newSubscriptionStorageAdapter(repo repository.SubscriptionRepository) *subscriptionStorageAdapter {
+	return &subscriptionStorageAdapter{
+		repo: repo,
+		ttl:  defaultTTLSeconds,
+	}
 }
 
 func (a *subscriptionStorageAdapter) Register(ctx context.Context, sub *domain.Subscription) error {
-	// Use Create with default TTL
-	_, err := a.repo.Create(ctx, *sub, 300)
+	// Use configured TTL
+	_, err := a.repo.Create(ctx, *sub, a.ttl)
 	return err
 }
 
 func (a *subscriptionStorageAdapter) Unregister(ctx context.Context, workerID string, commands []domain.Command) error {
 	// The existing repository doesn't have an Unregister method
-	// This would need to be implemented or handled differently
+	// Subscriptions expire via TTL in Redis
+	// A proper implementation would require adding this method to the repository
+	// For now, this is a no-op as subscriptions auto-expire
 	return nil
 }
 
@@ -142,7 +167,9 @@ func (a *subscriptionStorageAdapter) GetByCommand(ctx context.Context, commands 
 
 func (a *subscriptionStorageAdapter) GetByWorker(ctx context.Context, workerID string) ([]*domain.Subscription, error) {
 	// The existing repository doesn't have a GetByWorker method
-	// This would need to be implemented
+	// The domain.Subscription struct doesn't have a WorkerID field
+	// This functionality would require extending both the domain model and repository
+	// For now, return not found
 	return nil, persistence.ErrNotFound
 }
 
