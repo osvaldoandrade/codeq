@@ -58,6 +58,6 @@ Your job is to act as a planner for the GitHub repository ${{ github.repository 
 
    3a. **IMPORTANT**: You MUST call the `create_issue` tool (from the safeoutputs MCP server) to create the issue. Simply preparing the content is not sufficient - you must actually invoke the tool.
    
-   3b. Provide a title with the current date (e.g., " - 2025-10-10" or "Daily Plan - Feb 16, 2026"). Note: The workflow name prefix "${{ github.workflow }}" will be added automatically, so do not include it in your title.
+   3b. Provide a title with the current date (e.g., " - YYYY-MM-DD" or "Daily Plan - 2025-10-10"). Note: The workflow name prefix "${{ github.workflow }}" will be added automatically, so do not include it in your title.
    
    3c. Use the project plan as the body. The label "planning" will be added automatically.
