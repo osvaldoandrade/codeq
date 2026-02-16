@@ -41,6 +41,39 @@ Notes:
 
 An example Grafana dashboard is provided at `docs/grafana/codeq-dashboard.json`.
 
+## Tracing (OpenTelemetry)
+
+codeQ supports distributed tracing via OpenTelemetry (OTLP gRPC exporter). When enabled, it emits spans for the task lifecycle and webhook deliveries, allowing you to trace a task from creation to completion.
+
+Trace context propagation:
+
+- Task records persist W3C trace context in `traceParent` / `traceState` (for cross-request correlation).
+- Outgoing webhooks include W3C trace context headers (`traceparent` / `tracestate`), and may also include W3C `baggage` headers depending on the configured OpenTelemetry propagator.
+
+### Configuration
+
+Enable tracing via YAML:
+
+````yaml
+tracingEnabled: true
+tracingServiceName: codeq
+tracingOtlpEndpoint: "localhost:4317"
+tracingOtlpInsecure: true
+tracingSampleRatio: 1.0
+````
+
+Or via env vars:
+
+- `TRACING_ENABLED=true`
+- `TRACING_SERVICE_NAME=codeq` (or `OTEL_SERVICE_NAME`)
+- `TRACING_OTLP_ENDPOINT=localhost:4317` (or `OTEL_EXPORTER_OTLP_ENDPOINT`)
+- `TRACING_OTLP_INSECURE=true` (or `OTEL_EXPORTER_OTLP_INSECURE`)
+- `TRACING_SAMPLE_RATIO=1.0`
+
+### Jaeger / Tempo
+
+Both Jaeger and Grafana Tempo support OTLP ingestion. Point `tracingOtlpEndpoint` (or `TRACING_OTLP_ENDPOINT`) at the collector/ingester endpoint (commonly port `4317` for OTLP gRPC).
+
 ## Background jobs
 
 - Subscription cleanup: removes expired webhook subscriptions on a fixed interval.

@@ -17,6 +17,11 @@ type Config struct {
 	Port                               int             `yaml:"port"`
 	RedisAddr                          string          `yaml:"redisAddr"`
 	RedisPassword                      string          `yaml:"redisPassword"`
+	TracingEnabled                     bool            `yaml:"tracingEnabled"`
+	TracingServiceName                 string          `yaml:"tracingServiceName"`
+	TracingOtlpEndpoint                string          `yaml:"tracingOtlpEndpoint"`
+	TracingOtlpInsecure                bool            `yaml:"tracingOtlpInsecure"`
+	TracingSampleRatio                 float64         `yaml:"tracingSampleRatio"`
 	IdentityServiceURL                 string          `yaml:"identityServiceUrl"`
 	IdentityServiceApiKey              string          `yaml:"identityServiceApiKey"`
 	IdentityJwksURL                    string          `yaml:"identityJwksUrl"`
@@ -110,6 +115,29 @@ func applyEnvAndDefaults(c *Config) {
 		c.RedisPassword = v
 	} else if v := os.Getenv("KVROCKS_PASSWORD"); v != "" {
 		c.RedisPassword = v
+	}
+	if v := os.Getenv("TRACING_ENABLED"); v != "" {
+		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("TRACING_SERVICE_NAME"); v != "" {
+		c.TracingServiceName = v
+	} else if v := os.Getenv("OTEL_SERVICE_NAME"); v != "" {
+		c.TracingServiceName = v
+	}
+	if v := os.Getenv("TRACING_OTLP_ENDPOINT"); v != "" {
+		c.TracingOtlpEndpoint = v
+	} else if v := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); v != "" {
+		c.TracingOtlpEndpoint = v
+	}
+	if v := os.Getenv("TRACING_OTLP_INSECURE"); v != "" {
+		c.TracingOtlpInsecure = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	} else if v := os.Getenv("OTEL_EXPORTER_OTLP_INSECURE"); v != "" {
+		c.TracingOtlpInsecure = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("TRACING_SAMPLE_RATIO"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			c.TracingSampleRatio = f
+		}
 	}
 	if v := os.Getenv("IDENTITY_SERVICE_URL"); v != "" {
 		c.IdentityServiceURL = v
@@ -210,6 +238,15 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if c.RedisAddr == "" {
 		c.RedisAddr = "localhost:6379"
+	}
+	if c.TracingServiceName == "" {
+		c.TracingServiceName = "codeq"
+	}
+	if strings.TrimSpace(c.TracingOtlpEndpoint) == "" {
+		c.TracingOtlpEndpoint = "localhost:4317"
+	}
+	if c.TracingSampleRatio <= 0 || c.TracingSampleRatio > 1 {
+		c.TracingSampleRatio = 1.0
 	}
 	if c.IdentityServiceURL == "" {
 		log.Println("Warning: IdentityServiceURL not set, using default")

@@ -11,7 +11,13 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/providers"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ResultsService interface {
@@ -37,10 +43,24 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	if err != nil {
 		return nil, fmt.Errorf("task not found")
 	}
+
+	taskCtx := tracing.ContextWithRemoteParent(ctx, task.TraceParent, task.TraceState)
+	taskCtx, span := otel.Tracer("codeq/results").Start(taskCtx, "codeq.task.submit_result",
+		trace.WithAttributes(
+			attribute.String("codeq.task_id", taskID),
+			attribute.String("codeq.command", string(task.Command)),
+			attribute.String("codeq.tenant_id", task.TenantID),
+			attribute.String("codeq.submit.status", string(req.Status)),
+		),
+	)
+	defer span.End()
+
 	if task.WorkerID != "" && req.WorkerID != "" && task.WorkerID != req.WorkerID {
+		span.SetStatus(codes.Error, "not-owner")
 		return nil, fmt.Errorf("not-owner")
 	}
 	if task.Status != domain.StatusInProgress {
+		span.SetStatus(codes.Error, "not-in-progress")
 		return nil, fmt.Errorf("not-in-progress")
 	}
 
@@ -55,11 +75,15 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		}
 		data, err := s.repo.DecodeBase64(a.ContentBase64)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("artifact %s base64 decode: %w", a.Name, err)
 		}
 		objPath := path.Join("results", taskID, a.Name)
-		url, err := s.uploader.UploadBytes(ctx, objPath, a.ContentType, data)
+		url, err := s.uploader.UploadBytes(taskCtx, objPath, a.ContentType, data)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return nil, fmt.Errorf("artifact %s upload: %w", a.Name, err)
 		}
 		outs = append(outs, domain.ArtifactOut{Name: a.Name, URL: url})
@@ -68,13 +92,16 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	switch req.Status {
 	case domain.StatusCompleted:
 		if req.Result == nil {
+			span.SetStatus(codes.Error, "result required")
 			return nil, fmt.Errorf("result required when status=COMPLETED")
 		}
 	case domain.StatusFailed:
 		if strings.TrimSpace(req.Error) == "" {
+			span.SetStatus(codes.Error, "error required")
 			return nil, fmt.Errorf("error required when status=FAILED")
 		}
 	default:
+		span.SetStatus(codes.Error, "invalid status")
 		return nil, fmt.Errorf("invalid status")
 	}
 
@@ -86,14 +113,20 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		Artifacts:   outs,
 		CompletedAt: s.now().In(s.loc),
 	}
-	if err := s.repo.SaveResult(ctx, rec); err != nil {
+	if err := s.repo.SaveResult(taskCtx, rec); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 
-	if err := s.repo.UpdateTaskOnComplete(ctx, taskID, req.Status, req.Error); err != nil {
+	if err := s.repo.UpdateTaskOnComplete(taskCtx, taskID, req.Status, req.Error); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
-	if err := s.repo.RemoveFromInprogAndClearLease(ctx, taskID, task.Command); err != nil {
+	if err := s.repo.RemoveFromInprogAndClearLease(taskCtx, taskID, task.Command); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 
@@ -103,7 +136,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	}
 
 	if s.callback != nil {
-		s.callback.Send(context.Background(), *task, rec)
+		s.callback.Send(context.WithoutCancel(taskCtx), *task, rec)
 	}
 
 	return &rec, nil

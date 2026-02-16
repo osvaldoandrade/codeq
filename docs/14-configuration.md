@@ -19,6 +19,22 @@
   - Environment variable: `LOG_FORMAT`
   - Use `text` for local development, `json` for production structured logging
 
+## Tracing (OpenTelemetry)
+
+Distributed tracing is optional and disabled by default. When enabled, codeQ exports spans via OTLP gRPC (compatible with Jaeger and Grafana Tempo).
+
+- `tracingEnabled` (bool): Enable tracing, default `false`
+  - Environment variable: `TRACING_ENABLED` (accepts: `true`, `1`, `yes`)
+- `tracingServiceName` (string): Service name used in trace backend, default `codeq`
+  - Environment variable: `TRACING_SERVICE_NAME` or `OTEL_SERVICE_NAME`
+- `tracingOtlpEndpoint` (string): OTLP gRPC endpoint, default `localhost:4317`
+  - Environment variable: `TRACING_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`
+- `tracingOtlpInsecure` (bool): Use insecure (no-TLS) OTLP gRPC connection, default `false`
+  - Environment variable: `TRACING_OTLP_INSECURE` or `OTEL_EXPORTER_OTLP_INSECURE`
+  - Most local Jaeger/Tempo setups require `true`
+- `tracingSampleRatio` (float): Trace sampling ratio (0 < ratio <= 1), default `1.0`
+  - Environment variable: `TRACING_SAMPLE_RATIO`
+
 ## Scheduling
 
 - `defaultLeaseSeconds` (int): Default task lease duration in seconds when not specified in claim request, default 300 (5 minutes)

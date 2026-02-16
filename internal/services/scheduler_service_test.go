@@ -28,7 +28,7 @@ func setupSchedulerTest(t *testing.T) (context.Context, *miniredis.Miniredis, *r
 
 	// Create a mock subscription repository for the notifier
 	mockSubRepo := &mockSubscriptionRepo{}
-	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{})
+	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{}, nil)
 
 	now := func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
 	svc := NewSchedulerService(repo, notifier, time.UTC, now, 60, 50, 5, "exp_full_jitter", 5, 900)
@@ -501,7 +501,7 @@ func TestNewSchedulerServiceDefaults(t *testing.T) {
 
 	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
 	mockSubRepo := &mockSubscriptionRepo{}
-	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{})
+	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{}, nil)
 
 	tests := []struct {
 		name               string

@@ -12,6 +12,11 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type SchedulerService interface {
@@ -71,12 +76,26 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 }
 
 func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
+	ctx, span := otel.Tracer("codeq/scheduler").Start(ctx, "codeq.task.create",
+		trace.WithAttributes(
+			attribute.String("codeq.command", string(cmd)),
+			attribute.Int("codeq.priority", priority),
+			attribute.Bool("codeq.has_webhook", strings.TrimSpace(webhook) != ""),
+			attribute.Bool("codeq.has_idempotency_key", strings.TrimSpace(idempotencyKey) != ""),
+			attribute.String("codeq.tenant_id", tenantID),
+		),
+	)
+	defer span.End()
+
 	if strings.TrimSpace(string(cmd)) == "" {
+		span.SetStatus(codes.Error, "invalid command")
 		return nil, errors.New("invalid command")
 	}
 	if webhook != "" {
 		u, err := url.Parse(webhook)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "invalid webhook url")
 			return nil, errors.New("invalid webhook url")
 		}
 	}
@@ -93,8 +112,11 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 
 	task, err := s.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
+	span.SetAttributes(attribute.String("codeq.task_id", task.ID))
 	if s.notifier != nil {
 		// Only notify for immediate tasks (scheduled tasks are placed into delayed ZSET).
 		if visibleAt.IsZero() || !visibleAt.After(s.now()) {
