@@ -24,6 +24,7 @@ codeQ provides:
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
 - **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- **Distributed tracing** with OpenTelemetry support for end-to-end observability.
 - **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
 
 ## Get started
@@ -169,6 +170,7 @@ Key references:
 - **Backoff and retries**: `docs/11-backoff.md` - Retry logic
 - **Webhooks**: `docs/12-webhooks.md` - Push notifications
 - **Configuration**: `docs/14-configuration.md` - Config reference
+- **Operations**: `docs/10-operations.md` - Metrics, health checks, and tracing
 - **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
 - **Performance**: `docs/17-performance-tuning.md` - Optimization guide
 - **Testing**: `docs/19-testing.md` - Test coverage and strategy
