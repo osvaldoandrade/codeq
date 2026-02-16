@@ -55,6 +55,10 @@ Your job is to act as a planner for the GitHub repository ${{ github.repository 
 
    2c. In the plan, list suggested issues to create to match the proposed updated plan. Don't create any issues, just list the suggestions. Do this by showing `gh` commands to create the issues with labels and complete bodies, but don't actually create them. Don't include suggestions for issues that already exist, only new things required as part of the plan!
 
-3. Create a new planning issue with the project plan in its body. 
+3. Create a new planning issue with the project plan in its body using the `create_issue` tool.
 
-   3a. Create an issue with an appropriate title starting with "${{ github.workflow }}" and the current date (e.g., "Daily Plan - 2025-10-10"), using the project plan as the body.
+   3a. **IMPORTANT**: You MUST call the `create_issue` tool (from the safeoutputs MCP server) to create the issue. Simply preparing the content is not sufficient - you must actually invoke the tool.
+   
+   3b. Create an issue with an appropriate title starting with "${{ github.workflow }}" and the current date (e.g., "Daily Plan - 2025-10-10"), using the project plan as the body.
+   
+   3c. The title will automatically be prefixed with "${{ github.workflow }}" and the label "planning" will be added automatically, so you don't need to include these in your tool call.

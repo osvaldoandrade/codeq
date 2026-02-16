@@ -319,7 +319,7 @@ Please verify:
 
 ### 4.3 Use Safe Outputs
 
-Create the pull request using the safe-outputs configuration:
+Create the pull request by **calling the `create_pull_request` tool from the safeoutputs MCP server**. You must actually invoke the tool - preparing content without calling the tool is insufficient.
 
 - Title will be prefixed with `[code-simplifier]`
 - Labeled with `refactoring`, `code-quality`, `automation`
