@@ -31,7 +31,7 @@ cd java/springboot
 mvn spring-boot:run
 ````
 
-**Documentation**: Spring Boot example documentation is coming soon.
+**Documentation**: See [java/springboot/README.md](java/springboot/README.md) for comprehensive guide including usage examples, best practices, and troubleshooting.
 
 ---
 
@@ -73,7 +73,7 @@ npm install
 npm run start:dev
 ````
 
-**Documentation**: See inline code comments
+**Documentation**: See [nodejs/nestjs/README.md](nodejs/nestjs/README.md) for comprehensive guide including usage examples, best practices, monitoring, and troubleshooting.
 
 ---
 

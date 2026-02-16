@@ -653,11 +653,18 @@ process.on('SIGTERM', () => {
 });
 ```
 
+## Complete Working Examples
+
+Find complete, runnable examples in the repository:
+
+- ✅ **[NestJS](../../examples/nodejs/nestjs/)** - Full producer + worker integration with TypeScript, REST API, background workers, heartbeat management, and error handling. Production-ready with comprehensive documentation.
+
+- **Express** - Basic Express integration is shown in this guide. A dedicated standalone example is planned for a future release.
+
+- **React** - Frontend integration example (polling for task status, webhook notifications) is planned for a future release. See [HTTP API Reference](../04-http-api.md) for REST endpoints to integrate with any frontend framework.
+
 ## See Also
 
 - [HTTP API Reference](../04-http-api.md)
 - [Configuration Guide](../14-configuration.md)
 - [Performance Tuning](../17-performance-tuning.md)
-- Example: Express - *Coming soon*
-- [Example: NestJS](../../examples/nodejs/nestjs/) - Complete working example
-- Example: React - *Coming soon*
