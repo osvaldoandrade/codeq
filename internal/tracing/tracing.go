@@ -106,10 +106,7 @@ func Setup(ctx context.Context, cfg Config, logger *slog.Logger) (func(context.C
 }
 
 func defaultPropagator() propagation.TextMapPropagator {
-	return propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	)
+	return propagation.TraceContext{}
 }
 
 // webhookPropagator returns a propagator that only includes TraceContext,
