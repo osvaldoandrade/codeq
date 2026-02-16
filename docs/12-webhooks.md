@@ -89,6 +89,7 @@ When OpenTelemetry tracing is enabled, notifications also include W3C trace cont
 
 - `traceparent`
 - `tracestate` (optional)
+- `baggage` (optional, depending on the configured OpenTelemetry propagator)
 
 ## 2) Result callbacks
 
@@ -137,3 +138,4 @@ When OpenTelemetry tracing is enabled, result callbacks also include W3C trace c
 
 - `traceparent`
 - `tracestate` (optional)
+- `baggage` (optional, depending on the configured OpenTelemetry propagator)
