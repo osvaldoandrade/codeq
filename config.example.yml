@@ -1,0 +1,88 @@
+# Example codeQ Configuration with Persistence Plugin
+
+# Core settings
+port: 8080
+env: production
+timezone: America/Sao_Paulo
+logLevel: info
+logFormat: json
+
+# === Persistence Plugin Configuration ===
+# Choose your persistence backend. Available options:
+# - redis: Redis/KVRocks (default, production-ready)
+# - memory: In-memory storage (testing only, data is lost on restart)
+
+# Option 1: Redis Plugin (Default)
+persistenceProvider: redis
+persistenceConfig:
+  addr: localhost:6379
+  password: "" # optional, leave empty if no password
+
+# Option 2: Memory Plugin (Testing Only)
+# persistenceProvider: memory
+# persistenceConfig: {}
+
+# === Legacy Redis Settings (deprecated) ===
+# These are still supported for backward compatibility
+# If persistenceProvider is not set, these will be used automatically
+redisAddr: localhost:6379
+redisPassword: ""
+
+# === Authentication ===
+# Producer authentication (for task submission)
+producerAuthProvider: static
+producerAuthConfig:
+  token: "your-producer-token-here"
+  subject: "api-client"
+
+# Worker authentication (for task claiming)
+workerAuthProvider: static
+workerAuthConfig:
+  token: "your-worker-token-here"
+  subject: "worker-1"
+  eventTypes: ["GENERATE_MASTER", "GENERATE_CREATIVE"]
+
+# === Task Scheduling ===
+defaultLeaseSeconds: 300
+requeueInspectLimit: 200
+maxAttemptsDefault: 5
+
+# === Backoff Configuration ===
+backoffPolicy: exp_full_jitter
+backoffBaseSeconds: 5
+backoffMaxSeconds: 900
+
+# === Webhooks ===
+webhookHmacSecret: "your-webhook-secret"
+subscriptionMinIntervalSeconds: 1
+subscriptionCleanupIntervalSeconds: 300
+
+# Result webhooks
+resultWebhookMaxAttempts: 5
+resultWebhookBaseBackoffSeconds: 5
+resultWebhookMaxBackoffSeconds: 300
+
+# === Rate Limiting ===
+rateLimit:
+  producer:
+    requestsPerMinute: 1000
+    burstSize: 100
+  worker:
+    requestsPerMinute: 500
+    burstSize: 50
+  webhook:
+    requestsPerMinute: 100
+    burstSize: 10
+  admin:
+    requestsPerMinute: 100
+    burstSize: 10
+
+# === Storage ===
+localArtifactsDir: /tmp/codeq-artifacts
+
+# === Tracing (Optional) ===
+tracingEnabled: false
+tracingServiceName: codeq
+tracingOtlpEndpoint: localhost:4317
+tracingOtlpInsecure: true
+tracingSampleRatio: 1.0

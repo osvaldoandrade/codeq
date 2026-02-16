@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Persistence Plugin Architecture**: Pluggable persistence layer enables organizations to choose storage backends without core code changes
+  - Plugin interface defined in `pkg/persistence/` with `PluginPersistence`, `TaskStorage`, `ResultStorage`, and `SubscriptionStorage` interfaces
+  - Redis plugin wraps existing Redis/KVRocks implementation maintaining full backward compatibility
+  - Memory plugin provides in-memory storage for unit tests (no external dependencies)
+  - Configuration-driven plugin selection via `persistenceProvider` and `persistenceConfig`
+  - Plugin registry pattern mirroring existing `pkg/auth` authentication plugins
+  - Documentation: `docs/26-persistence-plugin-system.md`
+  - Example configuration: `config.example.yml`
+  - Future: PostgreSQL, DynamoDB, Cassandra plugins can be added without core changes
+
 ### ⚠️ BREAKING CHANGES
 
 #### DLQ Data Structure Change
