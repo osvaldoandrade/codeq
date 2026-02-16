@@ -298,6 +298,59 @@ Now that you understand the basics, explore these topics:
 - **[Configuration](14-configuration.md)**: Advanced configuration options
 - **[Examples](13-examples.md)**: More usage patterns and examples
 
+## Optional: Enable Distributed Tracing
+
+codeQ supports OpenTelemetry distributed tracing to help you trace tasks through their entire lifecycle.
+
+### Quick Setup (Local Development)
+
+1. Start codeQ with the observability stack (includes Jaeger):
+
+````bash
+docker compose --profile obs up -d
+````
+
+2. Enable tracing in your `.env` file:
+
+````bash
+TRACING_ENABLED=true
+TRACING_SERVICE_NAME=codeq
+TRACING_OTLP_ENDPOINT=jaeger:4317
+TRACING_OTLP_INSECURE=true
+TRACING_SAMPLE_RATIO=1.0
+````
+
+3. Restart codeQ:
+
+````bash
+docker compose restart codeq
+````
+
+4. Create and process a task, then view traces in Jaeger UI:
+
+````bash
+# Open Jaeger UI
+open http://localhost:16686
+
+# Create a task
+curl -X POST http://localhost:8080/v1/codeq/tasks \
+  -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command": "PROCESS_ORDER",
+    "payload": {"orderId": "12345"}
+  }'
+````
+
+### What Gets Traced
+
+- HTTP requests (inbound and outbound)
+- Task lifecycle (create → claim → process → complete)
+- Webhook deliveries (worker notifications and result callbacks)
+- W3C trace context propagation across service boundaries
+
+See `docs/10-operations.md` for production tracing configuration and `docs/14-configuration.md` for all tracing options.
+
 ## Troubleshooting
 
 ### Task not being claimed

@@ -28,6 +28,11 @@ services:
       - PRODUCER_AUTH_CONFIG=${PRODUCER_AUTH_CONFIG:-{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN"}}}
       - WORKER_AUTH_PROVIDER=${WORKER_AUTH_PROVIDER:-static}
       - WORKER_AUTH_CONFIG=${WORKER_AUTH_CONFIG:-{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"]}}
+      - TRACING_ENABLED=${TRACING_ENABLED:-false}
+      - TRACING_SERVICE_NAME=${TRACING_SERVICE_NAME:-codeq}
+      - TRACING_OTLP_ENDPOINT=${TRACING_OTLP_ENDPOINT:-jaeger:4317}
+      - TRACING_OTLP_INSECURE=${TRACING_OTLP_INSECURE:-true}
+      - TRACING_SAMPLE_RATIO=${TRACING_SAMPLE_RATIO:-1.0}
     depends_on:
       - kvrocks
     command: ["sh", "-c", "go run ./cmd/server"]

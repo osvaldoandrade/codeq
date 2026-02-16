@@ -379,11 +379,148 @@ export class OrderWorker {
 
 **Integration guide**: [Node.js Integration Guide](integrations/nodejs-integration.md)
 
+## OpenTelemetry Distributed Tracing
+
+### Basic Configuration
+
+Enable tracing in your configuration file or via environment variables:
+
+````yaml
+# config.yaml
+tracingEnabled: true
+tracingServiceName: codeq
+tracingOtlpEndpoint: localhost:4317
+tracingOtlpInsecure: true
+tracingSampleRatio: 1.0
+````
+
+Or via environment:
+
+````bash
+export TRACING_ENABLED=true
+export TRACING_SERVICE_NAME=codeq
+export TRACING_OTLP_ENDPOINT=localhost:4317
+export TRACING_OTLP_INSECURE=true
+export TRACING_SAMPLE_RATIO=1.0
+````
+
+### Trace Context Propagation
+
+When creating tasks, you can propagate trace context from your application:
+
+````bash
+# Include W3C trace context headers in your request
+curl -X POST http://localhost:8080/v1/codeq/tasks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" \
+  -d '{
+    "command": "PROCESS_ORDER",
+    "payload": {"orderId": "12345"}
+  }'
+````
+
+The trace context is:
+- Extracted from incoming HTTP headers
+- Stored with the task record
+- Propagated to webhooks and result callbacks
+- Included in all spans emitted by codeQ
+
+### Example: End-to-End Tracing with Jaeger
+
+````bash
+# Start codeQ with observability stack
+docker compose --profile obs up -d
+
+# Enable tracing in .env
+cat >> .env << 'EOF'
+TRACING_ENABLED=true
+TRACING_SERVICE_NAME=codeq
+TRACING_OTLP_ENDPOINT=jaeger:4317
+TRACING_OTLP_INSECURE=true
+TRACING_SAMPLE_RATIO=1.0
+EOF
+
+# Restart codeQ
+docker compose restart codeq
+
+# Create a task
+TASK_ID=$(curl -s -X POST http://localhost:8080/v1/codeq/tasks \
+  -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"command":"EXAMPLE_TASK","payload":{"test":true}}' | jq -r '.id')
+
+# Process the task
+curl -X POST http://localhost:8080/v1/codeq/tasks/claim \
+  -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"commands":["EXAMPLE_TASK"],"leaseSeconds":60}'
+
+# Complete the task
+curl -X POST http://localhost:8080/v1/codeq/tasks/$TASK_ID/result \
+  -H "Authorization: Bearer dev-token" \
+  -H "Content-Type: application/json" \
+  -d '{"status":"COMPLETED","output":{"success":true}}'
+
+# View the trace in Jaeger UI
+open http://localhost:16686
+````
+
+### Tracing with Custom Services
+
+If you're building a worker service in your application that processes codeQ tasks, ensure you:
+
+1. **Extract trace context** from the task record (uses `traceParent` and `traceState` fields)
+2. **Create child spans** for your processing logic
+3. **Use the same service name** or a related one for correlation
+
+Example in Go:
+
+````go
+import (
+    "context"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/propagation"
+)
+
+// Extract trace context from task
+func processTask(task *Task) {
+    carrier := propagation.MapCarrier{}
+    if task.TraceParent != "" {
+        carrier.Set("traceparent", task.TraceParent)
+    }
+    if task.TraceState != "" {
+        carrier.Set("tracestate", task.TraceState)
+    }
+    
+    // Extract and create child span
+    ctx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
+    tracer := otel.Tracer("my-worker-service")
+    ctx, span := tracer.Start(ctx, "process_task")
+    defer span.End()
+    
+    // Your processing logic here
+    // ...
+}
+````
+
+### Sampling Configuration
+
+Control what percentage of traces are sampled:
+
+````yaml
+tracingSampleRatio: 0.1  # Sample 10% of requests
+````
+
+Sampling is parent-based by default, so if an incoming request has a sampled trace context, codeQ will honor it.
+
 ## Additional Resources
 
 - **SDK Documentation**: [sdks/README.md](../sdks/README.md)
 - **HTTP API Reference**: [04-http-api.md](04-http-api.md)
 - **CLI Reference**: [15-cli-reference.md](15-cli-reference.md)
+- **Tracing Configuration**: [14-configuration.md](14-configuration.md#tracing-opentelemetry)
+- **Operations Guide**: [10-operations.md](10-operations.md#tracing-opentelemetry)
 - **All Examples**: [examples/](../examples/)
 - **Integration Guides**:
   - [Java Integration](integrations/java-integration.md)

@@ -464,6 +464,70 @@ Queue depth gauges are collected from Redis, so all API replicas report identica
 
 ---
 
+### `internal/tracing`
+
+**Purpose**: OpenTelemetry distributed tracing
+
+**Key files**:
+- `tracing.go`: OTLP gRPC exporter setup, W3C trace context utilities
+
+**Functions**:
+- `Setup(ctx, cfg, logger)`: Initialize TracerProvider with OTLP exporter
+  - Configures service name, endpoint, TLS, sampling ratio
+  - Sets global TracerProvider and TextMapPropagator
+  - Returns shutdown function for graceful cleanup
+  - Fails open (logs warning but continues) if OTLP endpoint unavailable
+  
+- `TraceContextStrings(ctx)`: Extract W3C trace context from context
+  - Returns `traceparent` and `tracestate` strings
+  - Used to persist trace context in task records
+  
+- `ContextWithRemoteParent(ctx, traceParent, traceState)`: Build context from stored trace strings
+  - Enables continuing distributed traces across async boundaries
+  
+- `InjectHeaders(ctx, headers)`: Add W3C trace context to HTTP headers
+  - Used for outgoing webhook requests
+
+**Configuration**:
+````go
+import "github.com/osvaldoandrade/codeq/internal/tracing"
+
+// Initialize tracing
+shutdown, err := tracing.Setup(ctx, tracing.Config{
+    Enabled:      true,
+    ServiceName:  "codeq",
+    OTLPEndpoint: "localhost:4317",
+    OTLPInsecure: true,
+    SampleRatio:  1.0,
+}, logger)
+defer shutdown(context.Background())
+````
+
+**Usage in worker services**:
+````go
+// Extract trace context from task record
+ctx := tracing.ContextWithRemoteParent(ctx, task.TraceParent, task.TraceState)
+
+// Create child span
+tracer := otel.Tracer("my-worker")
+ctx, span := tracer.Start(ctx, "process_task")
+defer span.End()
+````
+
+**Design notes**:
+- Supports W3C trace context and baggage propagation
+- Parent-based sampling (honors upstream sampling decisions)
+- OTLP gRPC exporter compatible with Jaeger, Grafana Tempo
+- Automatic endpoint sanitization (handles URL format)
+- Graceful degradation (tracing failure doesn't prevent application startup)
+
+**See**: 
+- `docs/10-operations.md#tracing-opentelemetry` for configuration
+- `docs/14-configuration.md#tracing-opentelemetry` for all options
+- `docs/13-examples.md#opentelemetry-distributed-tracing` for examples
+
+---
+
 ### `internal/identitymw` ⚠️ DEPRECATED
 
 **Status**: This package is **deprecated and unused**. It exists for historical reference only.

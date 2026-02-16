@@ -40,6 +40,7 @@
   - `require_admin.go`: Admin endpoint protection (requires `admin:true` claim)
   - `logger.go`: Request logging middleware
   - `request_id.go`: Correlation ID injection via `X-Request-Id` header (generates 16-byte hex random ID if not provided by client)
+  - `tracing.go`: OpenTelemetry distributed tracing middleware with W3C trace context propagation
 - **`internal/services`**: Business logic layer
   - `scheduler_service.go`: Task claim, NACK, repair, requeue logic
   - `results_service.go`: Result storage and validation
@@ -64,6 +65,8 @@
 - **`internal/metrics`**: Observability and monitoring
   - `metrics.go`: Prometheus metric definitions (counters, histograms, gauges)
   - `redis_collector.go`: Custom Prometheus collector for Redis-backed queue metrics
+- **`internal/tracing`**: Distributed tracing
+  - `tracing.go`: OpenTelemetry setup with OTLP gRPC exporter, W3C trace context propagation utilities
 
 ## Components
 
@@ -77,6 +80,7 @@
 - Notifier: optional webhook signal dispatcher.
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
+- Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
 
 ## Enqueue flow
 
@@ -107,6 +111,72 @@
 3. Service persists artifacts (optional), stores the result record, updates task status, and clears the lease.
 4. Service removes the task from the in-progress set.
 5. Service posts webhook if the task contains a webhook URL.
+
+## Distributed Tracing Flow
+
+codeQ implements OpenTelemetry distributed tracing to enable end-to-end observability across task lifecycles:
+
+### Trace Context Propagation
+
+1. **HTTP Request Ingestion**:
+   - `TracingMiddleware` extracts W3C trace context from incoming HTTP headers (`traceparent`, `tracestate`)
+   - Creates a root span for the HTTP handler chain
+   - Injects context into Gin request context
+
+2. **Task Creation**:
+   - `task_repository.go` extracts trace context from request context using `tracing.TraceContextStrings()`
+   - Stores `traceParent` and `traceState` fields in task JSON
+   - Enables correlation between task creation and subsequent processing
+
+3. **Task Processing**:
+   - When task is claimed, trace context is available in task record
+   - Worker services can extract and continue the trace
+   - Example: `ctx := tracing.ContextWithRemoteParent(ctx, task.TraceParent, task.TraceState)`
+
+4. **Webhook Delivery**:
+   - Result callbacks and worker notifications include trace context headers
+   - `tracing.InjectHeaders()` adds W3C headers to outgoing HTTP requests
+   - Downstream services can participate in the distributed trace
+
+### Span Naming Conventions
+
+- **HTTP Spans**: `HTTP <METHOD> <ROUTE>` (e.g., `HTTP POST /v1/codeq/tasks`)
+- **Custom Spans**: Use tracer from `otel.Tracer("codeq/<component>")` for domain-specific spans
+
+### Trace Attributes
+
+Standard HTTP attributes are automatically added:
+- `http.method`: HTTP request method
+- `http.path`: Request path
+- `http.route`: Matched route pattern
+- `http.status_code`: Response status code
+- `http.host`: Request host header
+
+### Sampling
+
+- Parent-based sampling strategy (honors upstream sampling decisions)
+- Configurable sample ratio via `tracingSampleRatio` (0.0 to 1.0)
+- TraceID-based sampling for consistent trace completeness
+
+### Integration Points
+
+1. **Application Bootstrap** (`pkg/app/application.go`):
+   - Calls `tracing.Setup()` to initialize OTLP exporter
+   - Registers TracerProvider and TextMapPropagator globally
+   - Returns shutdown function for graceful cleanup
+
+2. **HTTP Middleware** (`internal/middleware/tracing.go`):
+   - Conditionally enabled via `cfg.TracingEnabled`
+   - Extracts trace context from request headers
+   - Creates spans for all HTTP handlers
+   - Sets error status for 5xx responses
+
+3. **Repository Layer** (`internal/repository/task_repository.go`):
+   - Extracts trace context at task creation
+   - Stores in Redis alongside task data
+   - Enables cross-service correlation
+
+For configuration details, see `docs/14-configuration.md` (Tracing section) and `docs/10-operations.md` (Tracing setup).
 
 ## NACK flow
 
