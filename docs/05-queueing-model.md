@@ -81,7 +81,7 @@ When `idempotencyKey` is provided, the service stores a mapping of `idempotencyK
 
 ### Bloom Filter Optimizations
 
-codeQ uses TWO in-process rotating Bloom filters to optimize Redis operations:
+codeQ uses THREE in-process rotating Bloom filters to optimize Redis operations:
 
 #### 1. Idempotency Bloom Filter (Enqueue Fast-Path)
 
@@ -128,4 +128,25 @@ Optimizes Claim by skipping HGET for administratively deleted tasks ("ghost" IDs
 - Eliminates Redis HGET round-trip for deleted tasks still in queues
 - Reduces wasted Claim iterations when pending queues have stale IDs
 - Most effective after administrative cleanup operations
+
+#### 3. Cleanup Bloom Filter (CleanupExpired Fast-Path)
+
+Prevents redundant cleanup work by tracking already-removed task IDs across concurrent or repeated cleanup cycles:
+
+**Fast-path logic:**
+1. During `CleanupExpired()`, check cleanup Bloom filter before attempting removal
+2. If `MaybeHas(taskID)` returns `true`, skip redundant `removeTaskFully()` work
+3. If returns `false`, proceed with normal removal logic
+4. On successful removal, add task ID to cleanup Bloom filter
+
+**Characteristics:**
+- **Capacity**: 2M keys, 1% false positive rate (~9.6 MB RAM for dual buffers)
+- **Rotation interval**: 6 hours (matches ghost Bloom)
+- **Thread-safe**: Uses atomic operations and lock-free reads for concurrent access
+- **Updated on success**: Populated in `removeTaskFully()` after successful deletion
+
+**Performance impact:**
+- Eliminates redundant removal operations across concurrent/repeated cleanup cycles
+- Most effective when cleanup is triggered frequently or runs concurrently
+- Reduces Redis load during large-scale expiration processing
 - No benefit for fresh systems without cleanup history
