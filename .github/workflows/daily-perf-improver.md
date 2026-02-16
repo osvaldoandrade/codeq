@@ -27,8 +27,6 @@ safe-outputs:
     labels: [planning, performance]
     max: 5
   add-comment:
-    issue: true
-    discussion: true
     target: "*" # can add a comment to any one single issue or pull request
   create-pull-request:
     draft: true
@@ -59,7 +57,6 @@ steps:
     id: build-steps
     continue-on-error: true # the model may not have got it right, so continue anyway, the model will check the results and try to fix the steps
 
-source: githubnext/agentics/workflows/daily-perf-improver.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
 # Daily Perf Improver
@@ -132,7 +129,7 @@ To decide which phase to perform:
   - Success metrics and testing approaches
   - How to do explore performance efficiently using focused, maximally-efficient measurements and rebuilds
 
-5. Create PR with title "${{ github.workflow }} - Updates to complete configuration" containing files from steps 3-4. Request maintainer review. 
+5. **IMPORTANT**: Create a PR by calling the `create_pull_request` tool from the safeoutputs MCP server with title "${{ github.workflow }} - Updates to complete configuration" containing files from steps 3-4. Request maintainer review. You must actually invoke the tool - preparing content without calling the tool is insufficient.
 
    **Include a "What Happens Next" section in the PR description that explains:**
    - Once this PR is merged, the next workflow run will proceed to Phase 3, where actual performance improvements will be implemented

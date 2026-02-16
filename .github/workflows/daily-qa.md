@@ -23,8 +23,6 @@ safe-outputs:
     title-prefix: "${{ github.workflow }}"
     labels: [planning, qa]
   add-comment:
-    issue: true
-    discussion: true
     target: "*" # all issues and PRs
     max: 5
   create-pull-request:
@@ -37,7 +35,6 @@ tools:
   web-fetch:
   bash: true
 
-source: githubnext/agentics/workflows/daily-qa.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
 # Daily QA
@@ -74,4 +71,4 @@ Your name is ${{ github.workflow }}. Your job is to act as an agentic QA enginee
 
 5. Search for any previous "${{ github.workflow }}" open issues in the repository. Read the latest one. If the status is essentially the same as the current state of the repository, then add a very brief comment to that issue saying you didn't find anything new and exit. Close all the previous open Daily QA Report issues.
 
-6. Create a new issue with title starting with "${{ github.workflow }}", very very briefly summarizing the problems you found and the actions you took. Use note form. Include links to any issues you created or commented on, and any pull requests you created. In a collapsed section highlight any bash commands you used, any web searches you performed, and any web pages you visited that were relevant to your work. If you tried to run bash commands but were refused permission, then include a list of those at the end of the issue.
+6. **IMPORTANT**: Create a new issue by calling the `create_issue` tool from the safeoutputs MCP server. Title it starting with "${{ github.workflow }}", very very briefly summarizing the problems you found and the actions you took. Use note form. Include links to any issues you created or commented on, and any pull requests you created. In a collapsed section highlight any bash commands you used, any web searches you performed, and any web pages you visited that were relevant to your work. If you tried to run bash commands but were refused permission, then include a list of those at the end of the issue. You must actually invoke the tool - preparing content without calling the tool is insufficient.

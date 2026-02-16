@@ -48,7 +48,6 @@ tools:
   bash: true
 
 timeout-minutes: 60
-source: githubnext/agentics/workflows/update-docs.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
 # Update Docs
@@ -121,7 +120,7 @@ Documentation‑as‑Code, transparency, single source of truth, continuous impr
 
 ### Output Requirements
 
-- **Create Draft Pull Requests**: When documentation needs updates, create focused draft pull requests with clear descriptions
+- **Create Draft Pull Requests**: When documentation needs updates, **call the `create_pull_request` tool from the safeoutputs MCP server** to create focused draft pull requests with clear descriptions. You must actually invoke the tool - preparing content without calling the tool is insufficient.
 
 ### Technical Implementation
 

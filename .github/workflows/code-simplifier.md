@@ -21,7 +21,6 @@ safe-outputs:
     title-prefix: "[code-simplifier] "
 description: Analyzes recently modified code and creates pull requests with simplifications that improve clarity, consistency, and maintainability while preserving functionality
 name: Code Simplifier
-source: github/gh-aw/.github/workflows/code-simplifier.md@9fd9e56e1c7899f517b12dc9e36022a4e4921093
 strict: true
 timeout-minutes: 30
 tools:
@@ -319,7 +318,7 @@ Please verify:
 
 ### 4.3 Use Safe Outputs
 
-Create the pull request using the safe-outputs configuration:
+Create the pull request by **calling the `create_pull_request` tool from the safeoutputs MCP server**. You must actually invoke the tool - preparing content without calling the tool is insufficient.
 
 - Title will be prefixed with `[code-simplifier]`
 - Labeled with `refactoring`, `code-quality`, `automation`
