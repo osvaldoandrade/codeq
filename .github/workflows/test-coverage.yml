@@ -5,9 +5,19 @@ on:
     branches:
       - main
       - copilot/**
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/test-coverage.yml'
   pull_request:
     branches:
       - main
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/test-coverage.yml'
 
 permissions:
   contents: read
