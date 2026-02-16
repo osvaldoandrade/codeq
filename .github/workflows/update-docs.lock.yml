@@ -21,8 +21,8 @@
 #
 # For more information: https://github.github.com/gh-aw/introduction/overview/
 #
-# MANUAL EDIT: Added path filters to reduce no-op runs. This change should be
-# propagated back to the source .md file and recompiled with `gh aw compile`.
+# MANUAL EDIT: Added path filters to reduce no-op runs. Both this file and the source
+# .md file have been updated together to maintain synchronization.
 #
 # This workflow keeps docs synchronized with code changes.
 # Triggered on push to main (with path filters), it analyzes diffs to identify changed entities and
@@ -47,7 +47,6 @@ name: "Update Docs"
     # Trigger on documentation changes
     - 'docs/**'
     - '*.md'
-    - 'README.md'
     # Trigger on configuration changes
     - 'docker-compose*.yml'
     - 'Dockerfile'

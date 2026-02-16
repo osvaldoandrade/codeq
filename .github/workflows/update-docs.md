@@ -17,7 +17,6 @@ on:
       # Trigger on documentation changes
       - 'docs/**'
       - '*.md'
-      - 'README.md'
       # Trigger on configuration changes
       - 'docker-compose*.yml'
       - 'Dockerfile'
