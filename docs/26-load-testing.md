@@ -25,9 +25,10 @@ docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughp
 
 ### Environment Variables
 
-The k6 scripts in `loadtest/k6/` default `CODEQ_BASE_URL` to `http://localhost:8080` when run directly. When you run k6 via `docker compose`, the `k6` service in `docker-compose.yml` sets `CODEQ_BASE_URL` to `http://codeq:8080` so the container can reach the `codeq` service on the compose network. You can override these by setting the env vars before running `docker compose` (or by editing `docker-compose.yml`):
+The k6 scripts in `loadtest/k6/` default `CODEQ_BASE_URL` to `http://localhost:8080` when run directly. When you run k6 via `docker compose`, the `k6` service in `docker-compose.yml` defaults `CODEQ_BASE_URL` to `http://codeq:8080` so the container can reach the `codeq` service on the compose network. You can override these by setting the env vars before running `docker compose`:
 
-- `CODEQ_BASE_URL` (script default: `http://localhost:8080`; docker-compose default inside loadtest container: `http://codeq:8080`)
+- `CODEQ_BASE_URL` (script default: `http://localhost:8080`; docker-compose default: `http://codeq:8080`)
+  - Override: `CODEQ_BASE_URL=http://your-host:8080 docker compose --profile loadtest run --rm k6 …`
 - `CODEQ_PRODUCER_TOKEN` (default: `dev-token`)
 - `CODEQ_WORKER_TOKEN` (default: `dev-token`)
 - `CODEQ_COMMANDS` (default: `GENERATE_MASTER`)

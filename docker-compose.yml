@@ -82,7 +82,7 @@ services:
     volumes:
       - ./loadtest/k6:/scripts:ro
     environment:
-      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_BASE_URL=${CODEQ_BASE_URL:-http://codeq:8080}
       - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN:-dev-token}
       - CODEQ_WORKER_TOKEN=${CODEQ_WORKER_TOKEN:-dev-token}
       - CODEQ_COMMANDS=${CODEQ_COMMANDS:-GENERATE_MASTER}
