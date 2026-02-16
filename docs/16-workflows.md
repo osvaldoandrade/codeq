@@ -389,6 +389,7 @@ No-op (no operation) runs occur when a workflow executes but determines no actio
 
 ## See Also
 
+- [Agentic Workflows Guide](../.github/AGENTIC_WORKFLOWS.md) - Detailed explanation of AI-powered workflows, no-op tracking, and optimization strategies
 - [Contributing Guide](../CONTRIBUTING.md)
 - [Workflow Failure Analysis](../WORKFLOW_FAILURE_ANALYSIS.md)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
