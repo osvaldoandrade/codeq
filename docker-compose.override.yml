@@ -6,9 +6,9 @@ services:
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
       - ./.artifacts:/app/.artifacts
-    command: ["sh", "-c", "go mod download && go install github.com/air-verse/air@latest && air -c .air.toml"]
+    # Pin air version to keep compatibility with the Go toolchain in `golang:1.23` (GOTOOLCHAIN=local).
+    command: ["sh", "-c", "go mod download && go install github.com/air-verse/air@v1.61.0 && air -c .air.toml"]
 
 volumes:
   go-mod-cache:
   go-build-cache:
-
