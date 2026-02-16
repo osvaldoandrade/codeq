@@ -105,7 +105,12 @@ The repository uses GitHub Actions for CI/CD, documentation, code quality, and r
 ### Update Docs (`update-docs.lock.yml`)
 
 **Trigger**:
-- Push to `main` branch
+- Push to `main` branch (with path filters)
+  - Go source files (`**.go`, `go.mod`, `go.sum`)
+  - Documentation files (`docs/**`, `*.md`)
+  - Configuration files (`docker-compose*.yml`, `Dockerfile`, `.env.example`, `helm/**`)
+  - SDK and examples (`sdks/**`, `examples/**`)
+  - Workflow file changes
 - Manual workflow dispatch
 
 **Purpose**: Autonomous documentation maintenance
@@ -117,6 +122,10 @@ Agentic workflow that:
 - Identifies documentation gaps
 - Creates/updates documentation following best practices
 - Opens draft pull requests with documentation changes
+
+**Optimization**:
+- Path filters prevent no-op runs when unrelated files change (e.g., wiki, tests)
+- Only triggers when files that may affect documentation are modified
 
 **Style Guidelines**:
 - Diátaxis framework (tutorials, how-to, reference, explanation)
@@ -307,6 +316,29 @@ Agentic workflows consume GitHub Actions minutes:
 - Manual workflows: Only when triggered
 
 Monitor usage: Settings → Billing and plans → Plans and usage
+
+### Reducing No-Op Runs
+
+**What are no-op runs?**
+No-op (no operation) runs occur when a workflow executes but determines no action is needed. While harmless, they consume CI/CD resources.
+
+**Optimization strategies**:
+
+1. **Path filters**: Workflows like `update-docs` and `test-coverage` use path filters to skip execution when unrelated files change
+   - Example: `update-docs` only runs when code, docs, or configs change
+   - Example: `test-coverage` only runs when Go files change
+
+2. **Skip-if-match conditions**: Some workflows check for existing work before running
+   - Example: `code-simplifier` skips if there's already an open PR
+
+3. **Scheduled workflows**: Daily workflows may report no-op if no work is needed
+   - This is expected behavior
+   - No-op runs are tracked in the "[agentics] No-Op Runs" issue
+
+**Tracking no-op runs**:
+- Workflows report no-op completions to a tracking issue
+- Review the tracking issue periodically to identify optimization opportunities
+- Most no-ops from scheduled workflows are expected and acceptable
 
 ## Troubleshooting
 
