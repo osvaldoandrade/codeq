@@ -10,6 +10,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  skip-if-match: is:pr is:open in:title "[update-docs]"
 
 permissions: read-all
 
@@ -25,9 +26,9 @@ tools:
     toolsets: [all]
   web-fetch:
   # By default this workflow allows all bash commands within the confine of Github Actions VM 
-  bash: [ ":*" ]
+  bash: true
 
-timeout-minutes: 30
+timeout-minutes: 60
 source: githubnext/agentics/workflows/update-docs.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
