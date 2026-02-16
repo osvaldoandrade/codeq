@@ -42,6 +42,30 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
   - New metric: `codeq_rate_limit_hits_total` counter for monitoring rejections
   - Disabled by default; see [Configuration](docs/14-configuration.md) and [Operations](docs/10-operations.md#rate-limiting) for setup
 
+### Documentation
+
+- **Framework example READMEs** ([#135](https://github.com/osvaldoandrade/codeq/pull/135))
+  - Added comprehensive README for NestJS example (`examples/nodejs/nestjs/README.md`)
+    - Complete quick start guide with prerequisites and setup instructions
+    - Architecture diagram showing producer and worker patterns
+    - Detailed API endpoint documentation with curl examples
+    - Worker implementation guide with heartbeat management
+    - Production best practices including error handling and monitoring
+    - Troubleshooting section with common issues and solutions
+  - Added comprehensive README for Spring Boot example (`examples/java/springboot/README.md`)
+    - Complete quick start guide with Maven and application setup
+    - Architecture diagram and component overview
+    - REST API documentation with request/response examples
+    - Worker implementation with `@Scheduled` annotation patterns
+    - Configuration management and externalized properties
+    - Production deployment guide including health checks and Docker
+    - Monitoring with Spring Actuator integration
+    - Comprehensive troubleshooting section
+  - Enhanced framework integration documentation in `examples/README.md`
+    - Improved navigation with clear structure for Java and Node.js examples
+    - Quick start commands for each framework
+    - Cross-references to integration guides and SDK documentation
+
 ## [1.1.0] - 2026-02-15
 
 ### ⚠️ BREAKING CHANGES
