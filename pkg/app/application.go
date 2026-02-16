@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 
@@ -29,6 +31,7 @@ type Application struct {
 	ProducerValidator auth.Validator
 	WorkerValidator   auth.Validator
 	RateLimiter       ratelimit.Limiter
+	TracingShutdown   func(context.Context) error
 }
 
 // ApplicationOption configures the Application
@@ -77,12 +80,25 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	logger := slog.New(handler).With("service", "codeq", "env", cfg.Env)
 	slog.SetDefault(logger)
 
+	tracingShutdown, _ := tracing.Setup(context.Background(), tracing.Config{
+		Enabled:      cfg.TracingEnabled,
+		ServiceName:  cfg.TracingServiceName,
+		OTLPEndpoint: cfg.TracingOtlpEndpoint,
+		OTLPInsecure: cfg.TracingOtlpInsecure,
+		SampleRatio:  cfg.TracingSampleRatio,
+	}, logger)
+
 	metrics.RegisterRedisCollector(redisClient, logger)
+
+	webhookClient := &http.Client{
+		Transport: http.DefaultTransport,
+		Timeout:   15 * time.Second,
+	}
 
 	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
 	subRepo := repository.NewSubscriptionRepository(redisClient, loc)
 	subs := services.NewSubscriptionService(subRepo)
-	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook))
+	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
 	cleanup := services.NewSubscriptionCleanupService(subRepo, logger, cfg.SubscriptionCleanupIntervalSeconds)
 	scheduler := services.NewSchedulerService(
 		repo,
@@ -106,11 +122,16 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		cfg.ResultWebhookMaxBackoffSeconds,
 		limiter,
 		ratelimit.Bucket(cfg.RateLimit.Webhook),
+		webhookClient,
 	)
 	results := services.NewResultsService(resultRepo, uploader, resultCallback, logger, time.Now, loc)
 
 	engine := gin.New()
-	engine.Use(gin.Recovery(), middleware.RequestIDMiddleware(), middleware.LoggerMiddleware(logger))
+	engine.Use(gin.Recovery(), middleware.RequestIDMiddleware())
+	if cfg.TracingEnabled {
+		engine.Use(middleware.TracingMiddleware(cfg.TracingServiceName))
+	}
+	engine.Use(middleware.LoggerMiddleware(logger))
 
 	go cleanup.Start(context.Background())
 
@@ -123,6 +144,12 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		Logger:      logger,
 		TZ:          loc,
 		RateLimiter: limiter,
+		TracingShutdown: func(ctx context.Context) error {
+			if tracingShutdown == nil {
+				return nil
+			}
+			return tracingShutdown(ctx)
+		},
 	}
 
 	// Apply options

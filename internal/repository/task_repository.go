@@ -11,10 +11,15 @@ import (
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
+	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -225,6 +230,7 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 	_, err := pipe.Exec(ctx)
 	if err == nil && r.cleanupBloom != nil {
 		r.cleanupBloom.Add(id)
+	}
 	if err == nil && r.ghostBloom != nil {
 		r.ghostBloom.Add(id)
 	}
@@ -324,6 +330,10 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 		TenantID:          tenantID,
 		CreatedAt:         now,
 		UpdatedAt:         now,
+	}
+	if tp, ts := tracing.TraceContextStrings(ctx); tp != "" {
+		task.TraceParent = tp
+		task.TraceState = ts
 	}
 	js := marshal(task)
 
@@ -642,11 +652,25 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 				continue
 			}
 
+			taskCtx := tracing.ContextWithRemoteParent(ctx, t.TraceParent, t.TraceState)
+			taskCtx, span := otel.Tracer("codeq/repository").Start(taskCtx, "codeq.task.claim",
+				trace.WithAttributes(
+					attribute.String("codeq.task_id", t.ID),
+					attribute.String("codeq.command", string(t.Command)),
+					attribute.String("codeq.tenant_id", t.TenantID),
+					attribute.String("codeq.worker_id", workerID),
+					attribute.Int("codeq.lease_seconds", leaseSeconds),
+				),
+			)
+			defer span.End()
+
 			leaseKey := r.keyLease(id)
-			if err := r.rdb.SetEX(ctx, leaseKey, workerID, time.Duration(leaseSeconds)*time.Second).Err(); err != nil {
+			if err := r.rdb.SetEX(taskCtx, leaseKey, workerID, time.Duration(leaseSeconds)*time.Second).Err(); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
 				// Falha ao setar lease → desfaz o move e segue
-				_ = r.rdb.SRem(ctx, dst, id).Err()
-				_ = r.rdb.LPush(ctx, src, id).Err()
+				_ = r.rdb.SRem(taskCtx, dst, id).Err()
+				_ = r.rdb.LPush(taskCtx, src, id).Err()
 				return nil, false, fmt.Errorf("SETEX lease: %w", err)
 			}
 			leaseUntil := r.now().Add(time.Duration(leaseSeconds) * time.Second).UTC().Format(time.RFC3339)
@@ -658,12 +682,18 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 			t.LeaseUntil = leaseUntil
 			t.Attempts++
 			t.UpdatedAt = r.now()
-			if err := r.rdb.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+			if tp, ts := tracing.TraceContextStrings(taskCtx); tp != "" {
+				t.TraceParent = tp
+				t.TraceState = ts
+			}
+			if err := r.rdb.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
 				return nil, false, fmt.Errorf("HSET task inprogress: %w", err)
 			}
 
 			// Bump retenção lógica
-			r.bumpTTL(ctx, t.ID)
+			r.bumpTTL(taskCtx, t.ID)
 
 			return t, true, nil
 		}
@@ -698,19 +728,35 @@ func (r *taskRedisRepo) Heartbeat(ctx context.Context, taskID string, workerID s
 		return fmt.Errorf("not-owner")
 	}
 
-	if err := r.rdb.Expire(ctx, r.keyLease(taskID), time.Duration(extendSeconds)*time.Second).Err(); err != nil {
+	taskCtx := tracing.ContextWithRemoteParent(ctx, t.TraceParent, t.TraceState)
+	taskCtx, span := otel.Tracer("codeq/repository").Start(taskCtx, "codeq.task.heartbeat",
+		trace.WithAttributes(
+			attribute.String("codeq.task_id", t.ID),
+			attribute.String("codeq.command", string(t.Command)),
+			attribute.String("codeq.tenant_id", t.TenantID),
+			attribute.String("codeq.worker_id", workerID),
+			attribute.Int("codeq.extend_seconds", extendSeconds),
+		),
+	)
+	defer span.End()
+
+	if err := r.rdb.Expire(taskCtx, r.keyLease(taskID), time.Duration(extendSeconds)*time.Second).Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("lease expire: %w", err)
 	}
 	t.LeaseUntil = r.now().Add(time.Duration(extendSeconds) * time.Second).UTC().Format(time.RFC3339)
 	t.UpdatedAt = r.now()
 	t.LastKnownLocation = domain.LocationInProgress
 
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+	if err := r.rdb.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("HSET task: %w", err)
 	}
 
 	// Bump retenção lógica
-	r.bumpTTL(ctx, t.ID)
+	r.bumpTTL(taskCtx, t.ID)
 
 	return nil
 }
@@ -733,13 +779,28 @@ func (r *taskRedisRepo) Abandon(ctx context.Context, taskID string, workerID str
 	if t.WorkerID != workerID {
 		return fmt.Errorf("not-owner")
 	}
-	if err := r.rdb.SRem(ctx, inprog, taskID).Err(); err != nil {
+	taskCtx := tracing.ContextWithRemoteParent(ctx, t.TraceParent, t.TraceState)
+	taskCtx, span := otel.Tracer("codeq/repository").Start(taskCtx, "codeq.task.abandon",
+		trace.WithAttributes(
+			attribute.String("codeq.task_id", t.ID),
+			attribute.String("codeq.command", string(t.Command)),
+			attribute.String("codeq.tenant_id", t.TenantID),
+			attribute.String("codeq.worker_id", workerID),
+		),
+	)
+	defer span.End()
+
+	if err := r.rdb.SRem(taskCtx, inprog, taskID).Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("SREM inprog: %w", err)
 	}
-	if err := r.rdb.LPush(ctx, pending, taskID).Err(); err != nil {
+	if err := r.rdb.LPush(taskCtx, pending, taskID).Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("LPUSH pending: %w", err)
 	}
-	_ = r.rdb.Del(ctx, r.keyLease(taskID)).Err()
+	_ = r.rdb.Del(taskCtx, r.keyLease(taskID)).Err()
 
 	t.Status = domain.StatusPending
 	t.LastKnownLocation = domain.LocationPending
@@ -747,12 +808,14 @@ func (r *taskRedisRepo) Abandon(ctx context.Context, taskID string, workerID str
 	t.LeaseUntil = ""
 	t.UpdatedAt = r.now()
 
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+	if err := r.rdb.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("HSET task: %w", err)
 	}
 
 	// Bump retenção lógica
-	r.bumpTTL(ctx, t.ID)
+	r.bumpTTL(taskCtx, t.ID)
 
 	return nil
 }
@@ -786,6 +849,19 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 	delayed := r.keyQueueDelayed(t.Command, t.TenantID)
 	dlq := r.keyQueueDLQ(t.Command, t.TenantID)
 
+	taskCtx := tracing.ContextWithRemoteParent(ctx, t.TraceParent, t.TraceState)
+	taskCtx, span := otel.Tracer("codeq/repository").Start(taskCtx, "codeq.task.nack",
+		trace.WithAttributes(
+			attribute.String("codeq.task_id", t.ID),
+			attribute.String("codeq.command", string(t.Command)),
+			attribute.String("codeq.tenant_id", t.TenantID),
+			attribute.String("codeq.worker_id", workerID),
+			attribute.Int("codeq.delay_seconds", delaySeconds),
+			attribute.String("codeq.reason", reason),
+		),
+	)
+	defer span.End()
+
 	t.Attempts++
 
 	if t.Attempts >= t.MaxAttempts {
@@ -800,12 +876,14 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 		t.UpdatedAt = r.now()
 
 		pipe := r.rdb.TxPipeline()
-		pipe.SRem(ctx, inprog, taskID)
-		pipe.Del(ctx, r.keyLease(taskID))
-		pipe.SAdd(ctx, dlq, taskID)
-		pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
-		pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
-		if _, err := pipe.Exec(ctx); err != nil {
+		pipe.SRem(taskCtx, inprog, taskID)
+		pipe.Del(taskCtx, r.keyLease(taskID))
+		pipe.SAdd(taskCtx, dlq, taskID)
+		pipe.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t))
+		pipe.ZAdd(taskCtx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
+		if _, err := pipe.Exec(taskCtx); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			return 0, false, err
 		}
 
@@ -829,12 +907,14 @@ func (r *taskRedisRepo) Nack(ctx context.Context, taskID string, workerID string
 	t.UpdatedAt = r.now()
 
 	pipe := r.rdb.TxPipeline()
-	pipe.SRem(ctx, inprog, taskID)
-	pipe.Del(ctx, r.keyLease(taskID))
-	pipe.ZAdd(ctx, delayed, &redis.Z{Score: float64(visibleAt), Member: taskID})
-	pipe.HSet(ctx, r.keyTasksHash(), t.ID, marshal(t))
-	pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
-	if _, err := pipe.Exec(ctx); err != nil {
+	pipe.SRem(taskCtx, inprog, taskID)
+	pipe.Del(taskCtx, r.keyLease(taskID))
+	pipe.ZAdd(taskCtx, delayed, &redis.Z{Score: float64(visibleAt), Member: taskID})
+	pipe.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t))
+	pipe.ZAdd(taskCtx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
+	if _, err := pipe.Exec(taskCtx); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return 0, false, err
 	}
 	return delaySeconds, false, nil

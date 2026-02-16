@@ -65,4 +65,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(ctx)
+
+	// Best-effort flush of trace exporter (if enabled).
+	if application.TracingShutdown != nil {
+		_ = application.TracingShutdown(ctx)
+	}
 }

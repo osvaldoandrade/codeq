@@ -85,6 +85,11 @@ Notifications include:
 
 Workers must reject stale timestamps and invalid signatures.
 
+When OpenTelemetry tracing is enabled, notifications also include W3C trace context headers:
+
+- `traceparent`
+- `tracestate` (optional)
+
 ## 2) Result callbacks
 
 Result callbacks are used to avoid polling `GET /tasks/:id/result`. They are triggered when a task reaches a terminal state (`COMPLETED` or `FAILED`).
@@ -127,3 +132,8 @@ Result callbacks include the same signature headers used by worker notifications
 - `X-CodeQ-Signature` (HMAC-SHA256 over `timestamp + '.' + body`)
 
 Producers must reject stale timestamps and invalid signatures.
+
+When OpenTelemetry tracing is enabled, result callbacks also include W3C trace context headers:
+
+- `traceparent`
+- `tracestate` (optional)

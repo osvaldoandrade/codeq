@@ -25,7 +25,7 @@ func TestNewResultCallbackServiceDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewResultCallbackService(slog.Default(), "secret", tt.maxAttempts, tt.baseDelaySeconds, tt.maxDelaySeconds, nil, ratelimit.Bucket{})
+			svc := NewResultCallbackService(slog.Default(), "secret", tt.maxAttempts, tt.baseDelaySeconds, tt.maxDelaySeconds, nil, ratelimit.Bucket{}, nil)
 			if svc == nil {
 				t.Fatal("Expected service to be non-nil")
 			}
@@ -34,7 +34,7 @@ func TestNewResultCallbackServiceDefaults(t *testing.T) {
 }
 
 func TestResultCallbackServiceSendNoWebhook(t *testing.T) {
-	svc := NewResultCallbackService(slog.Default(), "secret", 3, 1, 10, nil, ratelimit.Bucket{})
+	svc := NewResultCallbackService(slog.Default(), "secret", 3, 1, 10, nil, ratelimit.Bucket{}, nil)
 
 	task := domain.Task{
 		ID:      "task-123",
@@ -55,7 +55,7 @@ func TestResultCallbackServiceSendNoWebhook(t *testing.T) {
 }
 
 func TestResultCallbackServiceSendWithWebhook(t *testing.T) {
-	svc := NewResultCallbackService(slog.Default(), "secret", 3, 1, 10, nil, ratelimit.Bucket{})
+	svc := NewResultCallbackService(slog.Default(), "secret", 3, 1, 10, nil, ratelimit.Bucket{}, nil)
 
 	task := domain.Task{
 		ID:      "task-123",
@@ -79,7 +79,7 @@ func TestResultCallbackServiceSendWithWebhook(t *testing.T) {
 }
 
 func TestResultCallbackServiceBackoffDelay(t *testing.T) {
-	svc := NewResultCallbackService(slog.Default(), "secret", 5, 2, 10, nil, ratelimit.Bucket{}).(*resultCallbackService)
+	svc := NewResultCallbackService(slog.Default(), "secret", 5, 2, 10, nil, ratelimit.Bucket{}, nil).(*resultCallbackService)
 
 	tests := []struct {
 		name    string

@@ -32,12 +32,16 @@ const (
 )
 
 type Task struct {
-	ID       string     `json:"id"`
-	Command  Command    `json:"command"`
-	Payload  string     `json:"payload"` // JSON string opaco
-	Priority int        `json:"priority,omitempty"`
-	Webhook  string     `json:"webhook,omitempty"`
-	Status   TaskStatus `json:"status"`
+	ID       string  `json:"id"`
+	Command  Command `json:"command"`
+	Payload  string  `json:"payload"` // JSON string opaco
+	Priority int     `json:"priority,omitempty"`
+	Webhook  string  `json:"webhook,omitempty"`
+	// TraceParent/TraceState store W3C trace context for correlating the task lifecycle across requests.
+	// When tracing is enabled, codeQ persists these fields and propagates them in outgoing webhooks.
+	TraceParent string     `json:"traceParent,omitempty"`
+	TraceState  string     `json:"traceState,omitempty"`
+	Status      TaskStatus `json:"status"`
 	// lastKnownLocation is a hint for targeted admin cleanup; it is not authoritative.
 	LastKnownLocation TaskLocation `json:"lastKnownLocation,omitempty"`
 	WorkerID          string       `json:"workerId,omitempty"`

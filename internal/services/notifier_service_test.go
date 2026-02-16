@@ -34,7 +34,7 @@ func TestNewNotifierServiceDefaults(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewNotifierService(repo, slog.Default(), "secret", tt.minNotify, nil, ratelimit.Bucket{})
+			svc := NewNotifierService(repo, slog.Default(), "secret", tt.minNotify, nil, ratelimit.Bucket{}, nil)
 			if svc == nil {
 				t.Fatal("Expected service to be non-nil")
 			}
@@ -50,7 +50,7 @@ func TestNotifierServiceNotifyQueueReadyNoSubscriptions(t *testing.T) {
 	defer rdb.Close()
 
 	repo := repository.NewSubscriptionRepository(rdb, time.UTC)
-	svc := NewNotifierService(repo, slog.Default(), "secret", 5, nil, ratelimit.Bucket{})
+	svc := NewNotifierService(repo, slog.Default(), "secret", 5, nil, ratelimit.Bucket{}, nil)
 
 	// Should not panic with no subscriptions
 	ctx := context.Background()
@@ -65,7 +65,7 @@ func TestNotifierServiceNotifyQueueReadyWithSubscription(t *testing.T) {
 	defer rdb.Close()
 
 	repo := repository.NewSubscriptionRepository(rdb, time.UTC)
-	svc := NewNotifierService(repo, slog.Default(), "secret", 5, nil, ratelimit.Bucket{})
+	svc := NewNotifierService(repo, slog.Default(), "secret", 5, nil, ratelimit.Bucket{}, nil)
 
 	// Create a subscription
 	sub := domain.Subscription{

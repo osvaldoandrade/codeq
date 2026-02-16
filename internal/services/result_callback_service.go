@@ -10,12 +10,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	urlpkg "net/url"
 	"strings"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
+	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type ResultCallbackService interface {
@@ -31,9 +38,11 @@ type resultCallbackService struct {
 
 	limiter ratelimit.Limiter
 	bucket  ratelimit.Bucket
+
+	client *http.Client
 }
 
-func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts int, baseDelaySeconds int, maxDelaySeconds int, limiter ratelimit.Limiter, bucket ratelimit.Bucket) ResultCallbackService {
+func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts int, baseDelaySeconds int, maxDelaySeconds int, limiter ratelimit.Limiter, bucket ratelimit.Bucket, client *http.Client) ResultCallbackService {
 	if maxAttempts <= 0 {
 		maxAttempts = 5
 	}
@@ -43,6 +52,9 @@ func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts in
 	if maxDelaySeconds <= 0 {
 		maxDelaySeconds = 60
 	}
+	if client == nil {
+		client = http.DefaultClient
+	}
 	return &resultCallbackService{
 		logger:      logger,
 		secret:      secret,
@@ -51,6 +63,7 @@ func NewResultCallbackService(logger *slog.Logger, secret string, maxAttempts in
 		maxDelay:    time.Duration(maxDelaySeconds) * time.Second,
 		limiter:     limiter,
 		bucket:      bucket,
+		client:      client,
 	}
 }
 
@@ -69,14 +82,28 @@ func (s *resultCallbackService) Send(ctx context.Context, task domain.Task, rec 
 	}
 
 	b, _ := json.Marshal(payload)
-	go s.sendWithRetry(ctx, task.Command, task.Webhook, b)
+	go s.sendWithRetry(context.WithoutCancel(ctx), task.Command, task.Webhook, b)
 }
 
 func (s *resultCallbackService) sendWithRetry(ctx context.Context, cmd domain.Command, url string, body []byte) {
+	host := ""
+	if u, err := urlpkg.Parse(url); err == nil {
+		host = u.Host
+	}
+
 	for attempt := 1; attempt <= s.maxAttempts; attempt++ {
+		ctxAttempt, span := otel.Tracer("codeq/result_callback").Start(ctx, "codeq.webhook.task_result",
+			trace.WithAttributes(
+				attribute.String("codeq.command", string(cmd)),
+				attribute.String("codeq.webhook.kind", "task_result"),
+				attribute.String("codeq.webhook.host", host),
+				attribute.Int("codeq.webhook.attempt", attempt),
+			),
+		)
+
 		if s.limiter != nil && s.bucket.Enabled() {
 			for {
-				dec, err := s.limiter.Allow(ctx, "webhook", url, s.bucket)
+				dec, err := s.limiter.Allow(ctxAttempt, "webhook", url, s.bucket)
 				if err != nil {
 					// Fail open.
 					break
@@ -85,26 +112,35 @@ func (s *resultCallbackService) sendWithRetry(ctx context.Context, cmd domain.Co
 					break
 				}
 				metrics.RateLimitHitsTotal.WithLabelValues("webhook", "task_result").Inc()
-				if sleepOrDone(ctx, dec.RetryAfter) != nil {
+				if sleepOrDone(ctxAttempt, dec.RetryAfter) != nil {
+					span.End()
 					return
 				}
 			}
 		}
 
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(body))
+		req, _ := http.NewRequestWithContext(ctxAttempt, http.MethodPost, url, bytes.NewBuffer(body))
 		req.Header.Set("Content-Type", "application/json")
 		s.addSignature(req, body)
-		resp, err := http.DefaultClient.Do(req)
+		tracing.InjectHeaders(ctxAttempt, req.Header)
+		resp, err := s.client.Do(req)
 		if err == nil && resp != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			_ = resp.Body.Close()
 			metrics.WebhookDeliveriesTotal.WithLabelValues("task_result", string(cmd), "success").Inc()
+			span.End()
 			return
 		}
 		if resp != nil {
 			_ = resp.Body.Close()
+			span.SetStatus(codes.Error, resp.Status)
 		}
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		}
+		span.End()
 		delay := s.backoffDelay(attempt)
-		if sleepOrDone(ctx, delay) != nil {
+		if sleepOrDone(ctxAttempt, delay) != nil {
 			return
 		}
 	}

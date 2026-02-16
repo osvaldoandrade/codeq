@@ -10,13 +10,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type NotifierService interface {
@@ -31,13 +38,18 @@ type notifierService struct {
 
 	limiter ratelimit.Limiter
 	bucket  ratelimit.Bucket
+
+	client *http.Client
 }
 
-func NewNotifierService(repo repository.SubscriptionRepository, logger *slog.Logger, secret string, minNotify int, limiter ratelimit.Limiter, bucket ratelimit.Bucket) NotifierService {
+func NewNotifierService(repo repository.SubscriptionRepository, logger *slog.Logger, secret string, minNotify int, limiter ratelimit.Limiter, bucket ratelimit.Bucket, client *http.Client) NotifierService {
 	if minNotify <= 0 {
 		minNotify = 5
 	}
-	return &notifierService{repo: repo, logger: logger, secret: secret, minNotify: minNotify, limiter: limiter, bucket: bucket}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return &notifierService{repo: repo, logger: logger, secret: secret, minNotify: minNotify, limiter: limiter, bucket: bucket, client: client}
 }
 
 func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Command) {
@@ -93,6 +105,20 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 }
 
 func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription, cmd domain.Command) {
+	host := ""
+	if u, err := url.Parse(sub.CallbackURL); err == nil {
+		host = u.Host
+	}
+	ctx, span := otel.Tracer("codeq/notifier").Start(ctx, "codeq.webhook.queue_ready",
+		trace.WithAttributes(
+			attribute.String("codeq.command", string(cmd)),
+			attribute.String("codeq.webhook.kind", "queue_ready"),
+			attribute.String("codeq.webhook.host", host),
+			attribute.String("codeq.subscription.id", sub.ID),
+		),
+	)
+	defer span.End()
+
 	if n.limiter != nil && n.bucket.Enabled() {
 		dec, err := n.limiter.Allow(ctx, "webhook", sub.CallbackURL, n.bucket)
 		if err == nil && !dec.Allowed {
@@ -114,8 +140,11 @@ func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription,
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, sub.CallbackURL, bytes.NewBuffer(b))
 	req.Header.Set("Content-Type", "application/json")
 	n.addSignature(req, b)
-	resp, err := http.DefaultClient.Do(req)
+	tracing.InjectHeaders(ctx, req.Header)
+	resp, err := n.client.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		metrics.WebhookDeliveriesTotal.WithLabelValues("queue_ready", string(cmd), "failure").Inc()
 		n.logger.Warn("notify failed", "err", err)
 		return
@@ -125,6 +154,7 @@ func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription,
 		metrics.WebhookDeliveriesTotal.WithLabelValues("queue_ready", string(cmd), "success").Inc()
 		return
 	}
+	span.SetStatus(codes.Error, resp.Status)
 	metrics.WebhookDeliveriesTotal.WithLabelValues("queue_ready", string(cmd), "failure").Inc()
 }
 
