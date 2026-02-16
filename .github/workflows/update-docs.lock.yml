@@ -21,8 +21,11 @@
 #
 # For more information: https://github.github.com/gh-aw/introduction/overview/
 #
+# MANUAL EDIT: Added path filters to reduce no-op runs. This change should be
+# propagated back to the source .md file and recompiled with `gh aw compile`.
+#
 # This workflow keeps docs synchronized with code changes.
-# Triggered on every push to main, it analyzes diffs to identify changed entities and
+# Triggered on push to main (with path filters), it analyzes diffs to identify changed entities and
 # updates corresponding documentation. Maintains consistent style (precise, active voice,
 # plain English), ensures single source of truth, and creates draft PRs with documentation
 # updates. Supports documentation-as-code philosophy.
@@ -36,6 +39,26 @@ name: "Update Docs"
   push:
     branches:
     - main
+    paths:
+    # Trigger on code changes that may need documentation
+    - '**.go'
+    - 'go.mod'
+    - 'go.sum'
+    # Trigger on documentation changes
+    - 'docs/**'
+    - '*.md'
+    - 'README.md'
+    # Trigger on configuration changes
+    - 'docker-compose*.yml'
+    - 'Dockerfile'
+    - '.env.example'
+    - 'helm/**'
+    # Trigger on API/SDK changes
+    - 'sdks/**'
+    - 'examples/**'
+    # Trigger on workflow changes
+    - '.github/workflows/update-docs.md'
+    - '.github/workflows/update-docs.lock.yml'
   workflow_dispatch:
 
 permissions: {}

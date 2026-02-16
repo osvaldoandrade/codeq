@@ -9,6 +9,26 @@ description: |
 on:
   push:
     branches: [main]
+    paths:
+      # Trigger on code changes that may need documentation
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      # Trigger on documentation changes
+      - 'docs/**'
+      - '*.md'
+      - 'README.md'
+      # Trigger on configuration changes
+      - 'docker-compose*.yml'
+      - 'Dockerfile'
+      - '.env.example'
+      - 'helm/**'
+      # Trigger on API/SDK changes
+      - 'sdks/**'
+      - 'examples/**'
+      # Trigger on workflow changes
+      - '.github/workflows/update-docs.md'
+      - '.github/workflows/update-docs.lock.yml'
   workflow_dispatch:
 
 permissions: read-all
