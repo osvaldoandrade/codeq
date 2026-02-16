@@ -503,11 +503,12 @@ log.info("Ready: {}, InProgress: {}, DLQ: {}",
     stats.getReady(), stats.getInProgress(), stats.getDlq());
 ```
 
-## See Also
+## Complete Working Examples
 
-- [HTTP API Reference](../04-http-api.md)
-- [Configuration Guide](../14-configuration.md)
-- [Performance Tuning](../17-performance-tuning.md)
-- [Example: Spring Boot](../../examples/java/springboot/) - Complete working example
-- [Example: Quarkus](../../examples/java/quarkus/) - Complete working example
-- Example: Micronaut - *Coming soon*
+Find complete, runnable examples in the repository:
+
+- ✅ **[Spring Boot](../../examples/java/springboot/)** - Full producer + worker integration with REST API, scheduled workers, health checks, and Spring Actuator. Production-ready with comprehensive documentation.
+
+- ✅ **[Quarkus](../../examples/java/quarkus/)** - Reactive integration with CDI, fast startup, and native image support. See [Quarkus README](../../examples/java/quarkus/README.md).
+
+- **Micronaut** - Micronaut integration example is planned for a future release. The Spring Boot example can be adapted for Micronaut with minimal changes (replace `@Component` with `@Singleton`, etc.).
