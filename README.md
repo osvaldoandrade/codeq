@@ -26,6 +26,7 @@ codeQ provides:
 - **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
 - **Distributed tracing** with OpenTelemetry support for end-to-end observability.
 - **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
+- **Load testing framework**: Comprehensive k6 scenarios and Go benchmarks for performance validation and regression testing.
 
 ## Get started
 
@@ -173,6 +174,7 @@ Key references:
 - **Operations**: `docs/10-operations.md` - Metrics, health checks, and tracing
 - **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
 - **Performance**: `docs/17-performance-tuning.md` - Optimization guide
+- **Load Testing**: `docs/26-load-testing.md` - Load testing framework and benchmarks
 - **Testing**: `docs/19-testing.md` - Test coverage and strategy
 - **Authentication Plugins**: `docs/20-authentication-plugins.md` - Plugin system for custom auth
 - **Design Documents**:
