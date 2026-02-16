@@ -48,7 +48,7 @@ codeQ supports distributed tracing via OpenTelemetry (OTLP gRPC exporter). When 
 Trace context propagation:
 
 - Task records persist W3C trace context in `traceParent` / `traceState` (for cross-request correlation).
-- Outgoing webhooks include `traceparent` / `tracestate` headers.
+- Outgoing webhooks include W3C trace context headers (`traceparent` / `tracestate`), and may also include W3C `baggage` headers depending on the configured OpenTelemetry propagator.
 
 ### Configuration
 
