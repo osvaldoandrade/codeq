@@ -456,6 +456,18 @@ r.Post("/v1/codeq/your-endpoint", controllers.YourNewController(schedulerService
 - Currently limited to avoid private dependencies
 - See `.github/workflows/release.yml` for test scope
 
+**Performance and load tests:**
+- **k6 load scenarios**: HTTP-level testing with realistic producer and worker traffic patterns
+  - Located in `loadtest/k6/`
+  - Run via Docker Compose: `docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js`
+  - Six pre-built scenarios covering sustained load, bursts, many workers, queue depth, priorities, and delays
+- **Go benchmarks**: Fast in-memory benchmarks for regression testing
+  - Located in `internal/bench/`
+  - Run with: `go test ./internal/bench -bench . -benchtime=30s`
+  - Use miniredis for isolated, repeatable performance measurements
+
+See [`docs/26-load-testing.md`](26-load-testing.md) for comprehensive load testing documentation.
+
 ## Contributing
 
 1. **Fork the repository**

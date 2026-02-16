@@ -165,6 +165,32 @@ go build -o codeq ./cmd/codeq
   --payload '{"test": true}'
 ````
 
+### Performance and Load Testing
+
+codeQ includes a comprehensive load testing framework to validate performance and catch regressions:
+
+**Run k6 load tests** (requires Docker Compose):
+
+````bash
+# Start codeQ and dependencies
+docker compose up -d
+
+# Run a sustained throughput scenario
+docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+
+# Run with custom parameters
+RATE=1000 DURATION=10m WORKER_VUS=200 \
+  docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+````
+
+**Run Go benchmarks** (fast, in-memory):
+
+````bash
+go test ./internal/bench -bench . -benchtime=30s
+````
+
+See [`docs/26-load-testing.md`](docs/26-load-testing.md) and [`loadtest/README.md`](loadtest/README.md) for comprehensive documentation on all load testing scenarios and performance benchmarking.
+
 ## Documentation
 
 Documentation is critical! Please update relevant docs when making changes:

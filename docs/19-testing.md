@@ -246,6 +246,57 @@ To reach 70% overall coverage:
 2. **Add Provider Tests**: If additional providers are added
 3. **Integration Tests**: Add more end-to-end tests where possible
 
+## Performance and Load Testing
+
+In addition to unit and integration tests, codeQ includes comprehensive performance and load testing capabilities:
+
+### Load Testing Framework
+
+A complete k6-based load testing suite is available in `loadtest/k6/` with six pre-built scenarios:
+
+1. **Sustained throughput** (`01_sustained_throughput.js`): 500 tasks/sec for extended periods
+2. **Burst load** (`02_burst_10k_10s.js`): 10,000 tasks in 10 seconds
+3. **Many workers** (`03_many_workers.js`): 100+ concurrent worker instances
+4. **Large queue depth** (`04_prefill_queue.js`): 100K+ pending tasks
+5. **Mixed priorities** (`05_mixed_priorities.js`): Priority distribution testing
+6. **Delayed tasks** (`06_delayed_tasks.js`): Delayed task scheduling
+
+**Running load tests:**
+
+````bash
+# Start codeQ with dependencies
+docker compose up -d
+
+# Run a scenario
+docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+
+# Customize with environment variables
+RATE=1000 DURATION=10m WORKER_VUS=300 \
+  docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+````
+
+### Go Benchmarks
+
+Fast in-memory benchmarks for regression testing are available in `internal/bench/`:
+
+````bash
+# Run all benchmarks
+go test ./internal/bench -bench . -benchtime=30s
+
+# Run specific benchmark
+go test ./internal/bench -bench BenchmarkCreateTask -benchtime=30s
+````
+
+These benchmarks use miniredis for isolated, repeatable performance measurements and are useful for:
+- Comparing performance between branches
+- Detecting regressions in critical paths
+- Quick feedback during development
+
+For comprehensive documentation, see:
+- [`docs/26-load-testing.md`](26-load-testing.md) - Complete load testing guide
+- [`loadtest/README.md`](../loadtest/README.md) - Scenario documentation
+- [`docs/17-performance-tuning.md`](17-performance-tuning.md) - Performance optimization guide
+
 ## Notes
 
 - The `pkg/config` package is difficult to test due to environment variable parsing
