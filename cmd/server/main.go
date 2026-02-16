@@ -68,6 +68,8 @@ func main() {
 
 	// Best-effort flush of trace exporter (if enabled).
 	if application.TracingShutdown != nil {
-		_ = application.TracingShutdown(ctx)
+		traceCtx, traceCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer traceCancel()
+		_ = application.TracingShutdown(traceCtx)
 	}
 }
