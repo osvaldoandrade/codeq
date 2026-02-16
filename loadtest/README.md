@@ -79,11 +79,8 @@ RATE=500 DURATION=10m WORKER_VUS=200 DELAY_PCT=50 MIN_DELAY_SECONDS=1 MAX_DELAY_
   - k6 script default (in `loadtest/k6/lib/config.js`): `http://localhost:8080`
   - Docker Compose default (in `docker-compose.yml`): `http://codeq:8080` inside the
     Compose network
-  - to override when running via Docker Compose, either:
-    - use shell env interpolation:
-      `CODEQ_BASE_URL=http://your-host:8080 docker compose --profile loadtest run --rm k6 …`
-    - or pass `-e` to `docker compose run`:
-      `docker compose --profile loadtest run -e CODEQ_BASE_URL=http://your-host:8080 --rm k6 …`
+  - to override when running via Docker Compose:
+    `CODEQ_BASE_URL=http://your-host:8080 docker compose --profile loadtest run --rm k6 …`
 - `CODEQ_PRODUCER_TOKEN`: defaults to `dev-token` (matches `docker-compose.yml`)
 - `CODEQ_WORKER_TOKEN`: defaults to `dev-token` (matches `docker-compose.yml`)
 - `CODEQ_COMMANDS`: comma-separated commands to target (default `GENERATE_MASTER`)
