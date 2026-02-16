@@ -107,13 +107,15 @@ Monitor webhook failure rates and retry exhaustion.
 
 ## Load Testing
 
+The repository includes a load testing harness under `loadtest/` with k6 scenarios that cover sustained throughput, bursts, many workers, large queue depth, mixed priorities, and delayed tasks.
+
 ### Simulating Producers
 
-Use `codeq` CLI to enqueue tasks in bulk.
+Use the k6 scripts in `loadtest/k6/` (recommended) or the `codeq` CLI to enqueue tasks in bulk.
 
 ### Simulating Workers
 
-Use `codeq worker start` or test scripts to simulate worker fleets.
+Use `codeq worker start` or the k6 scripts in `loadtest/k6/` to simulate worker fleets.
 
 ### Measuring Throughput
 
@@ -121,6 +123,16 @@ Monitor tasks/second via queue stats API. Calculate:
 - **Producer throughput**: Tasks created per second
 - **Worker throughput**: Tasks completed per second
 - **Queue lag**: `ready` queue depth stability
+
+### Observability
+
+Enable the local metrics stack:
+
+```bash
+docker compose --profile obs up -d
+```
+
+Then scrape `/metrics` with Prometheus and view the bundled dashboard in Grafana.
 
 ## Common Performance Issues
 

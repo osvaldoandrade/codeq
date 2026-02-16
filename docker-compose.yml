@@ -73,6 +73,21 @@ services:
         echo "[seed] done"
     restart: "no"
 
+  k6:
+    profiles: ["loadtest"]
+    image: grafana/k6:0.49.0
+    depends_on:
+      codeq:
+        condition: service_healthy
+    volumes:
+      - ./loadtest/k6:/scripts:ro
+    environment:
+      - CODEQ_BASE_URL=http://codeq:8080
+      - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN:-dev-token}
+      - CODEQ_WORKER_TOKEN=${CODEQ_WORKER_TOKEN:-dev-token}
+      - CODEQ_COMMANDS=${CODEQ_COMMANDS:-GENERATE_MASTER}
+    entrypoint: ["k6"]
+
   prometheus:
     profiles: ["obs"]
     image: prom/prometheus:v2.49.1
