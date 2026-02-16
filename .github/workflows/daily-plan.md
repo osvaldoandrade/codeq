@@ -32,7 +32,6 @@ tools:
   web-fetch:
 
 timeout-minutes: 15
-source: githubnext/agentics/workflows/daily-plan.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
 # Agentic Planner

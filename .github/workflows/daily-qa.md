@@ -23,8 +23,6 @@ safe-outputs:
     title-prefix: "${{ github.workflow }}"
     labels: [planning, qa]
   add-comment:
-    issue: true
-    discussion: true
     target: "*" # all issues and PRs
     max: 5
   create-pull-request:
@@ -37,7 +35,6 @@ tools:
   web-fetch:
   bash: true
 
-source: githubnext/agentics/workflows/daily-qa.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
 # Daily QA

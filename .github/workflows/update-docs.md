@@ -48,7 +48,6 @@ tools:
   bash: true
 
 timeout-minutes: 60
-source: githubnext/agentics/workflows/update-docs.md@69b5e3ae5fa7f35fa555b0a22aee14c36ab57ebb
 ---
 
 # Update Docs
