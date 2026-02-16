@@ -44,7 +44,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		return nil, fmt.Errorf("task not found")
 	}
 
-	taskCtx := tracing.ContextWithRemoteParent(context.Background(), task.TraceParent, task.TraceState)
+	taskCtx := tracing.ContextWithRemoteParent(ctx, task.TraceParent, task.TraceState)
 	taskCtx, span := otel.Tracer("codeq/results").Start(taskCtx, "codeq.task.submit_result",
 		trace.WithAttributes(
 			attribute.String("codeq.task_id", taskID),
