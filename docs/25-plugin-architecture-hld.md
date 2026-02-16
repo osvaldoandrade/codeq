@@ -1311,7 +1311,7 @@ Dynamic loading enables faster iteration and testing.
 - `pkg/plugin/interface.go` with core types
 - `pkg/plugin/registry.go` with registration functions
 - `pkg/plugin/persistence/memory.go` for testing
-- `docs/plugin-development-guide.md`
+- Plugin development guide (future documentation)
 
 ### Phase 2: Persistence Backends (Months 3-4)
 
@@ -1362,7 +1362,7 @@ Dynamic loading enables faster iteration and testing.
 **Deliverables**:
 - Metrics instrumentation in all components
 - Health check endpoints
-- `docs/plugin-operations.md`
+- Plugin operations guide (future documentation)
 - Security audit report
 
 ## Conclusion
