@@ -348,6 +348,56 @@ When admin cleanup removes tasks, it deletes the task hash entry but may leave t
 - ❌ No benefit if admin cleanup is infrequent
 - ❌ Minimal impact if tasks are always completed (not deleted)
 
+### Cleanup Bloom filter optimization (CleanupExpired path)
+
+codeQ uses a third Bloom filter called the "cleanup Bloom" to avoid redundant cleanup work when processing expired tasks across concurrent or repeated cleanup cycles.
+
+**Problem it solves:**
+
+When multiple `CleanupExpired()` operations run concurrently (e.g., scheduled cleanup + manual trigger), or when cleanup is invoked repeatedly in short intervals, the same expired task IDs may be encountered multiple times. Without the cleanup Bloom, each cleanup cycle would redundantly attempt to remove already-processed tasks, wasting Redis operations.
+
+**How it works:**
+
+1. When `CleanupExpired()` successfully removes a task via `removeTaskFully()`, the task ID is added to the cleanup Bloom filter
+2. On subsequent cleanup cycles, before attempting removal, check if the task ID is in the cleanup Bloom
+3. If definitely removed (cleanup Bloom returns "present"), skip the removal work and continue to next task
+4. If not in cleanup Bloom, proceed with normal removal logic
+
+**Key characteristics:**
+
+- **Capacity**: 2M keys, 1% false positive rate (~4.8 MB RAM per filter, ~9.6 MB total)
+- **Longer rotation**: 6-hour rotation interval (matches ghost Bloom)
+- **Updated on success**: Populated in `removeTaskFully()` after successful deletion
+- **Thread-safe**: Lock-free atomic operations
+- **Shared timeframe**: 6-hour window aligns with typical cleanup intervals
+
+**Performance impact:**
+
+- **Benefit**: Eliminates redundant `removeTaskFully()` work across concurrent/repeated cleanup cycles
+- **Typical improvement**: Most impactful when cleanup is triggered frequently or runs concurrently
+- **Memory footprint**: ~9.6 MB per API server instance
+- **CPU overhead**: Minimal (simple bit operations)
+
+**When it helps:**
+
+- ✅ Multiple concurrent cleanup operations (scheduled + manual triggers)
+- ✅ High-frequency cleanup invocations (e.g., every few minutes)
+- ✅ Large backlogs of expired tasks processed in batches
+- ❌ No benefit if cleanup runs infrequently with full completion between runs
+- ❌ Minimal impact if expired task volume is low
+
+**Monitoring:**
+
+No specific metrics are exposed for the cleanup Bloom. Monitor overall cleanup efficiency via:
+
+````bash
+# Track cleanup operation duration
+histogram_quantile(0.95, sum by (le) (rate(codeq_cleanup_duration_seconds_bucket[5m])))
+
+# Track tasks removed per cleanup cycle
+rate(codeq_tasks_cleaned_total[5m])
+````
+
 Future releases may expose these as configuration options if needed.
 
 ### Webhook settings

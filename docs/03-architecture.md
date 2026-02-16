@@ -52,6 +52,7 @@
   - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
   - `idempotency_bloom.go`: In-process Bloom filters for optimization
     - **Idempotency Bloom**: Skips negative Redis GET on fresh idempotency keys (Enqueue fast-path)
+    - **Cleanup Bloom**: Skips redundant removal work for already-deleted tasks (CleanupExpired fast-path)
     - **Ghost Bloom**: Skips Redis HGET for administratively deleted tasks (Claim fast-path)
   - `result_repository.go`: Result storage and retrieval
   - `subscription_repository.go`: Subscription storage
