@@ -83,7 +83,7 @@ All workflow `.md` files and their compiled `.lock.yml` counterparts:
 ⚠️ **IMPORTANT**: The changes have been compiled and committed. To deploy:
 
 1. **Merge this PR** to activate the fixes
-2. **Manually trigger the daily-plan workflow** to test: https://github.com/osvaldoandrade/codeq/actions/workflows/daily-plan.lock.yml
+2. **Manually trigger the daily-plan workflow** to test: https://github.com/<OWNER>/<REPO>/actions/workflows/daily-plan.lock.yml
 3. **Monitor the workflow run** to ensure an issue is created successfully
 
 No additional compilation is needed - the `.lock.yml` files have been updated.
@@ -148,6 +148,6 @@ For future workflow development:
 ## Related Issue
 
 This fix addresses issue #146: [agentics] Agentic Planner failed
-- Workflow Run: https://github.com/osvaldoandrade/codeq/actions/runs/22051897101
+- Workflow Run: https://github.com/<OWNER>/<REPO>/actions/runs/22051897101
 - Symptom: "No Safe Outputs Generated" 
 - Root Cause: Agent didn't call the safe output tool
