@@ -112,6 +112,13 @@ func defaultPropagator() propagation.TextMapPropagator {
 	)
 }
 
+// webhookPropagator returns a propagator that only includes TraceContext,
+// excluding Baggage to prevent unintentional propagation of sensitive data
+// to third-party webhook endpoints.
+func webhookPropagator() propagation.TextMapPropagator {
+	return propagation.TraceContext{}
+}
+
 func sanitizeEndpoint(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -155,11 +162,15 @@ func ContextWithRemoteParent(ctx context.Context, traceParent string, traceState
 	return otel.GetTextMapPropagator().Extract(ctx, carrier)
 }
 
+// InjectHeaders injects W3C trace context headers into the provided http.Header.
+// Only traceparent and tracestate headers are injected; baggage is explicitly
+// excluded to prevent unintentional propagation of sensitive data to third-party
+// webhook endpoints.
 func InjectHeaders(ctx context.Context, h http.Header) {
 	if h == nil {
 		return
 	}
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(h))
+	webhookPropagator().Inject(ctx, propagation.HeaderCarrier(h))
 }
 
 func ParseSampleRatio(v string) float64 {
