@@ -114,7 +114,7 @@ git log -p -1 .github/workflows/daily-plan.lock.yml | grep frontmatter-hash
 
 To test the fix:
 
-1. Run the daily-plan workflow manually: https://github.com/osvaldoandrade/codeq/actions/workflows/daily-plan.lock.yml
+1. Run the daily-plan workflow manually: `https://github.com/<OWNER>/<REPO>/actions/workflows/daily-plan.lock.yml`
 2. Wait for it to complete
 3. Verify that:
    - An issue is created with title starting with "Agentic Planner"
