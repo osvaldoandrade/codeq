@@ -12,7 +12,7 @@ import (
 type cleanupExpiredController struct{ svc services.SchedulerService }
 
 func NewCleanupExpiredController(svc services.SchedulerService) *cleanupExpiredController {
-	return &cleanupExpiredController{svc}
+	return &cleanupExpiredController{svc: svc}
 }
 
 type cleanupReq struct {

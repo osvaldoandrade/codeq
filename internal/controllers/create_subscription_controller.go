@@ -12,7 +12,7 @@ import (
 type createSubscriptionController struct{ svc services.SubscriptionService }
 
 func NewCreateSubscriptionController(svc services.SubscriptionService) *createSubscriptionController {
-	return &createSubscriptionController{svc}
+	return &createSubscriptionController{svc: svc}
 }
 
 type createSubscriptionReq struct {

@@ -11,7 +11,7 @@ import (
 type queuesAdminController struct{ svc services.SchedulerService }
 
 func NewQueuesAdminController(svc services.SchedulerService) *queuesAdminController {
-	return &queuesAdminController{svc}
+	return &queuesAdminController{svc: svc}
 }
 
 func (h *queuesAdminController) Handle(c *gin.Context) {

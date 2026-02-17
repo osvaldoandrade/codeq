@@ -12,7 +12,7 @@ import (
 type heartbeatController struct{ svc services.SchedulerService }
 
 func NewHeartbeatController(svc services.SchedulerService) *heartbeatController {
-	return &heartbeatController{svc}
+	return &heartbeatController{svc: svc}
 }
 
 type hbReq struct {

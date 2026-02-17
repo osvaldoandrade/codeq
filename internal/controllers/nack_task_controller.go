@@ -12,7 +12,7 @@ import (
 type nackController struct{ svc services.SchedulerService }
 
 func NewNackController(svc services.SchedulerService) *nackController {
-	return &nackController{svc}
+	return &nackController{svc: svc}
 }
 
 type nackReq struct {

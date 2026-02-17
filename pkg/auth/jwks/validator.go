@@ -142,11 +142,11 @@ func (v *Validator) Validate(tokenString string) (*auth.Claims, error) {
 
 	// Build auth.Claims
 	result := &auth.Claims{
-		Subject:   getStringClaim(claims, "sub"),
-		Email:     getStringClaim(claims, "email"),
-		Issuer:    iss,
-		Audience:  audiences,
-		Raw:       claims,
+		Subject:  getStringClaim(claims, "sub"),
+		Email:    getStringClaim(claims, "email"),
+		Issuer:   iss,
+		Audience: audiences,
+		Raw:      claims,
 	}
 
 	if exp, ok := claims["exp"].(float64); ok {

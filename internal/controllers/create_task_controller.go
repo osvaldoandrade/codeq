@@ -13,7 +13,7 @@ import (
 type createTaskController struct{ svc services.SchedulerService }
 
 func NewCreateTaskController(svc services.SchedulerService) *createTaskController {
-	return &createTaskController{svc}
+	return &createTaskController{svc: svc}
 }
 
 type createReq struct {

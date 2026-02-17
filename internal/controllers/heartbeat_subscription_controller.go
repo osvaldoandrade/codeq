@@ -11,7 +11,7 @@ import (
 type heartbeatSubscriptionController struct{ svc services.SubscriptionService }
 
 func NewHeartbeatSubscriptionController(svc services.SubscriptionService) *heartbeatSubscriptionController {
-	return &heartbeatSubscriptionController{svc}
+	return &heartbeatSubscriptionController{svc: svc}
 }
 
 type heartbeatSubReq struct {

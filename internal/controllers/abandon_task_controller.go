@@ -12,7 +12,7 @@ import (
 type abandonController struct{ svc services.SchedulerService }
 
 func NewAbandonController(svc services.SchedulerService) *abandonController {
-	return &abandonController{svc}
+	return &abandonController{svc: svc}
 }
 
 func (h *abandonController) Handle(c *gin.Context) {

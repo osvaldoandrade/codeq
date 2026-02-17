@@ -125,7 +125,7 @@ func applyEnvAndDefaults(c *Config) {
 		c.PersistenceConfig = json.RawMessage(v)
 	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
-		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+		c.TracingEnabled = parseBool(v)
 	}
 	if v := os.Getenv("TRACING_SERVICE_NAME"); v != "" {
 		c.TracingServiceName = v
@@ -138,9 +138,9 @@ func applyEnvAndDefaults(c *Config) {
 		c.TracingOtlpEndpoint = v
 	}
 	if v := os.Getenv("TRACING_OTLP_INSECURE"); v != "" {
-		c.TracingOtlpInsecure = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+		c.TracingOtlpInsecure = parseBool(v)
 	} else if v := os.Getenv("OTEL_EXPORTER_OTLP_INSECURE"); v != "" {
-		c.TracingOtlpInsecure = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+		c.TracingOtlpInsecure = parseBool(v)
 	}
 	if v := os.Getenv("TRACING_SAMPLE_RATIO"); v != "" {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
@@ -210,7 +210,7 @@ func applyEnvAndDefaults(c *Config) {
 		}
 	}
 	if v := os.Getenv("ALLOW_PRODUCER_AS_WORKER"); v != "" {
-		c.AllowProducerAsWorker = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+		c.AllowProducerAsWorker = parseBool(v)
 	}
 	if v := os.Getenv("WEBHOOK_HMAC_SECRET"); v != "" {
 		c.WebhookHmacSecret = v
@@ -431,4 +431,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// parseBool converts a string to a boolean using common true values.
+func parseBool(v string) bool {
+	return strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
 }

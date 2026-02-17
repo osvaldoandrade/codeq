@@ -13,7 +13,7 @@ import (
 type queueStatsController struct{ svc services.SchedulerService }
 
 func NewQueueStatsController(svc services.SchedulerService) *queueStatsController {
-	return &queueStatsController{svc}
+	return &queueStatsController{svc: svc}
 }
 
 func (h *queueStatsController) Handle(c *gin.Context) {

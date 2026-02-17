@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"slices"
 	"time"
 )
 
@@ -22,12 +23,7 @@ func (c *Claims) HasScope(scope string) bool {
 	if c == nil {
 		return false
 	}
-	for _, s := range c.Scopes {
-		if s == scope {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(c.Scopes, scope)
 }
 
 // Validator validates authentication tokens

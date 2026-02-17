@@ -11,7 +11,7 @@ import (
 type getTaskController struct{ svc services.SchedulerService }
 
 func NewGetTaskController(svc services.SchedulerService) *getTaskController {
-	return &getTaskController{svc}
+	return &getTaskController{svc: svc}
 }
 
 func (h *getTaskController) Handle(c *gin.Context) {
