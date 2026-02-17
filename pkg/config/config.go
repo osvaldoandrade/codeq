@@ -17,6 +17,8 @@ type Config struct {
 	Port                               int             `yaml:"port"`
 	RedisAddr                          string          `yaml:"redisAddr"`
 	RedisPassword                      string          `yaml:"redisPassword"`
+	PersistenceProvider                string          `yaml:"persistenceProvider"`
+	PersistenceConfig                  json.RawMessage `yaml:"persistenceConfig"`
 	TracingEnabled                     bool            `yaml:"tracingEnabled"`
 	TracingServiceName                 string          `yaml:"tracingServiceName"`
 	TracingOtlpEndpoint                string          `yaml:"tracingOtlpEndpoint"`
@@ -115,6 +117,12 @@ func applyEnvAndDefaults(c *Config) {
 		c.RedisPassword = v
 	} else if v := os.Getenv("KVROCKS_PASSWORD"); v != "" {
 		c.RedisPassword = v
+	}
+	if v := os.Getenv("PERSISTENCE_PROVIDER"); v != "" {
+		c.PersistenceProvider = v
+	}
+	if v := os.Getenv("PERSISTENCE_CONFIG"); v != "" {
+		c.PersistenceConfig = json.RawMessage(v)
 	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
 		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
@@ -293,6 +301,20 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if c.BackoffPolicy == "" {
 		c.BackoffPolicy = "exp_full_jitter"
+	}
+	// Default persistence provider to "redis" for backward compatibility
+	if c.PersistenceProvider == "" {
+		c.PersistenceProvider = "redis"
+	}
+	// If no persistence config provided, create default Redis config from legacy settings
+	if c.PersistenceConfig == nil || len(c.PersistenceConfig) == 0 {
+		redisConfig := map[string]string{
+			"addr":     c.RedisAddr,
+			"password": c.RedisPassword,
+		}
+		if configJSON, err := json.Marshal(redisConfig); err == nil {
+			c.PersistenceConfig = configJSON
+		}
 	}
 	if c.WorkerAudience == "" {
 		c.WorkerAudience = "codeq-worker"
