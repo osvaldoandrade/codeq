@@ -177,6 +177,7 @@ Key references:
 - **Load Testing**: `docs/26-load-testing.md` - Load testing framework and benchmarks
 - **Testing**: `docs/19-testing.md` - Test coverage and strategy
 - **Authentication Plugins**: `docs/20-authentication-plugins.md` - Plugin system for custom auth
+- **Persistence Plugins**: `docs/26-persistence-plugin-system.md` - Pluggable storage backends (Redis, Memory, and more)
 - **Design Documents**:
   - `docs/24-queue-sharding-hld.md` - Queue sharding high-level design
   - `docs/25-plugin-architecture-hld.md` - Plugin architecture for persistence and auth
