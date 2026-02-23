@@ -1,0 +1,82 @@
+name: 'Daily Perf Improver Build Steps'
+description: 'Build and performance environment setup for codeQ performance engineering'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Validate Go environment
+      shell: bash
+      run: |
+        echo "=== Go Environment ===" | tee -a build-steps.log
+        go version >> build-steps.log 2>&1
+        go env GOROOT >> build-steps.log 2>&1
+        go env GOPATH >> build-steps.log 2>&1
+
+    - name: Download Go dependencies
+      shell: bash
+      run: |
+        echo "=== Downloading Dependencies ===" | tee -a build-steps.log
+        go mod download 2>&1 | tee -a build-steps.log
+        go mod verify 2>&1 | tee -a build-steps.log
+
+    - name: Build codeQ binary
+      shell: bash
+      run: |
+        echo "=== Building codeQ Binary ===" | tee -a build-steps.log
+        go build -o codeq ./cmd/server 2>&1 | tee -a build-steps.log
+        echo "Binary size: $(ls -lh codeq | awk '{print $5}')" | tee -a build-steps.log
+        ./codeq --help 2>&1 | head -5 | tee -a build-steps.log
+
+    - name: Run unit tests with coverage
+      shell: bash
+      run: |
+        echo "=== Unit Tests with Coverage ===" | tee -a build-steps.log
+        go test -v -coverprofile=coverage.out -covermode=atomic \
+          ./internal/backoff \
+          ./internal/repository \
+          ./internal/services \
+          ./pkg/domain \
+          ./pkg/config 2>&1 | tee -a build-steps.log
+        echo "Coverage summary:" | tee -a build-steps.log
+        go tool cover -func=coverage.out | tail -1 | tee -a build-steps.log
+
+    - name: Run all tests (short timeout to fail fast)
+      shell: bash
+      run: |
+        echo "=== Full Test Suite ===" | tee -a build-steps.log
+        go test -timeout 30s -short ./... 2>&1 | tee -a build-steps.log
+
+    - name: Run benchmarks (baseline measurement)
+      shell: bash
+      run: |
+        echo "=== Go Benchmarks ===" | tee -a build-steps.log
+        go test -bench=. -benchmem -benchtime=1s ./internal/bench 2>&1 | tee -a build-steps.log
+
+    - name: Check for test failures
+      shell: bash
+      run: |
+        if [ -f build-steps.log ]; then
+          if grep -q "FAIL:" build-steps.log; then
+            echo "❌ Tests failed" | tee -a build-steps.log
+            exit 1
+          fi
+        fi
+        echo "✅ All build steps completed successfully" | tee -a build-steps.log
+
+    - name: Generate build summary
+      shell: bash
+      run: |
+        echo "" | tee -a build-steps.log
+        echo "=== Build Summary ===" | tee -a build-steps.log
+        echo "Timestamp: $(date -u)" | tee -a build-steps.log
+        echo "Go version: $(go version | awk '{print $3}')" | tee -a build-steps.log
+        if [ -f coverage.out ]; then
+          TOTAL=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "Test coverage: $TOTAL" | tee -a build-steps.log
+        fi
+        echo "Artifacts: codeq binary, coverage.out, build-steps.log" | tee -a build-steps.log
