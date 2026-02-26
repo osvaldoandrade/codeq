@@ -1,0 +1,109 @@
+name: 'Daily Perf Improver - Build Steps'
+description: 'Standardized build steps for performance development and testing'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+
+    - name: Build binaries
+      shell: bash
+      run: |
+        {
+          echo "=== Build: Starting ==="
+          go build -v -o server ./cmd/server
+          echo "=== Build: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Run unit tests
+      shell: bash
+      run: |
+        {
+          echo "=== Unit Tests: Starting ==="
+          go test -v -coverprofile=coverage.out -covermode=atomic \
+            ./internal/backoff \
+            ./internal/repository \
+            ./internal/services \
+            ./pkg/domain \
+            ./pkg/config
+          echo "=== Unit Tests: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Run Go benchmarks
+      shell: bash
+      run: |
+        {
+          echo "=== Go Benchmarks: Starting ==="
+          go test ./internal/bench -bench . -benchtime=5s -benchmem -timeout=30s
+          echo "=== Go Benchmarks: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Check code formatting
+      shell: bash
+      run: |
+        {
+          echo "=== Code Formatting Check: Starting ==="
+          if gofmt -l . | grep -q '.'; then
+            echo "Code formatting issues found:"
+            gofmt -d .
+            exit 1
+          fi
+          echo "=== Code Formatting Check: Passed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Verify Go vet
+      shell: bash
+      run: |
+        {
+          echo "=== Go Vet: Starting ==="
+          go vet ./...
+          echo "=== Go Vet: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Set up Docker for k6 load tests
+      shell: bash
+      run: |
+        {
+          echo "=== Docker Setup: Starting ==="
+          docker --version
+          echo "=== Docker Setup: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Quick k6 smoke test (optional)
+      shell: bash
+      run: |
+        {
+          echo "=== K6 Smoke Test: Starting (optional) ==="
+          if command -v k6 &> /dev/null; then
+            echo "k6 is available"
+            # Just verify syntax of k6 scripts
+            k6 parse loadtest/k6/01_sustained_throughput.js > /dev/null
+            echo "K6 scripts parse successfully"
+          else
+            echo "k6 not available in PATH; k6 tests require docker-compose"
+          fi
+          echo "=== K6 Smoke Test: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Generate coverage report
+      shell: bash
+      run: |
+        {
+          echo "=== Coverage Report: Starting ==="
+          go tool cover -func=coverage.out > coverage-report.txt
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "Total Coverage: $COVERAGE"
+          echo "=== Coverage Report: Completed ==="
+        } 2>&1 | tee -a build-steps.log
+
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-steps-log
+        path: build-steps.log
+        retention-days: 30
