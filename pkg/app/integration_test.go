@@ -91,7 +91,7 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 		ResultWebhookBaseBackoffSeconds:    1,
 		ResultWebhookMaxBackoffSeconds:     2,
 	}
-	
+
 	// Setup auth providers config (normally done by LoadConfig)
 	cfg.ProducerAuthProvider = "jwks"
 	cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
@@ -109,7 +109,7 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
 		"httpTimeout": 5 * time.Second,
 	})
-	
+
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config validate: %v", err)
 	}

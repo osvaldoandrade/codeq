@@ -39,7 +39,7 @@ func TestLoadConfigOptional_WhitespacePath(t *testing.T) {
 func TestLoadConfigOptional_FileNotExist(t *testing.T) {
 	// Use a non-existent path within a valid temp directory for cross-platform compatibility
 	nonExistentPath := filepath.Join(t.TempDir(), "config-does-not-exist.yaml")
-	
+
 	cfg, err := LoadConfigOptional(nonExistentPath)
 	if err != nil {
 		t.Fatalf("LoadConfigOptional with non-existent file should not error: %v", err)
@@ -53,7 +53,7 @@ func TestLoadConfigOptional_FileNotExist(t *testing.T) {
 func TestLoadConfigOptional_InvalidYAML(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "invalid.yaml")
-	
+
 	// Write invalid YAML
 	invalidYAML := `
 port: 8080
@@ -75,7 +75,7 @@ redisAddr: "localhost:6379"
 func TestLoadConfigOptional_ValidConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "valid.yaml")
-	
+
 	// Write valid YAML
 	validYAML := `
 port: 8080
@@ -96,7 +96,7 @@ env: "test"
 	if cfg == nil {
 		t.Fatal("Expected non-nil config")
 	}
-	
+
 	// Verify values from file were loaded
 	if cfg.Port != 8080 {
 		t.Errorf("Expected Port=8080, got %d", cfg.Port)
@@ -122,7 +122,7 @@ env: "test"
 func TestLoadConfigOptional_EnvOverrides(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
-	
+
 	// Write config file
 	configYAML := `
 port: 8080
@@ -148,7 +148,7 @@ logLevel: "info"
 	if cfg == nil {
 		t.Fatal("Expected non-nil config")
 	}
-	
+
 	// Verify environment variables override file values
 	if cfg.Port != 9090 {
 		t.Errorf("Expected Port=9090 from env, got %d", cfg.Port)
@@ -176,7 +176,7 @@ func TestLoadConfigOptional_EnvOverridesEmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigOptional with empty path should not error: %v", err)
 	}
-	
+
 	// Verify environment variables were applied
 	if cfg.Port != 7070 {
 		t.Errorf("Expected Port=7070 from env, got %d", cfg.Port)
