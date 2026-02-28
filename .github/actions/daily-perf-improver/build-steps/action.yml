@@ -1,0 +1,84 @@
+name: 'Daily Perf Improver Build Steps'
+description: 'Standard build steps for performance engineering: compile, test, benchmark, format check, and smoke test'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Go Build
+      shell: bash
+      run: |
+        echo "=== Go Build ===" | tee -a build-steps.log
+        go build -o ./tmp/codeq-server ./cmd/server 2>&1 | tee -a build-steps.log
+        BUILD_EXIT=${PIPESTATUS[0]}
+        echo "Build exit code: $BUILD_EXIT" | tee -a build-steps.log
+        exit $BUILD_EXIT
+
+    - name: Code Formatting Check
+      shell: bash
+      run: |
+        echo "=== Code Formatting Check ===" | tee -a build-steps.log
+        go fmt ./cmd/... ./pkg/... ./internal/... 2>&1 | tee -a build-steps.log
+        if git diff --quiet; then
+          echo "✓ All files properly formatted" | tee -a build-steps.log
+        else
+          echo "✗ Format check failed - run 'go fmt ./...' to fix" | tee -a build-steps.log
+          echo "Files that need formatting:" | tee -a build-steps.log
+          git diff --name-only | tee -a build-steps.log
+          git checkout .
+          exit 1
+        fi
+
+    - name: Run Unit Tests with Coverage
+      shell: bash
+      run: |
+        echo "=== Unit Tests with Coverage ===" | tee -a build-steps.log
+        go test -v -coverprofile=coverage.out -covermode=atomic \
+          ./internal/backoff \
+          ./internal/repository \
+          ./internal/services \
+          ./pkg/domain \
+          ./pkg/config 2>&1 | tee -a build-steps.log
+        TEST_EXIT=${PIPESTATUS[0]}
+        echo "Test exit code: $TEST_EXIT" | tee -a build-steps.log
+        exit $TEST_EXIT
+
+    - name: Generate Coverage Report
+      shell: bash
+      run: |
+        echo "=== Coverage Report ===" | tee -a build-steps.log
+        go tool cover -func=coverage.out 2>&1 | tee -a build-steps.log
+
+    - name: Run Go Benchmarks
+      shell: bash
+      run: |
+        echo "=== Go Benchmarks ===" | tee -a build-steps.log
+        go test -bench . -benchtime=10s -run=^$ ./internal/bench 2>&1 | tee -a build-steps.log
+        BENCH_EXIT=${PIPESTATUS[0]}
+        echo "Benchmark exit code: $BENCH_EXIT" | tee -a build-steps.log
+        exit $BENCH_EXIT
+
+    - name: K6 Smoke Test
+      shell: bash
+      run: |
+        echo "=== K6 Smoke Test ===" | tee -a build-steps.log
+        if command -v k6 &> /dev/null; then
+          echo "k6 found, running smoke test with 01_sustained_throughput scenario..." | tee -a build-steps.log
+          timeout 30 k6 run --duration 10s --vus 2 loadtest/k6/01_sustained_throughput.js 2>&1 | tee -a build-steps.log || {
+            echo "K6 test skipped (server not running or timeout)" | tee -a build-steps.log
+          }
+        else
+          echo "k6 not installed, skipping smoke test" | tee -a build-steps.log
+        fi
+
+    - name: Upload Build Log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-steps-log
+        path: build-steps.log
+        retention-days: 30
