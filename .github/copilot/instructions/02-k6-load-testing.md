@@ -77,15 +77,15 @@ RATE=500 DURATION=10m WORKER_VUS=200 DELAY_PCT=50 MIN_DELAY_SECONDS=1 MAX_DELAY_
 
 ## Environment Variables
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `CODEQ_BASE_URL` | `http://codeq:8080` | API endpoint |
-| `CODEQ_PRODUCER_TOKEN` | `dev-token` | Producer auth |
-| `CODEQ_WORKER_TOKEN` | `dev-token` | Worker auth |
-| `RATE` | 1000 | Enqueue rate (tasks/sec) |
-| `DURATION` | 1m | Test duration |
-| `WORKER_VUS` | 300 | Virtual users (worker threads) |
-| `CLAIM_P99_MS` | 100 | Success threshold for claim p99 latency |
+| Variable | Script default | Docker Compose default | Purpose |
+|----------|----------------|------------------------|---------|
+| `CODEQ_BASE_URL` | `http://localhost:8080` | `http://codeq:8080` | API endpoint |
+| `CODEQ_PRODUCER_TOKEN` | `dev-token` | `dev-token` | Producer auth |
+| `CODEQ_WORKER_TOKEN` | `dev-token` | `dev-token` | Worker auth |
+| `RATE` | 500 | 1000 | Enqueue rate (tasks/sec) |
+| `DURATION` | 5m | 1m | Test duration |
+| `WORKER_VUS` | 100 | 300 | Virtual users (worker threads) |
+| `CLAIM_P99_MS` | 100 | N/A | Success threshold for claim p99 latency |
 
 ## Measurement Strategy
 
