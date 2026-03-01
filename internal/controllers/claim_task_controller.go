@@ -42,30 +42,25 @@ func (h *claimTaskController) Handle(c *gin.Context) {
 		}
 		allowed[domain.Command(ev)] = true
 	}
-	if len(req.Commands) > 0 {
-		if !hasWildcard {
-			for _, cmd := range req.Commands {
-				if !allowed[cmd] {
-					c.JSON(http.StatusForbidden, gin.H{"error": "event type not allowed"})
-					return
-				}
-			}
+
+	// If no commands requested, use all allowed commands unless wildcard
+	if len(req.Commands) == 0 && !hasWildcard {
+		for cmd := range allowed {
+			req.Commands = append(req.Commands, cmd)
 		}
-	} else {
-		if !hasWildcard {
-			for cmd := range allowed {
-				req.Commands = append(req.Commands, cmd)
+	}
+
+	// Validate requested commands are in allowed list (unless wildcard)
+	if len(req.Commands) > 0 && !hasWildcard {
+		for _, cmd := range req.Commands {
+			if !allowed[cmd] {
+				c.JSON(http.StatusForbidden, gin.H{"error": "event type not allowed"})
+				return
 			}
 		}
 	}
-	// Extract tenant ID from the request context
-	tenantID := ""
-	if v, ok := c.Get("tenantID"); ok {
-		if tid, ok := v.(string); ok {
-			tenantID = tid
-		}
-	}
-	
+	tenantID := getTenantID(c)
+
 	task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, req.WaitSeconds, tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

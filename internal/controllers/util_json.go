@@ -1,6 +1,10 @@
 package controllers
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/gin-gonic/gin"
+)
 
 func jsonMarshal(v any) (string, error) {
 	b, err := json.Marshal(v)
@@ -8,4 +12,16 @@ func jsonMarshal(v any) (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+func getTenantID(c *gin.Context) string {
+	v, ok := c.Get("tenantID")
+	if !ok {
+		return ""
+	}
+	tid, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return tid
 }

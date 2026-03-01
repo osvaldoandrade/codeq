@@ -109,11 +109,7 @@ export class CodeQClient {
       const response = await this.httpClient.post<Task>(
         '/v1/codeq/tasks',
         options,
-        {
-          headers: {
-            Authorization: `Bearer ${this.producerToken}`,
-          },
-        }
+        { headers: this.getAuthHeaders(this.producerToken) }
       );
       return response.data;
     } catch (error) {
@@ -141,11 +137,7 @@ export class CodeQClient {
           leaseSeconds: options.leaseSeconds || 120,
           waitSeconds: options.waitSeconds || 0,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${this.workerToken}`,
-          },
-        }
+        { headers: this.getAuthHeaders(this.workerToken) }
       );
       return response.data;
     } catch (error) {
@@ -175,11 +167,7 @@ export class CodeQClient {
       await this.httpClient.post(
         `/v1/codeq/tasks/${taskId}/result`,
         options,
-        {
-          headers: {
-            Authorization: `Bearer ${this.workerToken}`,
-          },
-        }
+        { headers: this.getAuthHeaders(this.workerToken) }
       );
     } catch (error) {
       throw this.handleError('Failed to submit result', error);
@@ -202,11 +190,7 @@ export class CodeQClient {
       await this.httpClient.post(
         `/v1/codeq/tasks/${taskId}/heartbeat`,
         { extendSeconds },
-        {
-          headers: {
-            Authorization: `Bearer ${this.workerToken}`,
-          },
-        }
+        { headers: this.getAuthHeaders(this.workerToken) }
       );
     } catch (error) {
       throw this.handleError('Failed to send heartbeat', error);
@@ -228,11 +212,7 @@ export class CodeQClient {
       await this.httpClient.post(
         `/v1/codeq/tasks/${taskId}/abandon`,
         {},
-        {
-          headers: {
-            Authorization: `Bearer ${this.workerToken}`,
-          },
-        }
+        { headers: this.getAuthHeaders(this.workerToken) }
       );
     } catch (error) {
       throw this.handleError('Failed to abandon task', error);
@@ -260,11 +240,7 @@ export class CodeQClient {
       await this.httpClient.post(
         `/v1/codeq/tasks/${taskId}/nack`,
         { delaySeconds, reason },
-        {
-          headers: {
-            Authorization: `Bearer ${this.workerToken}`,
-          },
-        }
+        { headers: this.getAuthHeaders(this.workerToken) }
       );
     } catch (error) {
       throw this.handleError('Failed to NACK task', error);
@@ -287,11 +263,7 @@ export class CodeQClient {
     try {
       const response = await this.httpClient.get<Task>(
         `/v1/codeq/tasks/${taskId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { headers: this.getAuthHeaders(token) }
       );
       return response.data;
     } catch (error) {
@@ -315,16 +287,16 @@ export class CodeQClient {
     try {
       const response = await this.httpClient.get<QueueStats>(
         `/v1/codeq/admin/queues/${command}/stats`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        }
+        { headers: this.getAuthHeaders(token) }
       );
       return response.data;
     } catch (error) {
       throw this.handleError('Failed to get queue stats', error);
     }
+  }
+
+  private getAuthHeaders(token: string): { Authorization: string } {
+    return { Authorization: `Bearer ${token}` };
   }
 
   private handleError(message: string, error: unknown): Error {
