@@ -17,11 +17,11 @@ CodeQ build and test execution should be fast to enable rapid iteration. This gu
 # Incremental build (only recompile changed packages)
 go build -o server ./cmd/server  # Uses Go cache automatically
 
-# Run specific test package (faster than full test suite)
-go test -v ./internal/repository -run TestCreate
+# Run a specific test (replace <TestName> with an existing test, e.g., TestEnqueueIdempotent)
+go test -v ./internal/repository -run TestEnqueueIdempotent
 
 # Single benchmark (skip others)
-go test ./internal/bench -bench BenchmarkCreateTask -benchtime=5s
+go test ./internal/bench -bench BenchmarkHTTP_CreateClaimComplete -benchtime=5s
 
 # Skip tests that require Docker/K6
 go test ./cmd/... -short  # Runs only short-duration tests
@@ -64,11 +64,11 @@ go test -short ./...
 
 ### Parallelize test execution
 ```bash
-# Run 4 test packages in parallel
+# Allow up to 4 tests per package to run in parallel (requires t.Parallel())
 go test -parallel 4 ./...
 
-# Control parallelism per package
-go test -p 4 ./...  # Run 4 packages in parallel
+# Control how many packages are tested in parallel
+go test -p 4 ./...
 ```
 
 ### Check test dependencies
@@ -129,9 +129,9 @@ go vet ./...  # Automatically runs in parallel
 
 ## Common Developer Tasks
 
-### Scenario: Testing a claim optimization
-1. Make code change in `internal/repository/claim.go`
-2. Run quick benchmark: `go test ./internal/bench -bench BenchmarkClaimTask -benchtime=5s`
+### Scenario: Testing a task repository optimization
+1. Make code change in `internal/repository/task_repository.go`
+2. Run quick benchmark: `go test ./internal/bench -bench BenchmarkHTTP_CreateClaimComplete -benchtime=5s`
 3. If promising, run full benchmark: `go test ./internal/bench -bench . -benchtime=15s`
 4. If latency improves, start k6 load test for realistic validation
 
@@ -170,4 +170,5 @@ docker compose up && k6 scenario [2-5min]
 Success: Create PR
 ```
 
-Total time from code change to PR: 20-30 seconds for fast feedback loop.
+Total time for the inner fast feedback loop (code change → unit tests → quick benchmark, skipping medium benchmark and k6): ~20–30 seconds.
+Total time for the full workflow including the optional k6 scenario: ~2–5 minutes.

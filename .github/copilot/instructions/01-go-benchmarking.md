@@ -18,7 +18,7 @@ go test ./internal/bench -bench . -benchtime=5s -benchmem
 
 ### Specific benchmark with detailed timing
 ```bash
-go test ./internal/bench -bench BenchmarkCreateTask -benchtime=10s -benchmem -v
+go test ./internal/bench -bench BenchmarkHTTP_CreateClaimComplete -benchtime=10s -benchmem -v
 ```
 
 ### With CPU profiling (heavy analysis)

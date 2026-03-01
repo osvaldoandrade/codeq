@@ -69,8 +69,12 @@ runs:
       run: |
         {
           echo "=== Docker Setup: Starting ==="
-          docker --version
-          echo "=== Docker Setup: Completed ==="
+          if command -v docker &> /dev/null; then
+            docker --version
+            echo "=== Docker Setup: Completed ==="
+          else
+            echo "Docker is not available on this runner; skipping Docker setup for k6 load tests."
+          fi
         } 2>&1 | tee -a build-steps.log
 
     - name: Quick k6 smoke test (optional)
@@ -95,8 +99,18 @@ runs:
         {
           echo "=== Coverage Report: Starting ==="
           go tool cover -func=coverage.out > coverage-report.txt
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
-          echo "Total Coverage: $COVERAGE"
+          RAW_COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          COVERAGE=${RAW_COVERAGE%\%}
+          THRESHOLD=70.0
+          echo "Total Coverage: ${COVERAGE}%"
+          awk -v cov="$COVERAGE" -v thr="$THRESHOLD" 'BEGIN {
+            if (cov+0 < thr+0) {
+              printf "ERROR: Coverage (%.2f%%) is below required threshold (%.2f%%)\n", cov, thr;
+              exit 1
+            } else {
+              printf "Coverage (%.2f%%) meets the required threshold (%.2f%%)\n", cov, thr;
+            }
+          }'
           echo "=== Coverage Report: Completed ==="
         } 2>&1 | tee -a build-steps.log
 

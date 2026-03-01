@@ -30,7 +30,7 @@ go tool pprof cpu.prof
 
 ### Run with memory allocation profile
 ```bash
-go test ./internal/bench -bench . -benchtime=10s -memprofile=mem.prof -allocmem=<size>
+go test ./internal/bench -bench . -benchtime=10s -memprofile=mem.prof -memprofilerate=1
 go tool pprof -alloc_space mem.prof   # All allocations (total bytes)
 go tool pprof -alloc_objects mem.prof # Allocation count
 go tool pprof -inuse_space mem.prof   # In-use memory (RSS)
@@ -49,11 +49,6 @@ go test ./internal/bench -bench . -benchmem
 
 ## Goroutine Profiling (Concurrency Issues)
 
-### Detect goroutine leaks
-```bash
-go test ./internal/backoff -run TestLeaks -v
-```
-
 ### Trace goroutine spawning
 ```bash
 go test ./internal/bench -bench . -benchtime=5s -trace=trace.out
@@ -68,7 +63,8 @@ Open in browser; look for:
 
 ### Enable pprof on server
 ```bash
-# Server has pprof endpoint at localhost:6060 (if profiling enabled)
+# pprof is disabled by default; after you enable it, the server typically exposes it on localhost:6060
+# To enable pprof, you must add net/http/pprof import and start a listener
 go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
 ```
 
