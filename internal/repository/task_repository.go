@@ -1,12 +1,14 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
@@ -28,6 +30,13 @@ const (
 	taskRetention       = 24 * time.Hour
 	defaultInspectLimit = 200 // Default number of tasks to inspect for lease expiration
 )
+
+// bufferPool reduces JSON marshaling allocations by reusing buffers
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
 
 type TaskRepository interface {
 	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
@@ -124,8 +133,19 @@ func (r *taskRedisRepo) now() time.Time { return time.Now().In(r.tz) }
 // ===== Helpers =====
 
 func marshal(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()
+		bufferPool.Put(buf)
+	}()
+	encoder := json.NewEncoder(buf)
+	_ = encoder.Encode(v)
+	// Remove trailing newline added by Encoder
+	s := buf.String()
+	if len(s) > 0 && s[len(s)-1] == '\n' {
+		return s[:len(s)-1]
+	}
+	return s
 }
 
 func unmarshalTask(jsonStr string) (*domain.Task, error) {
