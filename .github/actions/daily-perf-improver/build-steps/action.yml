@@ -1,0 +1,110 @@
+name: Performance Engineering Build Steps
+description: Validated build steps for performance development, testing, and measurement
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+
+    - name: Log environment setup
+      shell: bash
+      run: |
+        echo "=== Build Steps Log ===" | tee -a build-steps.log
+        echo "Go version: $(go version)" | tee -a build-steps.log
+        echo "Go GOOS/GOARCH: $(go env GOOS)/$(go env GOARCH)" | tee -a build-steps.log
+        echo "Working directory: $(pwd)" | tee -a build-steps.log
+        echo "" | tee -a build-steps.log
+
+    - name: Download dependencies
+      shell: bash
+      run: |
+        echo "=== Downloading Dependencies ===" | tee -a build-steps.log
+        go mod download 2>&1 | tee -a build-steps.log
+        go mod verify 2>&1 | tee -a build-steps.log
+        echo "" | tee -a build-steps.log
+
+    - name: Build server binary
+      shell: bash
+      run: |
+        echo "=== Building Server Binary ===" | tee -a build-steps.log
+        go build -v -o server ./cmd/server 2>&1 | tee -a build-steps.log
+        echo "Server binary size: $(du -h server | cut -f1)" | tee -a build-steps.log
+        echo "Server binary checksum: $(sha256sum server | cut -d' ' -f1)" | tee -a build-steps.log
+        echo "" | tee -a build-steps.log
+
+    - name: Build CLI binary
+      shell: bash
+      run: |
+        echo "=== Building CLI Binary ===" | tee -a build-steps.log
+        go build -v -o codeq ./cmd/cli 2>&1 | tee -a build-steps.log
+        echo "CLI binary size: $(du -h codeq | cut -f1)" | tee -a build-steps.log
+        echo "CLI binary checksum: $(sha256sum codeq | cut -d' ' -f1)" | tee -a build-steps.log
+        echo "" | tee -a build-steps.log
+
+    - name: Run unit tests
+      shell: bash
+      run: |
+        echo "=== Running Unit Tests ===" | tee -a build-steps.log
+        go test -v -coverprofile=coverage.out -covermode=atomic \
+          ./internal/backoff \
+          ./internal/repository \
+          ./internal/services \
+          ./pkg/domain \
+          ./pkg/config 2>&1 | tee -a build-steps.log
+        echo "Test coverage report:" | tee -a build-steps.log
+        go tool cover -func=coverage.out | tail -5 | tee -a build-steps.log
+        echo "" | tee -a build-steps.log
+
+    - name: Run go benchmarks
+      shell: bash
+      run: |
+        echo "=== Running Go Benchmarks ===" | tee -a build-steps.log
+        go test -bench=. -benchmem -benchtime=3s ./internal/bench 2>&1 | tee -a build-steps.log
+        echo "" | tee -a build-steps.log
+
+    - name: Run gofmt check
+      shell: bash
+      run: |
+        echo "=== Code Formatting Check ===" | tee -a build-steps.log
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "⚠️  Unformatted files:" | tee -a build-steps.log
+          echo "$unformatted" | tee -a build-steps.log
+        else
+          echo "✅ All files properly formatted" | tee -a build-steps.log
+        fi
+        echo "" | tee -a build-steps.log
+
+    - name: Run go vet
+      shell: bash
+      run: |
+        echo "=== Go Vet Check ===" | tee -a build-steps.log
+        go vet ./... 2>&1 | tee -a build-steps.log || true
+        echo "" | tee -a build-steps.log
+
+    - name: Generate build profiling baseline
+      shell: bash
+      run: |
+        echo "=== Build Performance Baseline ===" | tee -a build-steps.log
+        
+        # Clean build timing
+        echo "Clean build time (server):" | tee -a build-steps.log
+        rm -f server
+        time go build -o server ./cmd/server 2>&1 | tee -a build-steps.log
+        
+        # Rebuild timing (should be faster with caching)
+        echo "Rebuild time (server):" | tee -a build-steps.log
+        time go build -o server ./cmd/server 2>&1 | tee -a build-steps.log
+        
+        echo "" | tee -a build-steps.log
+
+    - name: Summary
+      shell: bash
+      run: |
+        echo "=== Build Steps Completed ===" | tee -a build-steps.log
+        echo "Artifacts created:" | tee -a build-steps.log
+        ls -lh server codeq coverage.out 2>/dev/null | awk '{print "  " $9 " (" $5 ")"}' | tee -a build-steps.log
+        echo "Log file: build-steps.log" | tee -a build-steps.log
