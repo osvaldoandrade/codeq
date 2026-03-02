@@ -1,12 +1,14 @@
 package repository
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
@@ -27,6 +29,16 @@ const (
 	maxPriority         = 9
 	taskRetention       = 24 * time.Hour
 	defaultInspectLimit = 200 // Default number of tasks to inspect for lease expiration
+)
+
+var (
+	// bufferPool for JSON encoding reduces allocations in marshal operations.
+	// Each buffer is pre-sized to ~2KB to accommodate typical task JSON sizes.
+	bufferPool = sync.Pool{
+		New: func() interface{} {
+			return new(bytes.Buffer)
+		},
+	}
 )
 
 type TaskRepository interface {
@@ -124,8 +136,22 @@ func (r *taskRedisRepo) now() time.Time { return time.Now().In(r.tz) }
 // ===== Helpers =====
 
 func marshal(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()
+		bufferPool.Put(buf)
+	}()
+
+	encoder := json.NewEncoder(buf)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(v)
+
+	// Encode adds a newline, which we don't want for JSON storage
+	result := buf.String()
+	if len(result) > 0 && result[len(result)-1] == '\n' {
+		return result[:len(result)-1]
+	}
+	return result
 }
 
 func unmarshalTask(jsonStr string) (*domain.Task, error) {
