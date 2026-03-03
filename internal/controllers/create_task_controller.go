@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
@@ -49,14 +50,7 @@ func (h *createTaskController) Handle(c *gin.Context) {
 		return
 	}
 
-	// Extract tenant ID from the request context
-	tenantID := ""
-	if v, ok := c.Get("tenantID"); ok {
-		if tid, ok := v.(string); ok {
-			tenantID = tid
-		}
-	}
-
+	tenantID := middleware.GetTenantID(c)
 	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, req.Idempotency, runAt, req.DelaySecs, tenantID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
