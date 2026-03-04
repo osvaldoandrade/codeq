@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/osvaldoandrade/codeq/internal/backoff"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/tracing"
@@ -124,13 +125,13 @@ func (r *taskRedisRepo) now() time.Time { return time.Now().In(r.tz) }
 // ===== Helpers =====
 
 func marshal(v any) string {
-	b, _ := json.Marshal(v)
+	b, _ := sonic.Marshal(v)
 	return string(b)
 }
 
 func unmarshalTask(jsonStr string) (*domain.Task, error) {
 	var t domain.Task
-	if err := json.Unmarshal([]byte(jsonStr), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(jsonStr), &t); err != nil {
 		return nil, err
 	}
 	return &t, nil
