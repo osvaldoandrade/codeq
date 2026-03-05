@@ -3,13 +3,13 @@ package repository
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
+	"github.com/bytedance/sonic"
 	"github.com/go-redis/redis/v8"
 )
 
@@ -52,14 +52,14 @@ func (r *resultRedisRepo) GetTask(ctx context.Context, id string) (*domain.Task,
 		return nil, fmt.Errorf("redis HGET task: %w", err)
 	}
 	var t domain.Task
-	if err := json.Unmarshal([]byte(js), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
 		return nil, fmt.Errorf("unmarshal task: %w", err)
 	}
 	return &t, nil
 }
 
 func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
-	b, _ := json.Marshal(rec)
+	b, _ := sonic.Marshal(rec)
 	if err := r.rdb.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b)).Err(); err != nil {
 		return fmt.Errorf("redis HSET result: %w", err)
 	}
@@ -72,11 +72,11 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 		return fmt.Errorf("redis HGET task: %w", err)
 	}
 	var t domain.Task
-	if err := json.Unmarshal([]byte(js), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
 	t.ResultKey = r.keyResultsHash()
-	nb, _ := json.Marshal(t)
+	nb, _ := sonic.Marshal(t)
 	if err := r.rdb.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb)).Err(); err != nil {
 		return fmt.Errorf("redis HSET task: %w", err)
 	}
@@ -92,7 +92,7 @@ func (r *resultRedisRepo) GetResult(ctx context.Context, id string) (*domain.Res
 		return nil, fmt.Errorf("redis HGET result: %w", err)
 	}
 	var rec domain.ResultRecord
-	if err := json.Unmarshal([]byte(js), &rec); err != nil {
+	if err := sonic.Unmarshal([]byte(js), &rec); err != nil {
 		return nil, fmt.Errorf("unmarshal result: %w", err)
 	}
 	return &rec, nil
@@ -107,7 +107,7 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 		return fmt.Errorf("redis HGET task: %w", err)
 	}
 	var t domain.Task
-	if err := json.Unmarshal([]byte(js), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
 	t.Status = status
@@ -116,7 +116,7 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 	t.LeaseUntil = ""
 	t.UpdatedAt = r.now()
 
-	b, _ := json.Marshal(t)
+	b, _ := sonic.Marshal(t)
 	if err := r.rdb.HSet(ctx, r.keyTasksHash(), id, string(b)).Err(); err != nil {
 		return fmt.Errorf("redis HSET task: %w", err)
 	}
