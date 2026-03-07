@@ -14,6 +14,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
+	"github.com/bytedance/sonic"
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -124,13 +125,13 @@ func (r *taskRedisRepo) now() time.Time { return time.Now().In(r.tz) }
 // ===== Helpers =====
 
 func marshal(v any) string {
-	b, _ := json.Marshal(v)
+	b, _ := sonic.Marshal(v)
 	return string(b)
 }
 
 func unmarshalTask(jsonStr string) (*domain.Task, error) {
 	var t domain.Task
-	if err := json.Unmarshal([]byte(jsonStr), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(jsonStr), &t); err != nil {
 		return nil, err
 	}
 	return &t, nil
