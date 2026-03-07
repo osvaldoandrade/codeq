@@ -45,7 +45,7 @@ func TestTenantIsolation(t *testing.T) {
 	// Verify queue keys are different for different tenants
 	keyA := "codeq:q:generate_master:tenant-a:pending:0"
 	keyB := "codeq:q:generate_master:tenant-b:pending:0"
-	
+
 	lenA, err := rdb.LLen(ctx, keyA).Result()
 	if err != nil {
 		t.Fatalf("get length of tenant A queue: %v", err)
@@ -95,7 +95,7 @@ func TestTenantIsolation(t *testing.T) {
 	// Verify tasks are moved to correct in-progress queues
 	inprogA := "codeq:q:generate_master:tenant-a:inprog"
 	inprogB := "codeq:q:generate_master:tenant-b:inprog"
-	
+
 	lenInprogA, err := rdb.SCard(ctx, inprogA).Result()
 	if err != nil {
 		t.Fatalf("get length of tenant A inprog queue: %v", err)
@@ -118,7 +118,7 @@ func TestTenantIsolation(t *testing.T) {
 		t.Fatalf("claim for tenant B with worker A should not error: %v", err)
 	}
 	// Worker A claiming from tenant B queue should find only 1 task (not the one already claimed by B)
-	
+
 	// Clean the mini Redis state (for test cleanup)
 	_ = mr // use mr to avoid unused variable error
 }
@@ -141,7 +141,7 @@ func TestBackwardCompatibilityWithEmptyTenant(t *testing.T) {
 
 	// Verify tasks are in the default (non-tenant) queue
 	key := "codeq:q:generate_master:pending:0"
-	
+
 	length, err := rdb.LLen(ctx, key).Result()
 	if err != nil {
 		t.Fatalf("get length of default queue: %v", err)
@@ -177,7 +177,7 @@ func TestBackwardCompatibilityWithEmptyTenant(t *testing.T) {
 func TestTenantIsolationInDelayedQueue(t *testing.T) {
 	ctx, _, rdb, repo := setupRepo(t)
 	cmd := domain.CmdGenerateMaster
-	
+
 	runAt := time.Now().Add(1 * time.Hour)
 
 	// Create delayed tasks for different tenants

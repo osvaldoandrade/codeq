@@ -65,7 +65,7 @@ func (h *claimTaskController) Handle(c *gin.Context) {
 			tenantID = tid
 		}
 	}
-	
+
 	task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, req.WaitSeconds, tenantID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

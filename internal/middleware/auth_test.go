@@ -49,7 +49,7 @@ func setupEnv(t *testing.T) *testEnv {
 		IdentityIssuer:          "codeq-test",
 		IdentityAudience:        "codeq-producer",
 	}
-	
+
 	// Setup auth providers config (normally done by LoadConfig)
 	cfg.ProducerAuthProvider = "jwks"
 	cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
@@ -67,7 +67,7 @@ func setupEnv(t *testing.T) *testEnv {
 		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
 		"httpTimeout": 5 * time.Second,
 	})
-	
+
 	return &testEnv{cfg: cfg, jwksSrv: jwksSrv, privKey: privKey}
 }
 
@@ -208,7 +208,7 @@ func TestProducerAuthValid(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/", bytes.NewBuffer(nil))
 	ctx.Request.Header.Set("Authorization", "Bearer "+tok)
 
-	// Create validator using config  
+	// Create validator using config
 	validator, _ := auth.NewValidator(auth.ProviderConfig{
 		Type:   env.cfg.ProducerAuthProvider,
 		Config: env.cfg.ProducerAuthConfig,
