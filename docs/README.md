@@ -38,6 +38,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
 22. `docs/22-local-development.md` - Local development with docker-compose
+26. `docs/26-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
 
 ### Integration Guides
 
