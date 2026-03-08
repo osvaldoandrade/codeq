@@ -4,10 +4,6 @@
 
 - `port` (int): HTTP port, default 8080
   - Environment variable: `PORT`
-- `redisAddr` (string): KVRocks/Redis address, default `localhost:6379`
-  - Environment variable: `REDIS_ADDR`
-- `redisPassword` (string, optional): KVRocks/Redis password
-  - Environment variable: `REDIS_PASSWORD` or `KVROCKS_PASSWORD`
 - `timezone` (string): Timezone for task scheduling and logging, default `America/Sao_Paulo`
   - Environment variable: `TIMEZONE`
 - `env` (string): Environment mode (`dev` or `prod`), affects validation strictness, default `dev`
@@ -18,6 +14,48 @@
 - `logFormat` (string): Log output format (`json` or `text`), default `json`
   - Environment variable: `LOG_FORMAT`
   - Use `text` for local development, `json` for production structured logging
+
+## Persistence Plugin
+
+codeQ uses a pluggable persistence architecture allowing different storage backends. See `docs/26-persistence-plugin-system.md` for detailed information.
+
+- `persistenceProvider` (string): Storage backend type, one of: `redis`, `memory`
+  - Environment variable: `PERSISTENCE_PROVIDER`
+  - Default: `redis` (for backward compatibility)
+  - `redis`: Production-ready persistence using Redis or KVRocks
+  - `memory`: In-memory storage for testing only (data lost on restart)
+- `persistenceConfig` (JSON object): Provider-specific configuration
+  - Environment variable: `PERSISTENCE_CONFIG` (JSON string)
+  - Format varies by provider:
+    - **Redis**: `{"addr":"localhost:6379","password":""}`
+    - **Memory**: `{}`
+
+### Backward Compatibility
+
+If `persistenceProvider` is not configured, codeQ automatically defaults to Redis using legacy settings:
+
+- `redisAddr` (string): KVRocks/Redis address, default `localhost:6379`
+  - Environment variable: `REDIS_ADDR`
+  - **Deprecated:** Use `persistenceProvider: redis` with `persistenceConfig` instead
+- `redisPassword` (string, optional): KVRocks/Redis password
+  - Environment variable: `REDIS_PASSWORD` or `KVROCKS_PASSWORD`
+  - **Deprecated:** Use `persistenceProvider: redis` with `persistenceConfig` instead
+
+### Example: Redis Plugin (Default)
+
+````yaml
+persistenceProvider: redis
+persistenceConfig:
+  addr: localhost:6379
+  password: ""  # optional
+````
+
+### Example: Memory Plugin (Testing)
+
+````yaml
+persistenceProvider: memory
+persistenceConfig: {}
+````
 
 ## Tracing (OpenTelemetry)
 
