@@ -16,6 +16,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 14. `docs/14-configuration.md` - Configuration reference
 15. `docs/15-cli-reference.md` - Complete CLI command reference
 26. `docs/26-load-testing.md` - Load testing framework and benchmarks
+27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
 
 ### Technical Reference (Information-Oriented)
 
@@ -38,7 +39,8 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
 22. `docs/22-local-development.md` - Local development with docker-compose
-26. `docs/26-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
+26. `docs/26-load-testing.md` - Load testing framework and benchmarks
+27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
 
 ### Integration Guides
 
