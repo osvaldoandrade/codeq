@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Memory plugin provides in-memory storage for unit tests (no external dependencies)
   - Configuration-driven plugin selection via `persistenceProvider` and `persistenceConfig`
   - Plugin registry pattern mirroring existing `pkg/auth` authentication plugins
-  - Documentation: `docs/26-persistence-plugin-system.md`
+  - Documentation: `docs/27-persistence-plugin-system.md`
   - Example configuration: `config.example.yml`
   - Future: PostgreSQL, DynamoDB, Cassandra plugins can be added without core changes
 

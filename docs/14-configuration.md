@@ -17,7 +17,7 @@
 
 ## Persistence Plugin
 
-codeQ uses a pluggable persistence architecture allowing different storage backends. See `docs/26-persistence-plugin-system.md` for detailed information.
+codeQ uses a pluggable persistence architecture allowing different storage backends. See `docs/27-persistence-plugin-system.md` for detailed information.
 
 - `persistenceProvider` (string): Storage backend type, one of: `redis`, `memory`
   - Environment variable: `PERSISTENCE_PROVIDER`
