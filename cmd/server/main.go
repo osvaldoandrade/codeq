@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks"        // Register default JWKS auth provider
-	_ "github.com/osvaldoandrade/codeq/pkg/auth/static"      // Register static token auth provider (dev/local)
+	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks"   // Register default JWKS auth provider
+	_ "github.com/osvaldoandrade/codeq/pkg/auth/static" // Register static token auth provider (dev/local)
+	"github.com/osvaldoandrade/codeq/pkg/config"
 	_ "github.com/osvaldoandrade/codeq/pkg/persistence/memory" // Register memory persistence plugin (testing)
 	_ "github.com/osvaldoandrade/codeq/pkg/persistence/redis"  // Register Redis persistence plugin
-	"github.com/osvaldoandrade/codeq/pkg/config"
 
 	"github.com/osvaldoandrade/codeq/pkg/app"
 )
