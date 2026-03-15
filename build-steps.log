@@ -1,0 +1,14 @@
+=== Build Steps Log ===
+Go version: go version go1.23.0 linux/amd64
+Go GOOS/GOARCH: linux/amd64
+Working directory: /home/runner/work/codeq/codeq
+
+=== Downloading Dependencies ===
+all modules verified
+
+=== Building Server Binary ===
+Server binary size: 28M
+Server binary checksum: fb50f74dddcd9e92ea37e5be1e88d5d1fc461131b5cc259a728d254bd61f32f9
+
+=== Building CLI Binary ===
+stat /home/runner/work/codeq/codeq/cmd/cli: directory not found

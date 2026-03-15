@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
+	"github.com/bytedance/sonic"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -81,7 +81,7 @@ func (s *resultCallbackService) Send(ctx context.Context, task domain.Task, rec 
 		"completedAt": rec.CompletedAt,
 	}
 
-	b, _ := json.Marshal(payload)
+	b, _ := sonic.Marshal(payload)
 	go s.sendWithRetry(context.WithoutCancel(ctx), task.Command, task.Webhook, b)
 }
 
