@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
@@ -135,7 +135,7 @@ func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription,
 		"sentAt":         time.Now().UTC().Format(time.RFC3339),
 		"notificationId": "ntf-" + sub.ID,
 	}
-	b, _ := json.Marshal(payload)
+	b, _ := sonic.Marshal(payload)
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, sub.CallbackURL, bytes.NewBuffer(b))
 	req.Header.Set("Content-Type", "application/json")

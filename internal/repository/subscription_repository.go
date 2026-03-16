@@ -2,11 +2,11 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/go-redis/redis/v8"
@@ -68,7 +68,7 @@ func (r *subscriptionRedisRepo) Create(ctx context.Context, sub domain.Subscript
 	sub.CreatedAt = now
 	sub.ExpiresAt = now.Add(time.Duration(ttlSeconds) * time.Second)
 
-	b, _ := json.Marshal(sub)
+	b, _ := sonic.Marshal(sub)
 	pipe := r.rdb.TxPipeline()
 	pipe.HSet(ctx, r.keySubsHash(), sub.ID, string(b))
 	for _, cmd := range sub.EventTypes {
@@ -90,7 +90,7 @@ func (r *subscriptionRedisRepo) Heartbeat(ctx context.Context, id string, ttlSec
 	}
 	sub.ExpiresAt = r.now().Add(time.Duration(ttlSeconds) * time.Second)
 
-	b, _ := json.Marshal(sub)
+	b, _ := sonic.Marshal(sub)
 	pipe := r.rdb.TxPipeline()
 	pipe.HSet(ctx, r.keySubsHash(), id, string(b))
 	for _, cmd := range sub.EventTypes {
@@ -111,7 +111,7 @@ func (r *subscriptionRedisRepo) Get(ctx context.Context, id string) (*domain.Sub
 		return nil, fmt.Errorf("redis HGET sub: %w", err)
 	}
 	var sub domain.Subscription
-	if err := json.Unmarshal([]byte(js), &sub); err != nil {
+	if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
 		return nil, fmt.Errorf("unmarshal sub: %w", err)
 	}
 	return &sub, nil
