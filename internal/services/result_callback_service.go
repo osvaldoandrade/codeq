@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/tracing"
@@ -81,7 +81,7 @@ func (s *resultCallbackService) Send(ctx context.Context, task domain.Task, rec 
 		"completedAt": rec.CompletedAt,
 	}
 
-	b, _ := json.Marshal(payload)
+	b, _ := sonic.Marshal(payload)
 	go s.sendWithRetry(context.WithoutCancel(ctx), task.Command, task.Webhook, b)
 }
 
