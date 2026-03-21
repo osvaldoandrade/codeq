@@ -45,7 +45,7 @@ func NewPlugin(config persistence.PluginConfig) (persistence.PluginPersistence, 
 		config.BackoffBaseSeconds,
 		config.BackoffMaxSeconds,
 	)
-	
+
 	resultRepo := repository.NewResultRepository(client, config.Timezone)
 	subscriptionRepo := repository.NewSubscriptionRepository(client, config.Timezone)
 

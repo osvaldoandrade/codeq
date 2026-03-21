@@ -19,21 +19,21 @@ func setupSubscriptionServiceTest(t *testing.T) (context.Context, SubscriptionSe
 		t.Fatalf("miniredis start: %v", err)
 	}
 	t.Cleanup(mr.Close)
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	
+
 	repo := repository.NewSubscriptionRepository(rdb, time.UTC)
 	svc := NewSubscriptionService(repo)
-	
+
 	return context.Background(), svc
 }
 
 func TestSubscriptionServiceCreateSuccess(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	sub, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "fanout", "", 3600, 30)
-	
+
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -47,9 +47,9 @@ func TestSubscriptionServiceCreateSuccess(t *testing.T) {
 
 func TestSubscriptionServiceCreateEmptyURL(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	_, err := svc.Create(ctx, "", []domain.Command{domain.CmdGenerateMaster}, "fanout", "", 3600, 30)
-	
+
 	if err == nil {
 		t.Fatal("Expected error for empty callback URL")
 	}
@@ -60,7 +60,7 @@ func TestSubscriptionServiceCreateEmptyURL(t *testing.T) {
 
 func TestSubscriptionServiceCreateInvalidURL(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	tests := []struct {
 		name string
 		url  string
@@ -69,7 +69,7 @@ func TestSubscriptionServiceCreateInvalidURL(t *testing.T) {
 		{"ftp scheme", "ftp://example.com"},
 		{"no host", "http://"},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := svc.Create(ctx, tt.url, []domain.Command{domain.CmdGenerateMaster}, "fanout", "", 3600, 30)
@@ -85,9 +85,9 @@ func TestSubscriptionServiceCreateInvalidURL(t *testing.T) {
 
 func TestSubscriptionServiceCreateDefaultEventTypes(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	sub, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{}, "fanout", "", 3600, 30)
-	
+
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -98,9 +98,9 @@ func TestSubscriptionServiceCreateDefaultEventTypes(t *testing.T) {
 
 func TestSubscriptionServiceCreateDefaultDeliveryMode(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	sub, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "", "", 3600, 30)
-	
+
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -111,9 +111,9 @@ func TestSubscriptionServiceCreateDefaultDeliveryMode(t *testing.T) {
 
 func TestSubscriptionServiceCreateInvalidDeliveryMode(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	_, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "invalid-mode", "", 3600, 30)
-	
+
 	if err == nil {
 		t.Fatal("Expected error for invalid delivery mode")
 	}
@@ -124,9 +124,9 @@ func TestSubscriptionServiceCreateInvalidDeliveryMode(t *testing.T) {
 
 func TestSubscriptionServiceCreateGroupModeWithoutGroupID(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	_, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "group", "", 3600, 30)
-	
+
 	if err == nil {
 		t.Fatal("Expected error for group mode without groupId")
 	}
@@ -137,9 +137,9 @@ func TestSubscriptionServiceCreateGroupModeWithoutGroupID(t *testing.T) {
 
 func TestSubscriptionServiceCreateGroupModeWithGroupID(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	sub, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "group", "worker-group-1", 3600, 30)
-	
+
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -153,9 +153,9 @@ func TestSubscriptionServiceCreateGroupModeWithGroupID(t *testing.T) {
 
 func TestSubscriptionServiceCreateHashMode(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	sub, err := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "hash", "", 3600, 30)
-	
+
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -166,13 +166,13 @@ func TestSubscriptionServiceCreateHashMode(t *testing.T) {
 
 func TestSubscriptionServiceHeartbeat(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	// Create a subscription first
 	sub, _ := svc.Create(ctx, "https://example.com/callback", []domain.Command{domain.CmdGenerateMaster}, "fanout", "", 3600, 30)
-	
+
 	// Heartbeat
 	updated, err := svc.Heartbeat(ctx, sub.ID, 7200)
-	
+
 	if err != nil {
 		t.Fatalf("Heartbeat failed: %v", err)
 	}
@@ -186,9 +186,9 @@ func TestSubscriptionServiceHeartbeat(t *testing.T) {
 
 func TestSubscriptionServiceHeartbeatNotFound(t *testing.T) {
 	ctx, svc := setupSubscriptionServiceTest(t)
-	
+
 	_, err := svc.Heartbeat(ctx, "nonexistent-id", 3600)
-	
+
 	if err == nil {
 		t.Fatal("Expected error for nonexistent subscription")
 	}

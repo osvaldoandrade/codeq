@@ -20,9 +20,9 @@ func setupSubscriptionRepo(t *testing.T) (context.Context, *miniredis.Miniredis,
 	t.Cleanup(mr.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	
+
 	repo := NewSubscriptionRepository(rdb, time.UTC)
-	
+
 	return context.Background(), mr, rdb, repo
 }
 

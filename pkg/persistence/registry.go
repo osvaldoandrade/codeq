@@ -17,10 +17,10 @@ type ProviderConfig struct {
 type PluginConfig struct {
 	// Config contains plugin-specific configuration
 	Config json.RawMessage
-	
+
 	// Timezone for task scheduling
 	Timezone *time.Location
-	
+
 	// BackoffPolicy for retry logic
 	BackoffPolicy      string
 	BackoffBaseSeconds int
@@ -54,7 +54,7 @@ func NewPersistence(providerConfig ProviderConfig, pluginConfig PluginConfig) (P
 
 	// Merge the provider config into the plugin config
 	pluginConfig.Config = providerConfig.Config
-	
+
 	return factory(pluginConfig)
 }
 
