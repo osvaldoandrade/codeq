@@ -39,9 +39,13 @@ runs:
       shell: bash
       run: |
         echo "=== Building CLI Binary ===" | tee -a build-steps.log
-        go build -v -o codeq ./cmd/cli 2>&1 | tee -a build-steps.log
-        echo "CLI binary size: $(du -h codeq | cut -f1)" | tee -a build-steps.log
-        echo "CLI binary checksum: $(sha256sum codeq | cut -d' ' -f1)" | tee -a build-steps.log
+        if [ -d "./cmd/codeq" ]; then
+          go build -v -o codeq ./cmd/codeq 2>&1 | tee -a build-steps.log
+          echo "CLI binary size: $(du -h codeq | cut -f1)" | tee -a build-steps.log
+          echo "CLI binary checksum: $(sha256sum codeq | cut -d' ' -f1)" | tee -a build-steps.log
+        else
+          echo "⚠️  Skipping CLI build: ./cmd/codeq directory not found" | tee -a build-steps.log
+        fi
         echo "" | tee -a build-steps.log
 
     - name: Run unit tests

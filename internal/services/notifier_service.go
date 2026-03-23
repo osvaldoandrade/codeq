@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,6 +19,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
+	"github.com/bytedance/sonic"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -135,7 +135,7 @@ func (n *notifierService) dispatch(ctx context.Context, sub domain.Subscription,
 		"sentAt":         time.Now().UTC().Format(time.RFC3339),
 		"notificationId": "ntf-" + sub.ID,
 	}
-	b, _ := json.Marshal(payload)
+	b, _ := sonic.Marshal(payload)
 
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, sub.CallbackURL, bytes.NewBuffer(b))
 	req.Header.Set("Content-Type", "application/json")
