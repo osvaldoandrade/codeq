@@ -46,7 +46,6 @@ Please add items as they're discovered:
 ### Low Priority
 - [ ] Improve diagram consistency
 - [ ] Add table of contents to longer documents
-- [ ] Create quick reference guide
 
 ## Contribution Guidelines
 
