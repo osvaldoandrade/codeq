@@ -41,6 +41,22 @@ Notes:
 
 An example Grafana dashboard is provided at `docs/grafana/codeq-dashboard.json`.
 
+### Alerting rules
+
+Example Prometheus alerting rules are provided at `deploy/docker-compose/local-dev/alerting-rules.yml`. The rules cover:
+
+- **DLQ growth** (warning at any, critical at >100 tasks)
+- **Ready queue backlog** (>1000 tasks for 10 min)
+- **High task failure rate** (>10 % for 5 min)
+- **Slow task processing** (p95 latency >60 s)
+- **Lease expiry spikes** (>1/s for 5 min)
+- **No claims despite ready queue** (10 min)
+- **Webhook failure rate** (>20 % for 5 min)
+- **Sustained rate limiting** (10 min)
+- **Target down** (scrape failure for 2 min)
+
+Import the rules file into your Prometheus `rule_files` configuration. Adjust thresholds and durations to match your SLOs. See [Troubleshooting](28-troubleshooting.md) for resolution steps when alerts fire.
+
 ## Tracing (OpenTelemetry)
 
 codeQ supports distributed tracing via OpenTelemetry (OTLP gRPC exporter). When enabled, it emits spans for the task lifecycle and webhook deliveries, allowing you to trace a task from creation to completion.

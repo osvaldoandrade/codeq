@@ -2,6 +2,9 @@ global:
   scrape_interval: 5s
   evaluation_interval: 5s
 
+rule_files:
+  - alerting-rules.yml
+
 scrape_configs:
   - job_name: "prometheus"
     static_configs:
