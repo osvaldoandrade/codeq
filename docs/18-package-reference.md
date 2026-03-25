@@ -246,6 +246,8 @@ router.POST("/tasks/claim",
 
 **Service dependencies**: Services call repositories, providers, and other services
 
+**Performance optimizations**: `result_callback_service` and `notifier_service` use **Bytedance Sonic** codec for JSON serialization of task notifications and webhook payloads, achieving 2-3x faster JSON operations and 40-50% fewer allocations.
+
 **Example**:
 ````go
 task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
@@ -291,6 +293,8 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
   - `CleanupExpired()`: Remove expired subscriptions (ZRANGEBYSCORE + ZREM + HDEL)
 
 **Redis layout**: See `docs/07-storage-kvrocks.md`
+
+**JSON Serialization**: All task, result, and subscription serialization uses **Bytedance Sonic** codec for 2-3x faster JSON operations and 40-50% fewer allocations compared to Go's standard `encoding/json`. See `docs/17-performance-tuning.md` for details.
 
 **Example**:
 ````go
