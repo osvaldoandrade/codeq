@@ -41,6 +41,11 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
   - 1M capacity, 1% false positive rate, 30-minute rotation
   - ~2.4 MB memory footprint per API server instance
   - Thread-safe with atomic operations, zero configuration required
+- **JSON Serialization with Bytedance Sonic**: Replaced Go's standard `encoding/json` with Bytedance Sonic codec in hot paths for 2-3x faster JSON operations and 40-50% fewer allocations. ([#315](https://github.com/osvaldoandrade/codeq/pull/315))
+  - Applied to: task repository (enqueue/claim), result repository (submit/get), subscription repository, notifier and callback services
+  - Expected improvements: 5-10% enqueue p50 latency reduction, 10-15% claim p50 latency reduction
+  - Reduces garbage collection pressure by 10-20%, improving tail latencies (p99, p99.9)
+  - No configuration needed; used transparently with graceful fallback handling
 - **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
 - **Optimized MoveDueDelayed batching**: Eliminated redundant task JSON reads and batch all updates in single pipeline. Reduces O(3M) round-trips to O(M) for M due tasks, achieving 50-70% latency reduction for delayed→pending migrations. ([#96](https://github.com/osvaldoandrade/codeq/pull/96))
 
