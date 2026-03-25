@@ -74,9 +74,9 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Task failure rate > 10 % ({{ $labels.command }})"
+          summary: "Task failure rate >10% ({{ $labels.command }})"
           description: >-
-            More than 10 % of completed tasks for command
+            More than 10% of completed tasks for command
             {{ $labels.command }} are failing. Review worker logs and
             error codes.
 
@@ -122,9 +122,9 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "Webhook failure rate > 20 % ({{ $labels.command }}, {{ $labels.kind }})"
+          summary: "Webhook failure rate >20% ({{ $labels.command }}, {{ $labels.kind }})"
           description: >-
-            More than 20 % of {{ $labels.kind }} webhooks for command
+            More than 20% of {{ $labels.kind }} webhooks for command
             {{ $labels.command }} are failing. Check subscriber endpoints
             and network connectivity.
 

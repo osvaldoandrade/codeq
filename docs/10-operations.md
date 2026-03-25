@@ -47,11 +47,11 @@ Example Prometheus alerting rules are provided at `deploy/docker-compose/local-d
 
 - **DLQ growth** (warning at any, critical at >100 tasks)
 - **Ready queue backlog** (>1000 tasks for 10 min)
-- **High task failure rate** (>10 % for 5 min)
+- **High task failure rate** (>10% for 5 min)
 - **Slow task processing** (p95 latency >60 s)
 - **Lease expiry spikes** (>1/s for 5 min)
 - **No claims despite ready queue** (10 min)
-- **Webhook failure rate** (>20 % for 5 min)
+- **Webhook failure rate** (>20% for 5 min)
 - **Sustained rate limiting** (10 min)
 - **Target down** (scrape failure for 2 min)
 
