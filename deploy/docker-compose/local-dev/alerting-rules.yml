@@ -1,0 +1,157 @@
+# codeQ Prometheus Alerting Rules
+#
+# These rules monitor the health of a codeQ deployment.
+# Import this file in your Prometheus configuration under rule_files.
+#
+# See docs/10-operations.md for metric reference and PromQL examples.
+
+groups:
+  - name: codeq.critical
+    rules:
+      # ---- Queue health ----
+
+      - alert: CodeqDLQGrowing
+        expr: max by (command) (codeq_dlq_depth) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "DLQ has unprocessed messages ({{ $labels.command }})"
+          description: >-
+            Dead-letter queue for command {{ $labels.command }} has
+            {{ $value }} tasks. Investigate failed tasks and consumer health.
+
+      - alert: CodeqDLQCritical
+        expr: max by (command) (codeq_dlq_depth) > 100
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DLQ depth critical ({{ $labels.command }})"
+          description: >-
+            Dead-letter queue for command {{ $labels.command }} exceeds
+            100 tasks ({{ $value }}). Immediate investigation required.
+
+      - alert: CodeqQueueBacklogHigh
+        expr: max by (command) (codeq_queue_depth{queue="ready"}) > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Ready queue backlog high ({{ $labels.command }})"
+          description: >-
+            Ready queue for command {{ $labels.command }} has {{ $value }}
+            pending tasks. Consider scaling workers or investigating
+            slow consumers.
+
+      # ---- Task processing ----
+
+      - alert: CodeqTaskCompletionSlow
+        expr: >-
+          histogram_quantile(0.95,
+            sum by (le, command) (
+              rate(codeq_task_processing_latency_seconds_bucket{status="COMPLETED"}[5m])
+            )
+          ) > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 task latency exceeds 60 s ({{ $labels.command }})"
+          description: >-
+            The 95th-percentile end-to-end latency for command
+            {{ $labels.command }} is {{ $value | humanizeDuration }}.
+            Check worker performance and KVRocks health.
+
+      - alert: CodeqHighFailureRate
+        expr: >-
+          (
+            sum by (command) (rate(codeq_task_completed_total{status="FAILED"}[5m]))
+            /
+            sum by (command) (rate(codeq_task_completed_total[5m]))
+          ) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task failure rate >10% ({{ $labels.command }})"
+          description: >-
+            More than 10% of completed tasks for command
+            {{ $labels.command }} are failing. Review worker logs and
+            error codes.
+
+      # ---- Lease and worker health ----
+
+      - alert: CodeqLeaseExpirySpiking
+        expr: sum by (command) (rate(codeq_lease_expired_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Lease expirations spiking ({{ $labels.command }})"
+          description: >-
+            Lease expiry rate for command {{ $labels.command }} is
+            {{ $value | humanize }}/s. Workers may be crashing, too slow,
+            or the lease duration may be too short.
+
+      - alert: CodeqNoTasksClaimed
+        expr: >-
+          sum by (command) (rate(codeq_task_claimed_total[10m])) == 0
+          and
+          max by (command) (codeq_queue_depth{queue="ready"}) > 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No tasks claimed despite ready queue ({{ $labels.command }})"
+          description: >-
+            Tasks are enqueued for command {{ $labels.command }} but no
+            claims have been observed in the last 10 minutes. Verify that
+            workers are running and connected.
+
+      # ---- Webhook delivery ----
+
+      - alert: CodeqWebhookFailureRate
+        expr: >-
+          (
+            sum by (command, kind) (rate(codeq_webhook_deliveries_total{outcome="failure"}[5m]))
+            /
+            sum by (command, kind) (rate(codeq_webhook_deliveries_total[5m]))
+          ) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook failure rate >20% ({{ $labels.command }}, {{ $labels.kind }})"
+          description: >-
+            More than 20% of {{ $labels.kind }} webhooks for command
+            {{ $labels.command }} are failing. Check subscriber endpoints
+            and network connectivity.
+
+      # ---- Rate limiting ----
+
+      - alert: CodeqRateLimitSustained
+        expr: sum by (scope, operation) (rate(codeq_rate_limit_hits_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained rate limiting on {{ $labels.scope }}/{{ $labels.operation }}"
+          description: >-
+            Rate limit rejections are sustained at {{ $value | humanize }}/s
+            for scope {{ $labels.scope }}, operation {{ $labels.operation }}.
+            This may indicate client misconfiguration, aggressive retries,
+            or limits set too low.
+
+      # ---- API availability ----
+
+      - alert: CodeqTargetDown
+        expr: up{job="codeq"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "codeQ instance unreachable"
+          description: >-
+            Prometheus cannot scrape the codeQ /metrics endpoint.
+            Check that the API process is running and network is healthy.
