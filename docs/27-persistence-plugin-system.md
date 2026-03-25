@@ -75,21 +75,32 @@ type PluginPersistence interface {
 ### Storage Interfaces
 
 **TaskStorage** - Task queue operations:
-- EnqueueTask: Add tasks to queues
-- ClaimTask: Atomically claim tasks for processing
-- UpdateLease: Extend task leases
-- AbandonLease: Release tasks back to queue
-- NackTask: Return failed tasks with retry delay
+- Save: Persist a task to storage
+- Get: Retrieve a task by ID
+- Delete: Remove a task from storage
+- EnqueueTask: Add tasks to queues based on command and priority
+- ClaimTask: Atomically claim the next available task for processing
+- UpdateLease: Extend or abandon a task lease
+- AbandonLease: Release a task lease, making it available for other workers
+- NackTask: Return a failed task to queue with retry delay and reason
+- MoveDueDelayed: Move delayed tasks that are now ready to pending queues
+- QueueLength: Get the count of pending tasks for a command
+- QueueStats: Retrieve detailed statistics for a queue
+- AdminQueues: Get administrative view of all queues
+- CleanupExpired: Remove expired tasks before a specified time
 
 **ResultStorage** - Task results:
-- SaveResult: Store task execution results
+- SaveResult: Store task execution results with outcome
 - GetResult: Retrieve results by task ID
-- UpdateTaskOnComplete: Update task status
+- UpdateTaskOnComplete: Update task status upon completion
+- RemoveFromInprogAndClearLease: Remove task from in-progress and clear lease
 
 **SubscriptionStorage** - Worker subscriptions:
-- Register: Register worker webhooks
-- Unregister: Remove worker subscriptions
+- Register: Register worker webhooks for commands
+- Unregister: Remove worker subscriptions for specific commands
 - GetByCommand: Find subscriptions for specific commands
+- GetByWorker: Retrieve all subscriptions for a worker
+- RemoveExpired: Remove expired subscriptions before a specified time
 
 ## Backward Compatibility
 
