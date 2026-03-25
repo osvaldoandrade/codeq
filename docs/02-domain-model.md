@@ -104,19 +104,23 @@ These metrics are returned by the queue admin API (`GET /v1/codeq/admin/queues`)
 
 `ShardSupplier` provides a mapping from commands to shard identifiers and defines the current shard used for queue operations. This mirrors Dyno Queues which exposes `getQueueShards` and `getCurrentShard`.
 
-Suggested interface (Go):
+Interface (Go, defined in `pkg/domain/shard.go`):
 
 ```go
-// ShardSupplier maps commands to shard identifiers.
+// ShardSupplier provides shard routing for queue operations.
+// Implementations must be thread-safe and deterministic.
 type ShardSupplier interface {
-    // QueueShards returns the shard list for a command.
-    QueueShards(command string) []string
-    // CurrentShard returns the shard to use for claim operations.
-    CurrentShard(command string) string
+    // QueueShards returns all shard identifiers where queues for this command may exist.
+    // Used for operations that must inspect multiple shards, such as queue stats aggregation.
+    QueueShards(ctx context.Context, command string, tenantID string) ([]string, error)
+
+    // CurrentShard returns the shard identifier to use for enqueue and claim operations.
+    // Must return a stable, deterministic value for a given command-tenant pair.
+    CurrentShard(ctx context.Context, command string, tenantID string) (string, error)
 }
 ```
 
-Sharding is a storage-level partition and does not change the API surface. It is designed but not yet implemented in the current service. For the complete sharding design, architecture diagrams, and implementation roadmap, see **[Queue Sharding HLD](24-queue-sharding-hld.md)** and **[Sharding Status](06-sharding.md)**.
+The `StaticShardSupplier` implementation (`internal/shard/static_supplier.go`) provides configuration-driven routing with three-layer precedence: tenant overrides → command mappings → default shard. For the complete sharding design, architecture diagrams, and implementation roadmap, see **[Queue Sharding HLD](24-queue-sharding-hld.md)** and **[Sharding](06-sharding.md)**.
 
 ## Worker token
 

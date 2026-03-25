@@ -191,3 +191,66 @@ func TestLoadConfigOptional_EnvOverridesEmptyFile(t *testing.T) {
 		t.Errorf("Expected ProducerAuthProvider='static' from env, got %q", cfg.ProducerAuthProvider)
 	}
 }
+
+// TestLoadConfigOptional_ShardingConfig tests that sharding configuration is loaded from YAML
+func TestLoadConfigOptional_ShardingConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "sharding.yaml")
+
+	configYAML := `
+port: 8080
+env: test
+sharding:
+  enabled: true
+  defaultShard: "primary"
+  commandMappings:
+    GENERATE_MASTER: "compute-heavy"
+    SEND_EMAIL: "notification"
+  tenantOverrides:
+    "tenant-premium": "premium-shard"
+`
+	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg, err := LoadConfigOptional(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional should not error: %v", err)
+	}
+
+	if !cfg.Sharding.Enabled {
+		t.Error("Expected Sharding.Enabled=true")
+	}
+	if cfg.Sharding.DefaultShard != "primary" {
+		t.Errorf("Expected DefaultShard='primary', got %q", cfg.Sharding.DefaultShard)
+	}
+	if len(cfg.Sharding.CommandMappings) != 2 {
+		t.Errorf("Expected 2 command mappings, got %d", len(cfg.Sharding.CommandMappings))
+	}
+	if cfg.Sharding.CommandMappings["GENERATE_MASTER"] != "compute-heavy" {
+		t.Errorf("Expected GENERATE_MASTER→compute-heavy, got %q", cfg.Sharding.CommandMappings["GENERATE_MASTER"])
+	}
+	if cfg.Sharding.CommandMappings["SEND_EMAIL"] != "notification" {
+		t.Errorf("Expected SEND_EMAIL→notification, got %q", cfg.Sharding.CommandMappings["SEND_EMAIL"])
+	}
+	if len(cfg.Sharding.TenantOverrides) != 1 {
+		t.Errorf("Expected 1 tenant override, got %d", len(cfg.Sharding.TenantOverrides))
+	}
+	if cfg.Sharding.TenantOverrides["tenant-premium"] != "premium-shard" {
+		t.Errorf("Expected tenant-premium→premium-shard, got %q", cfg.Sharding.TenantOverrides["tenant-premium"])
+	}
+}
+
+// TestLoadConfigOptional_ShardingDisabledByDefault tests that sharding is disabled when not configured
+func TestLoadConfigOptional_ShardingDisabledByDefault(t *testing.T) {
+	cfg, err := LoadConfigOptional("")
+	if err != nil {
+		t.Fatalf("LoadConfigOptional should not error: %v", err)
+	}
+	if cfg.Sharding.Enabled {
+		t.Error("Expected Sharding.Enabled=false by default")
+	}
+	if cfg.Sharding.DefaultShard != "" {
+		t.Errorf("Expected empty DefaultShard by default, got %q", cfg.Sharding.DefaultShard)
+	}
+}
