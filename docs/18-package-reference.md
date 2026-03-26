@@ -532,6 +532,31 @@ defer span.End()
 
 ---
 
+### `internal/shard`
+
+**Purpose**: Queue sharding support for horizontal scaling across multiple KVRocks instances.
+
+**Key files**:
+- `static_supplier.go`: `StaticShardSupplier` implementation with config-driven routing
+- `key.go`: Shard-aware queue key generation utilities
+
+**Types**:
+- `StaticShardSupplier`: Implements `domain.ShardSupplier` with tenant override → command mapping → default shard precedence
+- `StaticConfig`: Configuration struct for the static supplier
+
+**Functions**:
+- `NewStaticShardSupplier(cfg)`: Creates a supplier from YAML-loaded configuration
+- `NewDefaultShardSupplier()`: Returns a single-shard supplier for backward compatibility
+- `QueueKeyPending(command, tenantID, shardID, priority)`: Builds shard-aware pending key
+- `QueueKeyInProgress(command, tenantID, shardID)`: Builds shard-aware in-progress key
+- `QueueKeyDelayed(command, tenantID, shardID)`: Builds shard-aware delayed key
+- `QueueKeyDLQ(command, tenantID, shardID)`: Builds shard-aware dead-letter key
+- `ShardKeySegment(shardID)`: Returns the `:s:<shardID>` segment (empty for default)
+
+**See**: `docs/06-sharding.md` for configuration and `docs/24-queue-sharding-hld.md` for design
+
+---
+
 ### `internal/identitymw` ⚠️ DEPRECATED
 
 **Status**: This package is **deprecated and unused**. It exists for historical reference only.

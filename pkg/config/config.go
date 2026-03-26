@@ -56,6 +56,15 @@ type Config struct {
 	ResultWebhookBaseBackoffSeconds    int             `yaml:"resultWebhookBaseBackoffSeconds"`
 	ResultWebhookMaxBackoffSeconds     int             `yaml:"resultWebhookMaxBackoffSeconds"`
 	RateLimit                          RateLimitConfig `yaml:"rateLimit"`
+	Sharding                           ShardingConfig  `yaml:"sharding"`
+}
+
+// ShardingConfig holds the sharding configuration for multi-shard deployments.
+type ShardingConfig struct {
+	Enabled         bool              `yaml:"enabled"`
+	DefaultShard    string            `yaml:"defaultShard"`
+	CommandMappings map[string]string `yaml:"commandMappings"`
+	TenantOverrides map[string]string `yaml:"tenantOverrides"`
 }
 
 type RateLimitConfig struct {

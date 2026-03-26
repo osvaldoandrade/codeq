@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Queue Sharding Support**: Pluggable `ShardSupplier` interface and `StaticShardSupplier` implementation enable horizontal scaling across multiple KVRocks instances
+  - `ShardSupplier` interface defined in `pkg/domain/shard.go` with `QueueShards` and `CurrentShard` methods
+  - `StaticShardSupplier` in `internal/shard/static_supplier.go` provides config-driven shard routing with tenant override → command mapping → default shard precedence
+  - Shard-aware queue key utilities in `internal/shard/key.go` with backward-compatible key format (`:s:<shardID>` segment omitted for default shard)
+  - `ShardingConfig` added to `pkg/config/config.go` for YAML configuration
+  - Validation prevents startup with misconfigured shard mappings
+  - Documentation: `docs/06-sharding.md` and `docs/02-domain-model.md` updated
+  - Design: `docs/24-queue-sharding-hld.md`
+
 - **Persistence Plugin Architecture**: Pluggable persistence layer enables organizations to choose storage backends without core code changes
   - Plugin interface defined in `pkg/persistence/` with `PluginPersistence`, `TaskStorage`, `ResultStorage`, and `SubscriptionStorage` interfaces
   - Redis plugin wraps existing Redis/KVRocks implementation maintaining full backward compatibility

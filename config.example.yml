@@ -77,6 +77,20 @@ rateLimit:
     requestsPerMinute: 100
     burstSize: 10
 
+# === Sharding (Optional) ===
+# Enable sharding for horizontal scaling across multiple KVRocks instances.
+# When disabled or absent, codeQ operates as a single-shard deployment.
+
+# sharding:
+#   enabled: true
+#   defaultShard: "primary"
+#   commandMappings:
+#     GENERATE_MASTER: "compute-heavy"
+#     GENERATE_CREATIVE: "compute-heavy"
+#     SEND_EMAIL: "notification"
+#   tenantOverrides:
+#     "tenant-premium-abc": "premium-shard"
+
 # === Storage ===
 localArtifactsDir: /tmp/codeq-artifacts
 
