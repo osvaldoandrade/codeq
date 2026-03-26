@@ -22,6 +22,7 @@ __pycache__/
 *.egg
 .pytest_cache/
 htmlcov/
+.coverage
 
 # npm installer output (native binaries downloaded at install time)
 npm/native/
