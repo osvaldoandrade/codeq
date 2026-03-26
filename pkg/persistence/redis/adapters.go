@@ -17,8 +17,8 @@ const (
 
 // taskStorageAdapter adapts repository.TaskRepository to persistence.TaskStorage
 type taskStorageAdapter struct {
-	repo           repository.TaskRepository
-	maxAttempts    int
+	repo        repository.TaskRepository
+	maxAttempts int
 }
 
 func newTaskStorageAdapter(repo repository.TaskRepository) *taskStorageAdapter {
@@ -55,7 +55,7 @@ func (a *taskStorageAdapter) EnqueueTask(ctx context.Context, task *domain.Task)
 		task.Priority,
 		task.Webhook,
 		task.MaxAttempts,
-		"", // idempotencyKey - not stored in Task, handled separately by caller
+		"",          // idempotencyKey - not stored in Task, handled separately by caller
 		time.Time{}, // visibleAt - use zero time for immediate visibility
 		task.TenantID,
 	)

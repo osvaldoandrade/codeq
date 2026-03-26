@@ -162,25 +162,25 @@ func TestBackwardCompatibility_KeysMatchLegacyFormat(t *testing.T) {
 	// Verify that keys generated with empty/default shard match existing format exactly.
 	// This is critical for backward compatibility with existing deployments.
 	legacy := map[string]string{
-		"pending_no_tenant":  "codeq:q:generate_master:pending:5",
-		"pending_tenant":     "codeq:q:generate_master:tenant-123:pending:5",
-		"inprog_no_tenant":   "codeq:q:generate_master:inprog",
-		"inprog_tenant":      "codeq:q:generate_master:tenant-123:inprog",
-		"delayed_no_tenant":  "codeq:q:generate_master:delayed",
-		"delayed_tenant":     "codeq:q:generate_master:tenant-123:delayed",
-		"dlq_no_tenant":      "codeq:q:generate_master:dlq",
-		"dlq_tenant":         "codeq:q:generate_master:tenant-123:dlq",
+		"pending_no_tenant": "codeq:q:generate_master:pending:5",
+		"pending_tenant":    "codeq:q:generate_master:tenant-123:pending:5",
+		"inprog_no_tenant":  "codeq:q:generate_master:inprog",
+		"inprog_tenant":     "codeq:q:generate_master:tenant-123:inprog",
+		"delayed_no_tenant": "codeq:q:generate_master:delayed",
+		"delayed_tenant":    "codeq:q:generate_master:tenant-123:delayed",
+		"dlq_no_tenant":     "codeq:q:generate_master:dlq",
+		"dlq_tenant":        "codeq:q:generate_master:tenant-123:dlq",
 	}
 
 	actual := map[string]string{
-		"pending_no_tenant":  QueueKeyPending("GENERATE_MASTER", "", "", 5),
-		"pending_tenant":     QueueKeyPending("GENERATE_MASTER", "tenant-123", "", 5),
-		"inprog_no_tenant":   QueueKeyInProgress("GENERATE_MASTER", "", ""),
-		"inprog_tenant":      QueueKeyInProgress("GENERATE_MASTER", "tenant-123", ""),
-		"delayed_no_tenant":  QueueKeyDelayed("GENERATE_MASTER", "", ""),
-		"delayed_tenant":     QueueKeyDelayed("GENERATE_MASTER", "tenant-123", ""),
-		"dlq_no_tenant":      QueueKeyDLQ("GENERATE_MASTER", "", ""),
-		"dlq_tenant":         QueueKeyDLQ("GENERATE_MASTER", "tenant-123", ""),
+		"pending_no_tenant": QueueKeyPending("GENERATE_MASTER", "", "", 5),
+		"pending_tenant":    QueueKeyPending("GENERATE_MASTER", "tenant-123", "", 5),
+		"inprog_no_tenant":  QueueKeyInProgress("GENERATE_MASTER", "", ""),
+		"inprog_tenant":     QueueKeyInProgress("GENERATE_MASTER", "tenant-123", ""),
+		"delayed_no_tenant": QueueKeyDelayed("GENERATE_MASTER", "", ""),
+		"delayed_tenant":    QueueKeyDelayed("GENERATE_MASTER", "tenant-123", ""),
+		"dlq_no_tenant":     QueueKeyDLQ("GENERATE_MASTER", "", ""),
+		"dlq_tenant":        QueueKeyDLQ("GENERATE_MASTER", "tenant-123", ""),
 	}
 
 	for key, want := range legacy {
@@ -192,10 +192,10 @@ func TestBackwardCompatibility_KeysMatchLegacyFormat(t *testing.T) {
 
 	// Also verify default shard produces same keys as empty shard
 	defaultShardKeys := map[string]string{
-		"pending_no_tenant":  QueueKeyPending("GENERATE_MASTER", "", DefaultShardID, 5),
-		"pending_tenant":     QueueKeyPending("GENERATE_MASTER", "tenant-123", DefaultShardID, 5),
-		"inprog_no_tenant":   QueueKeyInProgress("GENERATE_MASTER", "", DefaultShardID),
-		"inprog_tenant":      QueueKeyInProgress("GENERATE_MASTER", "tenant-123", DefaultShardID),
+		"pending_no_tenant": QueueKeyPending("GENERATE_MASTER", "", DefaultShardID, 5),
+		"pending_tenant":    QueueKeyPending("GENERATE_MASTER", "tenant-123", DefaultShardID, 5),
+		"inprog_no_tenant":  QueueKeyInProgress("GENERATE_MASTER", "", DefaultShardID),
+		"inprog_tenant":     QueueKeyInProgress("GENERATE_MASTER", "tenant-123", DefaultShardID),
 	}
 
 	for key, want := range legacy {
