@@ -1,6 +1,6 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { CodeQClient, Task } from '@codeq/sdk';
+import { CodeQClient, Task } from '@osvaldoandrade/codeq-client';
 
 /**
  * Worker service that polls and processes tasks from CodeQ.

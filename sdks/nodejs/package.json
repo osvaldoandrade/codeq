@@ -1,12 +1,27 @@
 {
-  "name": "@codeq/sdk",
+  "name": "@osvaldoandrade/codeq-client",
   "version": "1.0.0",
-  "description": "TypeScript/JavaScript SDK for CodeQ reactive task scheduling system",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Official TypeScript/JavaScript SDK client for CodeQ reactive task scheduling system",
+  "main": "dist/cjs/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/cjs/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc",
-    "test": "jest",
+    "build": "npm run build:cjs && npm run build:esm",
+    "build:cjs": "tsc -p tsconfig.json",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "test": "jest --coverage",
     "lint": "eslint src --ext .ts",
     "prepublishOnly": "npm run build"
   },
@@ -15,19 +30,27 @@
     "task-queue",
     "scheduling",
     "worker",
-    "producer"
+    "producer",
+    "typescript",
+    "sdk"
   ],
-  "author": "CodeQ Team",
+  "author": "Osvaldo Andrade",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/osvaldoandrade/codeq.git"
+    "url": "https://github.com/osvaldoandrade/codeq.git",
+    "directory": "sdks/nodejs"
+  },
+  "homepage": "https://github.com/osvaldoandrade/codeq/tree/main/sdks/nodejs#readme",
+  "bugs": {
+    "url": "https://github.com/osvaldoandrade/codeq/issues"
   },
   "dependencies": {
     "axios": "^1.6.5",
     "axios-retry": "^4.0.0"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.11",
     "@types/node": "^20.11.5",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
     "@typescript-eslint/parser": "^6.19.0",

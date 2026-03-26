@@ -80,7 +80,7 @@ Integrate codeQ into your microservices with official SDKs:
 
 **Node.js/TypeScript** (Express, NestJS):
 ```bash
-npm install @codeq/sdk
+npm install @osvaldoandrade/codeq-client
 ```
 
 📚 **SDK Documentation**:

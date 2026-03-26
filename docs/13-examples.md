@@ -171,7 +171,7 @@ if (task != null) {
 **Create a task**:
 
 ```typescript
-import { CodeQClient } from '@codeq/sdk';
+import { CodeQClient } from '@osvaldoandrade/codeq-client';
 
 const client = new CodeQClient({
   baseUrl: 'https://codeq.example.com',

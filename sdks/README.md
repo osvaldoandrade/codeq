@@ -49,16 +49,17 @@ client.submitResult(claimed.getId(), Map.of("status", "success"));
   - Promise-based async API
   - Axios with automatic retry logic
   - Modern ES2020+ syntax
-  - Zero dependencies (except axios)
+  - ESM and CJS builds
+  - Full API coverage (tasks, subscriptions, admin)
 
 **Installation**:
 ```bash
-npm install @codeq/sdk
+npm install @osvaldoandrade/codeq-client
 ```
 
 **Quick Start**:
 ```typescript
-import { CodeQClient } from '@codeq/sdk';
+import { CodeQClient } from '@osvaldoandrade/codeq-client';
 
 const client = new CodeQClient({
   baseUrl: 'https://codeq.example.com',

@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { CodeQClient, Task, CreateTaskOptions } from '@codeq/sdk';
+import { CodeQClient, Task, CreateTaskOptions } from '@osvaldoandrade/codeq-client';
 
 /**
  * Service for producing tasks to CodeQ.

@@ -18,3 +18,8 @@ tmp/
 
 # npm installer output (native binaries downloaded at install time)
 npm/native/
+
+# Node.js dependencies and build output
+node_modules/
+dist/
+coverage/

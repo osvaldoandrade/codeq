@@ -1,6 +1,6 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { CodeQClient } from '@codeq/sdk';
+import { CodeQClient } from '@osvaldoandrade/codeq-client';
 
 /**
  * Global module providing CodeQ client.
