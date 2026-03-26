@@ -16,6 +16,13 @@ go.work.sum
 tmp/
 .artifacts/
 
+# Python build artifacts
+__pycache__/
+*.egg-info/
+*.egg
+.pytest_cache/
+htmlcov/
+
 # npm installer output (native binaries downloaded at install time)
 npm/native/
 

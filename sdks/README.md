@@ -41,6 +41,59 @@ Task claimed = client.claimTask(List.of("GENERATE_MASTER"), 120, 10);
 client.submitResult(claimed.getId(), Map.of("status", "success"));
 ```
 
+### Python SDK
+- **Location**: `sdks/python/`
+- **Frameworks**: FastAPI, Django, Flask, asyncio
+- **Features**:
+  - Full type hints with PEP 561 marker
+  - Async (`CodeQClient`) and sync (`SyncCodeQClient`) variants
+  - httpx-based HTTP client with connection pooling
+  - Automatic retry with exponential backoff (tenacity)
+  - Comprehensive docstrings
+  - Full API coverage (tasks, subscriptions, admin)
+
+**Installation**:
+```bash
+pip install codeq-client
+```
+
+**Quick Start**:
+```python
+from codeq import CodeQClient, CreateTaskOptions
+
+async with CodeQClient(
+    base_url="https://codeq.example.com",
+    producer_token="your-producer-token",
+    worker_token="your-worker-token",
+) as client:
+    # Create a task
+    task = await client.create_task(
+        CreateTaskOptions(
+            command="GENERATE_MASTER",
+            payload={"jobId": "123"},
+            priority=5,
+        )
+    )
+
+    # Claim a task
+    from codeq import ClaimTaskOptions
+    claimed = await client.claim_task(
+        ClaimTaskOptions(
+            commands=["GENERATE_MASTER"],
+            lease_seconds=120,
+            wait_seconds=10,
+        )
+    )
+
+    # Submit result
+    if claimed:
+        from codeq import SubmitResultOptions
+        await client.submit_result(
+            claimed.id,
+            SubmitResultOptions(status="COMPLETED", result={"success": True}),
+        )
+```
+
 ### Node.js/TypeScript SDK
 - **Location**: `sdks/nodejs/`
 - **Frameworks**: Express, NestJS, React
@@ -327,6 +380,13 @@ CODEQ_WORKER_TOKEN=your-worker-token
 ## 🧪 Testing
 
 ### Unit Tests
+
+**Python**:
+```bash
+cd sdks/python
+pip install -e ".[dev]"
+pytest --cov
+```
 
 **Java**:
 ```bash
