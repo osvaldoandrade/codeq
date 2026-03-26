@@ -1,6 +1,6 @@
 import { Controller, Post, Body, HttpCode, HttpStatus } from '@nestjs/common';
 import { TasksService } from './tasks.service';
-import { Task } from '@codeq/sdk';
+import { Task } from '@osvaldoandrade/codeq-client';
 
 /**
  * Controller for task creation endpoints.

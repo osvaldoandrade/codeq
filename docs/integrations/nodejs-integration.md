@@ -39,19 +39,19 @@ The CodeQ Node.js SDK provides a modern, Promise-based API with full TypeScript 
 ### npm
 
 ```bash
-npm install @codeq/sdk
+npm install @osvaldoandrade/codeq-client
 ```
 
 ### yarn
 
 ```bash
-yarn add @codeq/sdk
+yarn add @osvaldoandrade/codeq-client
 ```
 
 ### pnpm
 
 ```bash
-pnpm add @codeq/sdk
+pnpm add @osvaldoandrade/codeq-client
 ```
 
 ## Express Integration
@@ -61,7 +61,7 @@ pnpm add @codeq/sdk
 Create `src/config/codeq.ts`:
 
 ```typescript
-import { CodeQClient } from '@codeq/sdk';
+import { CodeQClient } from '@osvaldoandrade/codeq-client';
 
 export const codeQClient = new CodeQClient({
   baseUrl: process.env.CODEQ_BASE_URL || 'http://localhost:8080',
@@ -129,7 +129,7 @@ Create `src/workers/task-worker.ts`:
 
 ```typescript
 import { codeQClient } from '../config/codeq';
-import { Task } from '@codeq/sdk';
+import { Task } from '@osvaldoandrade/codeq-client';
 
 class TaskWorker {
   private currentTask: Task | null = null;
@@ -397,7 +397,7 @@ Create `src/hooks/useCodeQ.ts`:
 
 ```typescript
 import { useState, useCallback } from 'react';
-import { CodeQClient, Task, CreateTaskOptions } from '@codeq/sdk';
+import { CodeQClient, Task, CreateTaskOptions } from '@osvaldoandrade/codeq-client';
 
 const codeQClient = new CodeQClient({
   baseUrl: process.env.REACT_APP_CODEQ_BASE_URL || 'http://localhost:8080',
