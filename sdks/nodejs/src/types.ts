@@ -108,7 +108,7 @@ export interface ArtifactOut {
 export interface SubmitResultOptions {
   /** Result status */
   status: 'COMPLETED' | 'FAILED';
-  /** Result data (required if status is COMPLETED) */
+  /** Result data (should be provided when status is COMPLETED) */
   result?: Record<string, any>;
   /** Error message (required if status is FAILED) */
   error?: string;
