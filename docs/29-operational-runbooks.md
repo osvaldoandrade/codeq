@@ -523,8 +523,8 @@ concurrent requests.
 1. **Deploy** a new codeQ instance with the same configuration:
 
    ```bash
-   # On the new host
-   cp /etc/codeq/config.yml /etc/codeq/config.yml
+   # On the new host — copy config from an existing instance
+   scp <existing-host>:/etc/codeq/config.yml /etc/codeq/config.yml
    systemctl start codeq-api
    ```
 
