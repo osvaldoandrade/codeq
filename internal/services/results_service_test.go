@@ -36,15 +36,15 @@ func (e *mockResultsError) Error() string {
 func TestNewResultsService(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	repo := repository.NewResultRepository(rdb, time.UTC)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
-	
+
 	svc := NewResultsService(repo, uploader, nil, logger, now, time.UTC)
 	if svc == nil {
 		t.Fatal("Expected service to be non-nil")
@@ -54,17 +54,17 @@ func TestNewResultsService(t *testing.T) {
 func TestResultsServiceGetTaskNotFound(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	repo := repository.NewResultRepository(rdb, time.UTC)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
-	
+
 	svc := NewResultsService(repo, uploader, nil, logger, now, time.UTC)
-	
+
 	_, _, err := svc.Get(context.Background(), "nonexistent-task")
 	if err == nil {
 		t.Fatal("Expected error for nonexistent task")
@@ -77,21 +77,21 @@ func TestResultsServiceGetTaskNotFound(t *testing.T) {
 func TestResultsServiceGetResultNotFound(t *testing.T) {
 	mr, _ := miniredis.Run()
 	defer mr.Close()
-	
+
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
-	
+
 	// Create a task but no result
 	taskRepo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
 	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
-	
+
 	repo := repository.NewResultRepository(rdb, time.UTC)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
-	
+
 	svc := NewResultsService(repo, uploader, nil, logger, now, time.UTC)
-	
+
 	_, _, err := svc.Get(context.Background(), task.ID)
 	if err == nil {
 		t.Fatal("Expected error for nonexistent result")

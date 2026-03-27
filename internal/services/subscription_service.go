@@ -5,8 +5,8 @@ import (
 	"errors"
 	"net/url"
 
-	"github.com/osvaldoandrade/codeq/pkg/domain"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
 type SubscriptionService interface {

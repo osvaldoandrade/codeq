@@ -21,10 +21,10 @@ func setupResultRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redi
 	t.Cleanup(mr.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	
+
 	repo := NewResultRepository(rdb, time.UTC)
 	taskRepo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
-	
+
 	return context.Background(), mr, rdb, repo, taskRepo
 }
 
