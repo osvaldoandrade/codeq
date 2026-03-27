@@ -176,36 +176,7 @@ cd examples/java/quarkus
 ./mvnw quarkus:dev
 ```
 
-#### Micronaut
-- **Location**: `examples/java/micronaut/`
-- **Features**:
-  - Compile-time dependency injection
-  - Reactive HTTP client
-  - GraalVM native image support
-  - Minimal reflection
-
-**Run**:
-```bash
-cd examples/java/micronaut
-./gradlew run
-```
-
 ### Node.js/TypeScript Examples
-
-#### Express
-- **Location**: `examples/nodejs/express/`
-- **Features**:
-  - Simple REST API
-  - Background worker service
-  - TypeScript support
-  - Graceful shutdown
-
-**Run**:
-```bash
-cd examples/nodejs/express
-npm install
-npm run dev
-```
 
 #### NestJS
 - **Location**: `examples/nodejs/nestjs/`
@@ -222,26 +193,12 @@ npm install
 npm run start:dev
 ```
 
-#### React
-- **Location**: `examples/nodejs/react/`
-- **Features**:
-  - Custom hooks for CodeQ
-  - Task creation UI
-  - Real-time task status
-  - Error handling
-
-**Run**:
-```bash
-cd examples/nodejs/react
-npm install
-npm start
-```
-
 ## 📚 Documentation
 
 ### Integration Guides
-- [Java Integration Guide](docs/integrations/java-integration.md)
-- [Node.js/TypeScript Integration Guide](docs/integrations/nodejs-integration.md)
+- [Java Integration Guide](../docs/integrations/java-integration.md)
+- [Node.js/TypeScript Integration Guide](../docs/integrations/nodejs-integration.md)
+- [Python Integration Guide](../docs/integrations/python-integration.md)
 
 ### Deployment Recipes
 - [Kubernetes Deployment](deploy/kubernetes/)
