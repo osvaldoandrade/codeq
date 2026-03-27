@@ -17,6 +17,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 15. `docs/15-cli-reference.md` - Complete CLI command reference
 26. `docs/26-load-testing.md` - Load testing framework and benchmarks
 28. `docs/28-troubleshooting.md` - Troubleshooting guide for common issues
+29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
 
 ### Technical Reference (Information-Oriented)
 
