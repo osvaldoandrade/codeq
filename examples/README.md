@@ -9,8 +9,10 @@ examples/
 ├── java/          # Java framework examples
 │   ├── springboot/    # Spring Boot integration
 │   └── quarkus/       # Quarkus integration
-└── nodejs/        # Node.js/TypeScript framework examples
-    └── nestjs/        # NestJS integration
+├── nodejs/        # Node.js/TypeScript framework examples
+│   └── nestjs/        # NestJS integration
+└── python/        # Python framework examples (planned)
+    └── fastapi/       # FastAPI integration (coming soon)
 ````
 
 ## 🚀 Java Examples
@@ -77,7 +79,23 @@ npm run start:dev
 
 ---
 
-## 🔧 Prerequisites
+## 🐍 Python Examples
+
+### FastAPI (Coming Soon)
+**Location**: `python/fastapi/`
+
+A modern FastAPI application showcasing:
+- Async task creation via REST API
+- Background worker with async polling
+- Type hints and validation with Pydantic
+- Dependency injection for CodeQ client
+- Health checks and structured logging
+
+When available, use it as a reference for integrating CodeQ with Python web frameworks.
+
+For now, see the [Python Integration Guide](../docs/integrations/python-integration.md) for comprehensive FastAPI, Django, and Flask integration examples.
+
+---
 
 ### All Examples
 - Docker and Docker Compose (for running CodeQ server)
@@ -90,6 +108,10 @@ npm run start:dev
 ### Node.js Examples
 - Node.js 18 or higher
 - npm, yarn, or pnpm
+
+### Python Examples
+- Python 3.10 or higher
+- pip or poetry
 
 ## 🏃 Running Examples
 
@@ -130,9 +152,11 @@ Choose an example and follow its Quick Start instructions above.
 2. **Choose your stack**:
    - Java → Start with [Spring Boot example](java/springboot/)
    - Node.js → Start with [NestJS example](nodejs/nestjs/)
+   - Python → Start with [Python Integration Guide](../docs/integrations/python-integration.md)
 3. **Explore**: [Integration Guides](../docs/integrations/)
    - [Java Integration Guide](../docs/integrations/java-integration.md)
    - [Node.js Integration Guide](../docs/integrations/nodejs-integration.md)
+   - [Python Integration Guide](../docs/integrations/python-integration.md)
 
 ## 🏗️ Architecture Patterns
 
@@ -151,6 +175,17 @@ const task = await codeQClient.createTask({
   payload,
   priority: 5
 });
+````
+
+````python
+# Python
+task = await client.create_task(
+    CreateTaskOptions(
+        command="PROCESS_ORDER",
+        payload=payload,
+        priority=5,
+    )
+)
 ````
 
 ### Worker Pattern
@@ -178,6 +213,21 @@ async pollTasks() {
 }
 ````
 
+````python
+# Python - Async polling loop
+async def worker_loop(client):
+    while True:
+        task = await client.claim_task(
+            ClaimTaskOptions(
+                commands=["PROCESS_ORDER"],
+                lease_seconds=120,
+                wait_seconds=10,
+            )
+        )
+        if task:
+            await process_task(task)
+````
+
 ### Hybrid Pattern
 Both produce and consume tasks in a single service. See examples for complete implementations.
 
@@ -197,6 +247,10 @@ cd java/quarkus
 # Node.js (NestJS)
 cd nodejs/nestjs
 npm test
+
+# Python (when example is available)
+# cd python/fastapi
+# pytest
 ````
 
 ## 📖 Additional Resources
