@@ -18,7 +18,7 @@ The repository uses GitHub Actions for CI/CD, documentation, code quality, and r
 
 1. **Test**: Runs `go test ./cmd/codeq/...` to test CLI code
    - Only tests CLI to avoid private server-side dependencies
-   - See [WORKFLOW_FAILURE_ANALYSIS.md](../WORKFLOW_FAILURE_ANALYSIS.md) for background
+   - Tests are isolated to avoid private server-side dependencies
 
 2. **Build binaries**: Compiles cross-platform binaries
    - Platforms: `linux`, `darwin`, `windows`
@@ -358,7 +358,7 @@ No-op (no operation) runs occur when a workflow executes but determines no actio
    - Check: GitHub releases and tags
    - Fix: Use a new version number
 
-**Solution**: See [WORKFLOW_FAILURE_ANALYSIS.md](../WORKFLOW_FAILURE_ANALYSIS.md)
+**Solution**: Ensure the version number is incremented and hasn't been used before
 
 ### Pages Deployment Fails
 
@@ -391,5 +391,4 @@ No-op (no operation) runs occur when a workflow executes but determines no actio
 
 - [Agentic Workflows Guide](../.github/AGENTIC_WORKFLOWS.md) - Detailed explanation of AI-powered workflows, no-op tracking, and optimization strategies
 - [Contributing Guide](../CONTRIBUTING.md)
-- [Workflow Failure Analysis](../WORKFLOW_FAILURE_ANALYSIS.md)
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
