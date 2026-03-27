@@ -68,6 +68,15 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
   - New metric: `codeq_rate_limit_hits_total` counter for monitoring rejections
   - Disabled by default; see [Configuration](docs/14-configuration.md) and [Operations](docs/10-operations.md#rate-limiting) for setup
 
+- **Python SDK**: Official Python client for CodeQ with async and sync variants ([#338](https://github.com/osvaldoandrade/codeq/pull/338))
+  - `CodeQClient` (async) and `SyncCodeQClient` (sync) for producer and worker operations
+  - Full type hints with PEP 561 marker for IDE support and static type checking
+  - httpx-based HTTP client with connection pooling and automatic retries (exponential backoff via tenacity)
+  - Support for all API operations: task creation, claiming, result submission, webhooks, admin operations
+  - Published as `codeq-client` package on PyPI
+  - Comprehensive integration guide at `docs/integrations/python-integration.md` with FastAPI, Django, and Flask examples
+  - 65 unit tests with >95% coverage
+
 ### Documentation
 
 - **Framework example READMEs** ([#135](https://github.com/osvaldoandrade/codeq/pull/135))

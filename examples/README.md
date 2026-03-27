@@ -11,8 +11,9 @@ examples/
 │   └── quarkus/       # Quarkus integration
 ├── nodejs/        # Node.js/TypeScript framework examples
 │   └── nestjs/        # NestJS integration
-└── python/        # Python framework examples (planned)
-    └── fastapi/       # FastAPI integration (coming soon)
+├── python/        # Python framework examples (planned)
+│   └── fastapi/       # FastAPI integration (planned)
+└── custom-auth-plugin.md  # Custom authentication plugin guide
 ````
 
 ## 🚀 Java Examples
@@ -79,21 +80,43 @@ npm run start:dev
 
 ---
 
-## 🐍 Python Examples
+## 🐍 Python SDK & Integration
 
-### FastAPI (Coming Soon)
-**Location**: `python/fastapi/`
+### Integration Guide
+**Location**: `docs/integrations/python-integration.md`
 
-A modern FastAPI application showcasing:
+The [Python Integration Guide](../docs/integrations/python-integration.md) provides comprehensive examples for:
+- **FastAPI** integration with async task production and worker polling
+- **Django** integration with managed tasks and background workers  
+- **Flask** integration with lightweight task management
+
+Each framework section includes:
+- Complete code examples (producer and worker patterns)
+- Installation and configuration instructions
+- Best practices for error handling and monitoring
+- Production deployment considerations
+
+### Python SDK
+**Package**: `codeq-client` on [PyPI](https://pypi.org/project/codeq-client/)
+
+Provides both async and sync clients:
+- `CodeQClient` for async/await applications
+- `SyncCodeQClient` for blocking applications
+- Full type hints for IDE support
+- Automatic retries with exponential backoff
+- See [sdks/python/README.md](../sdks/python/README.md) for quick start
+
+### FastAPI Example (Planned)
+**Location**: `python/fastapi/` (upcoming)
+
+A full example FastAPI application is planned to showcase:
 - Async task creation via REST API
 - Background worker with async polling
 - Type hints and validation with Pydantic
 - Dependency injection for CodeQ client
 - Health checks and structured logging
 
-When available, use it as a reference for integrating CodeQ with Python web frameworks.
-
-For now, see the [Python Integration Guide](../docs/integrations/python-integration.md) for comprehensive FastAPI, Django, and Flask integration examples.
+For now, the [Python Integration Guide](../docs/integrations/python-integration.md) contains complete FastAPI integration examples.
 
 ---
 
