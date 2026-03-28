@@ -44,6 +44,7 @@ func NewPlugin(config persistence.PluginConfig) (persistence.PluginPersistence, 
 		config.BackoffPolicy,
 		config.BackoffBaseSeconds,
 		config.BackoffMaxSeconds,
+		nil, // uses default shard supplier
 	)
 
 	resultRepo := repository.NewResultRepository(client, config.Timezone)

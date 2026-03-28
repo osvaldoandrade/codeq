@@ -69,7 +69,7 @@ func setupRepoWithBackoff(t *testing.T, policy string, baseSeconds int, maxSecon
 	t.Cleanup(mr.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	repo := NewTaskRepository(rdb, time.UTC, policy, baseSeconds, maxSeconds)
+	repo := NewTaskRepository(rdb, time.UTC, policy, baseSeconds, maxSeconds, nil)
 	return context.Background(), mr, rdb, repo
 }
 
@@ -106,7 +106,7 @@ func TestEnqueueIdempotentBloomSkipsNegativeGet(t *testing.T) {
 	hook := &redisCmdCountHook{}
 	rdb.AddHook(hook)
 
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
 
@@ -166,7 +166,7 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 	hook := &redisCmdCountHook{}
 	rdb.AddHook(hook)
 
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
 
@@ -194,7 +194,7 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 		t.Fatalf("removeTaskFully: %v", err)
 	}
 
-	pendingKey := r.keyQueuePending(cmd, 0, "")
+	pendingKey := r.keyQueuePending(cmd, 0, "", r.currentShard(ctx, cmd, ""))
 	if n, _ := rdb.LLen(ctx, pendingKey).Result(); n != 1 {
 		t.Fatalf("expected ghost ID to remain in pending, got len=%d", n)
 	}
@@ -211,7 +211,7 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 		t.Fatalf("expected 0 Redis HGETs when skipping ghost ID, got %d", got)
 	}
 
-	inprogKey := r.keyQueueInprog(cmd, "")
+	inprogKey := r.keyQueueInprog(cmd, "", r.currentShard(ctx, cmd, ""))
 	if isMember, _ := rdb.SIsMember(ctx, inprogKey, task.ID).Result(); isMember {
 		t.Fatalf("expected ghost ID to be removed from in-progress set")
 	}
@@ -366,7 +366,7 @@ func TestCleanupExpiredBloomSkipsAlreadyRemovedIDs(t *testing.T) {
 	hook := &redisCmdCountHook{}
 	rdb.AddHook(hook)
 
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	r := repo.(*taskRedisRepo)
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
