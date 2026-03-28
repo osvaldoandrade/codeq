@@ -69,7 +69,7 @@ func setupRepoWithBackoff(t *testing.T, policy string, baseSeconds int, maxSecon
 	t.Cleanup(mr.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	repo := NewTaskRepository(rdb, time.UTC, policy, baseSeconds, maxSeconds)
+	repo := NewTaskRepository(rdb, time.UTC, policy, baseSeconds, maxSeconds, nil)
 	return context.Background(), mr, rdb, repo
 }
 
@@ -106,7 +106,7 @@ func TestEnqueueIdempotentBloomSkipsNegativeGet(t *testing.T) {
 	hook := &redisCmdCountHook{}
 	rdb.AddHook(hook)
 
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
 
@@ -166,7 +166,7 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 	hook := &redisCmdCountHook{}
 	rdb.AddHook(hook)
 
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
 
@@ -194,7 +194,7 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 		t.Fatalf("removeTaskFully: %v", err)
 	}
 
-	pendingKey := r.keyQueuePending(cmd, 0, "")
+	pendingKey := r.keyQueuePending(cmd, 0, "", r.currentShard(ctx, cmd, ""))
 	if n, _ := rdb.LLen(ctx, pendingKey).Result(); n != 1 {
 		t.Fatalf("expected ghost ID to remain in pending, got len=%d", n)
 	}
@@ -211,7 +211,7 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 		t.Fatalf("expected 0 Redis HGETs when skipping ghost ID, got %d", got)
 	}
 
-	inprogKey := r.keyQueueInprog(cmd, "")
+	inprogKey := r.keyQueueInprog(cmd, "", r.currentShard(ctx, cmd, ""))
 	if isMember, _ := rdb.SIsMember(ctx, inprogKey, task.ID).Result(); isMember {
 		t.Fatalf("expected ghost ID to be removed from in-progress set")
 	}
@@ -366,7 +366,7 @@ func TestCleanupExpiredBloomSkipsAlreadyRemovedIDs(t *testing.T) {
 	hook := &redisCmdCountHook{}
 	rdb.AddHook(hook)
 
-	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	r := repo.(*taskRedisRepo)
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
@@ -531,4 +531,146 @@ func TestPendingLength(t *testing.T) {
 	if length < 1 {
 		t.Fatalf("expected at least 1 pending task, got %d", length)
 	}
+}
+
+func TestShardSupplierRoutesQueueKeys(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis start: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	// Create a custom shard supplier that routes GENERATE_MASTER to "compute-heavy" shard
+	supplier := &testShardSupplier{
+		shardMap: map[string]string{
+			"GENERATE_MASTER": "compute-heavy",
+		},
+		defaultShard: "default",
+	}
+
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, supplier)
+	ctx := context.Background()
+	cmd := domain.CmdGenerateMaster
+
+	// Enqueue a task (should use "compute-heavy" shard key segment)
+	task, err := repo.Enqueue(ctx, cmd, `{"shard":"test"}`, 5, "", 3, "", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Verify the task is stored in the shard-routed pending key
+	shardedKey := "codeq:q:generate_master:s:compute-heavy:pending:5"
+	n, _ := rdb.LLen(ctx, shardedKey).Result()
+	if n != 1 {
+		t.Fatalf("expected 1 item in sharded pending key %s, got %d", shardedKey, n)
+	}
+
+	// Verify the legacy (default shard) key is empty
+	legacyKey := "codeq:q:generate_master:pending:5"
+	nLegacy, _ := rdb.LLen(ctx, legacyKey).Result()
+	if nLegacy != 0 {
+		t.Fatalf("expected 0 items in legacy pending key %s, got %d", legacyKey, nLegacy)
+	}
+
+	// Claim should also route to the correct shard
+	claimed, ok, err := repo.Claim(ctx, "worker-1", []domain.Command{cmd}, 60, 10, 5, "")
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if !ok || claimed == nil {
+		t.Fatalf("expected to claim task from sharded queue")
+	}
+	if claimed.ID != task.ID {
+		t.Fatalf("claimed wrong task: got %s, want %s", claimed.ID, task.ID)
+	}
+
+	// Verify the task moved to the sharded in-progress key
+	shardedInprog := "codeq:q:generate_master:s:compute-heavy:inprog"
+	isMember, _ := rdb.SIsMember(ctx, shardedInprog, task.ID).Result()
+	if !isMember {
+		t.Fatalf("expected task to be in sharded in-progress set %s", shardedInprog)
+	}
+}
+
+func TestDefaultShardSupplierPreservesLegacyKeys(t *testing.T) {
+	ctx, _, rdb, repo := setupRepo(t)
+	cmd := domain.CmdGenerateMaster
+
+	// Enqueue with default shard supplier (nil → NewDefaultShardSupplier)
+	_, err := repo.Enqueue(ctx, cmd, `{"legacy":"test"}`, 0, "", 3, "", time.Time{}, "")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Verify the legacy key format is used (no shard segment)
+	legacyKey := "codeq:q:generate_master:pending:0"
+	n, _ := rdb.LLen(ctx, legacyKey).Result()
+	if n != 1 {
+		t.Fatalf("expected 1 item in legacy pending key %s, got %d", legacyKey, n)
+	}
+}
+
+func TestShardSupplierWithTenantRouting(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis start: %v", err)
+	}
+	t.Cleanup(mr.Close)
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	supplier := &testShardSupplier{
+		tenantMap:    map[string]string{"premium-tenant": "premium-shard"},
+		shardMap:     map[string]string{},
+		defaultShard: "default",
+	}
+
+	repo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, supplier)
+	ctx := context.Background()
+	cmd := domain.CmdGenerateMaster
+
+	// Enqueue with premium tenant (should route to premium-shard)
+	_, err = repo.Enqueue(ctx, cmd, `{"tenant":"premium"}`, 0, "", 3, "", time.Time{}, "premium-tenant")
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	// Verify the tenant+shard key format
+	shardedKey := "codeq:q:generate_master:premium-tenant:s:premium-shard:pending:0"
+	n, _ := rdb.LLen(ctx, shardedKey).Result()
+	if n != 1 {
+		t.Fatalf("expected 1 item in tenant+shard pending key %s, got %d", shardedKey, n)
+	}
+}
+
+// testShardSupplier is a test implementation of domain.ShardSupplier for validating shard routing.
+type testShardSupplier struct {
+	shardMap     map[string]string
+	tenantMap    map[string]string
+	defaultShard string
+}
+
+func (s *testShardSupplier) CurrentShard(_ context.Context, command string, tenantID string) (string, error) {
+	if tenantID != "" && s.tenantMap != nil {
+		if sid, ok := s.tenantMap[tenantID]; ok {
+			return sid, nil
+		}
+	}
+	upper := strings.ToUpper(command)
+	if sid, ok := s.shardMap[upper]; ok {
+		return sid, nil
+	}
+	return s.defaultShard, nil
+}
+
+func (s *testShardSupplier) QueueShards(ctx context.Context, command string, tenantID string) ([]string, error) {
+	current, _ := s.CurrentShard(ctx, command, tenantID)
+	if current == s.defaultShard {
+		return []string{current}, nil
+	}
+	return []string{current, s.defaultShard}, nil
 }

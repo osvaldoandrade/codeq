@@ -24,7 +24,7 @@ func setupSchedulerTest(t *testing.T) (context.Context, *miniredis.Miniredis, *r
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 
 	// Create a mock subscription repository for the notifier
 	mockSubRepo := &mockSubscriptionRepo{}
@@ -499,7 +499,7 @@ func TestNewSchedulerServiceDefaults(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
 
-	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	repo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	mockSubRepo := &mockSubscriptionRepo{}
 	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{}, nil)
 

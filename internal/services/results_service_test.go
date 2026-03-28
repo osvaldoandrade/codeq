@@ -82,7 +82,7 @@ func TestResultsServiceGetResultNotFound(t *testing.T) {
 	defer rdb.Close()
 
 	// Create a task but no result
-	taskRepo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	taskRepo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
 
 	repo := repository.NewResultRepository(rdb, time.UTC)

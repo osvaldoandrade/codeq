@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,9 +14,11 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	"github.com/osvaldoandrade/codeq/internal/shard"
 	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
+	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/gin-gonic/gin"
 )
@@ -95,7 +98,23 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		Timeout:   15 * time.Second,
 	}
 
-	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
+	// Create ShardSupplier from sharding configuration
+	var shardSupplier domain.ShardSupplier
+	if cfg.Sharding.Enabled {
+		supplier, err := shard.NewStaticShardSupplier(shard.StaticConfig{
+			DefaultShard:    cfg.Sharding.DefaultShard,
+			CommandMappings: cfg.Sharding.CommandMappings,
+			TenantOverrides: cfg.Sharding.TenantOverrides,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create shard supplier: %w", err)
+		}
+		shardSupplier = supplier
+	} else {
+		shardSupplier = shard.NewDefaultShardSupplier()
+	}
+
+	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds, shardSupplier)
 	subRepo := repository.NewSubscriptionRepository(redisClient, loc)
 	subs := services.NewSubscriptionService(subRepo)
 	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)

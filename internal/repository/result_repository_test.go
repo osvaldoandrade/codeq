@@ -23,7 +23,7 @@ func setupResultRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redi
 	t.Cleanup(func() { _ = rdb.Close() })
 
 	repo := NewResultRepository(rdb, time.UTC)
-	taskRepo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10)
+	taskRepo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 
 	return context.Background(), mr, rdb, repo, taskRepo
 }
