@@ -971,26 +971,56 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 }
 
 func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
+	pipe := r.rdb.Pipeline()
+	defer pipe.Close()
+
+	// Pipeline all LLen calls for pending queues
+	llenCmds := make([]*redis.IntCmd, maxPriority-minPriority+1)
+	for i, p := 0, maxPriority; p >= minPriority; i, p = i+1, p-1 {
+		llenCmds[i] = pipe.LLen(ctx, r.keyQueuePending(cmd, p, ""))
+	}
+
+	// Pipeline other queue stats
+	scardInprog := pipe.SCard(ctx, r.keyQueueInprog(cmd, ""))
+	zcardDelayed := pipe.ZCard(ctx, r.keyQueueDelayed(cmd, ""))
+	scardDLQ := pipe.SCard(ctx, r.keyQueueDLQ(cmd, ""))
+
+	// Execute all commands in single pipeline
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	// Aggregate results from pipelined commands
 	var ready int64
-	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "")).Result()
-		if err != nil && err != redis.Nil {
-			return nil, err
+	for _, cmd := range llenCmds {
+		if cmd.Err() != nil && cmd.Err() != redis.Nil {
+			return nil, cmd.Err()
 		}
-		ready += n
+		ready += cmd.Val()
 	}
-	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd, "")).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
+
+	inprog := int64(0)
+	if scardInprog.Err() == nil || scardInprog.Err() == redis.Nil {
+		inprog = scardInprog.Val()
+	} else if scardInprog.Err() != nil {
+		return nil, scardInprog.Err()
 	}
-	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd, "")).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
+
+	delayed := int64(0)
+	if zcardDelayed.Err() == nil || zcardDelayed.Err() == redis.Nil {
+		delayed = zcardDelayed.Val()
+	} else if zcardDelayed.Err() != nil {
+		return nil, zcardDelayed.Err()
 	}
-	dlq, err := r.rdb.SCard(ctx, r.keyQueueDLQ(cmd, "")).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
+
+	dlq := int64(0)
+	if scardDLQ.Err() == nil || scardDLQ.Err() == redis.Nil {
+		dlq = scardDLQ.Val()
+	} else if scardDLQ.Err() != nil {
+		return nil, scardDLQ.Err()
 	}
+
 	return &domain.QueueStats{
 		Command:    cmd,
 		Ready:      ready,
@@ -1001,14 +1031,30 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 }
 
 func (r *taskRedisRepo) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
-	var total int64
-	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "")).Result()
-		if err != nil && err != redis.Nil {
-			return 0, err
-		}
-		total += n
+	pipe := r.rdb.Pipeline()
+	defer pipe.Close()
+
+	// Pipeline all LLen calls for all priority levels
+	llenCmds := make([]*redis.IntCmd, maxPriority-minPriority+1)
+	for i, p := 0, maxPriority; p >= minPriority; i, p = i+1, p-1 {
+		llenCmds[i] = pipe.LLen(ctx, r.keyQueuePending(cmd, p, ""))
 	}
+
+	// Execute all commands in single pipeline
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return 0, err
+	}
+
+	// Aggregate results
+	var total int64
+	for _, cmd := range llenCmds {
+		if cmd.Err() != nil && cmd.Err() != redis.Nil {
+			return 0, cmd.Err()
+		}
+		total += cmd.Val()
+	}
+
 	return total, nil
 }
 
