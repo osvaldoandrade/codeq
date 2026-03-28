@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Performance Baselines Documentation** (`docs/30-performance-baselines.md`): Baseline load test results from all six k6 scenarios and Go benchmarks, including throughput, latency percentiles, and regression testing guidance
+- **Load Testing Results**: Ran all k6 scenarios (sustained throughput, burst load, many workers, prefill queue, mixed priorities, delayed tasks) with 0% error rates across the board
+
+### Changed
+
+- Bumped k6 image in `docker-compose.yml` from 0.49.0 to 0.55.0 to support nullish coalescing (`??`) syntax used in load test scripts
+
+### Documentation
+
+- Updated `docs/26-load-testing.md` with baseline performance summary table
+- Updated `docs/17-performance-tuning.md` with load test insights and cross-references
+- Added `docs/30-performance-baselines.md` to `docs/README.md` index
+
 - **Queue Sharding Support**: Pluggable `ShardSupplier` interface and `StaticShardSupplier` implementation enable horizontal scaling across multiple KVRocks instances
   - `ShardSupplier` interface defined in `pkg/domain/shard.go` with `QueueShards` and `CurrentShard` methods
   - `StaticShardSupplier` in `internal/shard/static_supplier.go` provides config-driven shard routing with tenant override → command mapping → default shard precedence

@@ -6,8 +6,24 @@ This guide provides comprehensive tuning recommendations for production codeQ de
 
 For a practical load testing harness (k6 scenarios + Go benchmarks), see:
 
-- `docs/26-load-testing.md`
-- `loadtest/`
+- `docs/26-load-testing.md` — scenario descriptions and how to run them
+- `docs/30-performance-baselines.md` — measured baseline metrics and regression guidance
+- `loadtest/` — k6 scripts and README
+
+### Baseline Performance Summary
+
+A single codeQ instance with one KVRocks node achieves **1,000–2,000 req/s** on
+loopback with **0% error rates** across all scenarios. Key findings:
+
+- **p95 latency** stays below 15 ms at 200 tasks/s and below 40 ms at 500 tasks/s.
+- **Burst absorption** — 5,000 tasks in 10 s are drained with a peak latency of ~70 ms.
+- **Worker concurrency** — 80+ concurrent claimers show no contention-related errors.
+- **Priority sorting** adds negligible overhead; latency differences are rate-driven.
+- **Delayed tasks** migrate on schedule with no measurable latency impact.
+
+These numbers help calibrate the tuning recommendations that follow. For detailed
+per-scenario tables and regression testing guidance, see
+[`docs/30-performance-baselines.md`](30-performance-baselines.md).
 
 ## 1) KVRocks Configuration
 

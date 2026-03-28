@@ -60,6 +60,23 @@ The following scripts map directly to the scenarios listed in Issue #30:
   - `codeq_queue_depth{command=...,queue=...}`
 - Use `/v1/codeq/admin/queues/:command` to validate queue depth and backlog behavior during tests.
 
+## Baseline Performance Results
+
+Baseline results from running all six scenarios are documented in
+[`docs/30-performance-baselines.md`](30-performance-baselines.md). Key highlights:
+
+| Scenario               | Throughput (req/s) | Avg Latency | p95 Latency | Error Rate |
+|------------------------|--------------------|-------------|-------------|------------|
+| Sustained throughput   | 1,082              | 5.69 ms     | 10.94 ms    | 0.00%      |
+| Burst load             | 1,610              | 18.43 ms    | 33.46 ms    | 0.00%      |
+| Many workers           | 1,647              | 12.82 ms    | 22.79 ms    | 0.00%      |
+| Prefill queue          | 2,081              | 23.52 ms    | 32.95 ms    | 0.00%      |
+| Mixed priorities       | 1,854              | 22.24 ms    | 39.05 ms    | 0.00%      |
+| Delayed tasks          | 1,124              | 6.62 ms     | 15.10 ms    | 0.00%      |
+
+See the baselines document for full per-scenario breakdowns, Go benchmark data, and
+regression testing guidance.
+
 ## Go Benchmarks
 
 Run benchmarks:
