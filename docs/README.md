@@ -18,6 +18,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 26. `docs/26-load-testing.md` - Load testing framework and benchmarks
 28. `docs/28-troubleshooting.md` - Troubleshooting guide for common issues
 29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
+30. `docs/30-performance-baselines.md` - Baseline load test results and regression benchmarks
 
 ### Technical Reference (Information-Oriented)
 
