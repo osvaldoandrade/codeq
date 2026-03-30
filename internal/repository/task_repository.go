@@ -672,14 +672,6 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 			defer span.End()
 
 			leaseKey := r.keyLease(id)
-			if err := r.rdb.SetEX(taskCtx, leaseKey, workerID, time.Duration(leaseSeconds)*time.Second).Err(); err != nil {
-				span.RecordError(err)
-				span.SetStatus(codes.Error, err.Error())
-				// Falha ao setar lease → desfaz o move e segue
-				_ = r.rdb.SRem(taskCtx, dst, id).Err()
-				_ = r.rdb.LPush(taskCtx, src, id).Err()
-				return nil, false, fmt.Errorf("SETEX lease: %w", err)
-			}
 			leaseUntil := r.now().Add(time.Duration(leaseSeconds) * time.Second).UTC().Format(time.RFC3339)
 
 			// Atualiza JSON
@@ -693,10 +685,26 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 				t.TraceParent = tp
 				t.TraceState = ts
 			}
-			if err := r.rdb.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+			taskJSON := marshal(t)
+
+			// Pipeline lease and task update to reduce RTTs from 2 to 1
+			pipe := r.rdb.Pipeline()
+			pipe.SetEX(taskCtx, leaseKey, workerID, time.Duration(leaseSeconds)*time.Second)
+			pipe.HSet(taskCtx, r.keyTasksHash(), t.ID, taskJSON)
+			results, err := pipe.Exec(taskCtx)
+			if err != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
-				return nil, false, fmt.Errorf("HSET task inprogress: %w", err)
+				// Falha ao setar lease/task → desfaz o move e segue
+				_ = r.rdb.SRem(taskCtx, dst, id).Err()
+				_ = r.rdb.LPush(taskCtx, src, id).Err()
+				return nil, false, fmt.Errorf("pipeline lease/task update: %w", err)
+			}
+			if len(results) < 2 {
+				span.SetStatus(codes.Error, "incomplete pipeline results")
+				_ = r.rdb.SRem(taskCtx, dst, id).Err()
+				_ = r.rdb.LPush(taskCtx, src, id).Err()
+				return nil, false, fmt.Errorf("pipeline lease/task update: incomplete results")
 			}
 
 			// Bump retenção lógica
