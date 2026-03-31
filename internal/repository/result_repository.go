@@ -60,19 +60,27 @@ func (r *resultRedisRepo) GetTask(ctx context.Context, id string) (*domain.Task,
 
 func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
 	b, _ := sonic.Marshal(rec)
-	if err := r.rdb.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b)).Err(); err != nil {
-		return fmt.Errorf("redis HSET result: %w", err)
+
+	// First, get the task in parallel with saving the result
+	pipe := r.rdb.Pipeline()
+	pipe.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b))
+	pipe.HGet(ctx, r.keyTasksHash(), rec.TaskID)
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
 	}
-	// link result key on task JSON
-	js, err := r.rdb.HGet(ctx, r.keyTasksHash(), rec.TaskID).Result()
-	if err == redis.Nil || js == "" {
+
+	// Check if HGet result is nil
+	js, err := results[1].Val(), results[1].Err()
+	if err == redis.Nil || js == "" || err != nil {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("redis HGET task: %w", err)
 	}
+
 	var t domain.Task
-	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(js.(string)), &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
 	t.ResultKey = r.keyResultsHash()
@@ -99,6 +107,7 @@ func (r *resultRedisRepo) GetResult(ctx context.Context, id string) (*domain.Res
 }
 
 func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error {
+	// Fetch task
 	js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 	if err == redis.Nil || js == "" {
 		return fmt.Errorf("not-found")
@@ -117,21 +126,28 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 	t.UpdatedAt = r.now()
 
 	b, _ := sonic.Marshal(t)
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), id, string(b)).Err(); err != nil {
-		return fmt.Errorf("redis HSET task: %w", err)
+
+	// Pipeline both the task update and TTL bump in single RTT
+	pipe := r.rdb.Pipeline()
+	pipe.HSet(ctx, r.keyTasksHash(), id, string(b))
+	pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(24 * time.Hour).UTC().Unix()), Member: id})
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
 	}
-	// bump logical retention
-	_ = r.rdb.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(24 * time.Hour).UTC().Unix()), Member: id}).Err()
 	return nil
 }
 
 func (r *resultRedisRepo) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command) error {
 	inprog := r.keyQueueInprog(cmd)
-	if err := r.rdb.SRem(ctx, inprog, id).Err(); err != nil && err != redis.Nil {
-		return fmt.Errorf("redis SREM inprog: %w", err)
-	}
-	if err := r.rdb.Del(ctx, r.keyLease(id)).Err(); err != nil && err != redis.Nil {
-		return fmt.Errorf("redis DEL lease: %w", err)
+
+	// Pipeline both cleanup operations in single RTT
+	pipe := r.rdb.Pipeline()
+	pipe.SRem(ctx, inprog, id)
+	pipe.Del(ctx, r.keyLease(id))
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
 	}
 	return nil
 }

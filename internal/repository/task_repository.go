@@ -954,62 +954,145 @@ func (r *taskRedisRepo) Get(ctx context.Context, taskID string) (*domain.Task, e
 
 func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error) {
 	out := map[string]any{}
-	for _, cmd := range r.allCommands() {
+	cmds := r.allCommands()
+	if len(cmds) == 0 {
+		return out, nil
+	}
+
+	// Build pipeline for all queue size queries
+	pipe := r.rdb.Pipeline()
+	keyOrder := make([]string, 0, len(cmds)*(maxPriority-minPriority+4))
+
+	for _, cmd := range cmds {
 		sid := r.currentShard(ctx, cmd, "")
 		ki := r.keyQueueInprog(cmd, "", sid)
+
+		// Pending queues for all priorities
 		for p := maxPriority; p >= minPriority; p-- {
 			kp := r.keyQueuePending(cmd, p, "", sid)
-			lp, err := r.rdb.LLen(ctx, kp).Result()
-			if err != nil && err != redis.Nil {
+			pipe.LLen(ctx, kp)
+			keyOrder = append(keyOrder, kp)
+		}
+
+		// In-progress queue
+		pipe.SCard(ctx, ki)
+		keyOrder = append(keyOrder, ki)
+
+		// Delayed queue
+		kd := r.keyQueueDelayed(cmd, "", sid)
+		pipe.ZCard(ctx, kd)
+		keyOrder = append(keyOrder, kd)
+
+		// DLQ
+		kdlq := r.keyQueueDLQ(cmd, "", sid)
+		pipe.SCard(ctx, kdlq)
+		keyOrder = append(keyOrder, kdlq)
+	}
+
+	// Execute all commands in single RTT
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Map results back to keys
+	for i, key := range keyOrder {
+		if i < len(results) {
+			cmd := results[i]
+			if val, err := cmd.Val(), cmd.Err(); err == nil || err == redis.Nil {
+				if intVal, ok := val.(int64); ok {
+					out[key] = intVal
+				}
+			} else {
 				return nil, err
 			}
-			out[kp] = lp
 		}
-		li, err := r.rdb.SCard(ctx, ki).Result()
-		if err != nil && err != redis.Nil {
-			return nil, err
-		}
-		out[ki] = li
-
-		kd := r.keyQueueDelayed(cmd, "", sid)
-		ld, err := r.rdb.ZCard(ctx, kd).Result()
-		if err != nil && err != redis.Nil {
-			return nil, err
-		}
-		out[kd] = ld
-
-		kdlq := r.keyQueueDLQ(cmd, "", sid)
-		ldlq, err := r.rdb.SCard(ctx, kdlq).Result()
-		if err != nil && err != redis.Nil {
-			return nil, err
-		}
-		out[kdlq] = ldlq
 	}
 	return out, nil
 }
 
 func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
 	sid := r.currentShard(ctx, cmd, "")
-	var ready int64
+
+	// Build pipeline for all queue size queries
+	pipe := r.rdb.Pipeline()
+
+	// Pending queues for all priorities
 	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "", sid)).Result()
-		if err != nil && err != redis.Nil {
+		pipe.LLen(ctx, r.keyQueuePending(cmd, p, "", sid))
+	}
+
+	// In-progress queue
+	pipe.SCard(ctx, r.keyQueueInprog(cmd, "", sid))
+
+	// Delayed queue
+	pipe.ZCard(ctx, r.keyQueueDelayed(cmd, "", sid))
+
+	// DLQ
+	pipe.SCard(ctx, r.keyQueueDLQ(cmd, "", sid))
+
+	// Execute all commands in single RTT
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract results
+	var ready int64
+	resultIdx := 0
+
+	// Sum pending queues
+	for p := maxPriority; p >= minPriority; p-- {
+		if resultIdx < len(results) {
+			if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
+				if intVal, ok := val.(int64); ok {
+					ready += intVal
+				}
+			} else {
+				return nil, err
+			}
+		}
+		resultIdx++
+	}
+
+	// In-progress count
+	var inprog int64
+	if resultIdx < len(results) {
+		if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
+			if intVal, ok := val.(int64); ok {
+				inprog = intVal
+			}
+		} else {
 			return nil, err
 		}
-		ready += n
 	}
-	inprog, err := r.rdb.SCard(ctx, r.keyQueueInprog(cmd, "", sid)).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
+	resultIdx++
+
+	// Delayed count
+	var delayed int64
+	if resultIdx < len(results) {
+		if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
+			if intVal, ok := val.(int64); ok {
+				delayed = intVal
+			}
+		} else {
+			return nil, err
+		}
 	}
-	delayed, err := r.rdb.ZCard(ctx, r.keyQueueDelayed(cmd, "", sid)).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
+	resultIdx++
+
+	// DLQ count
+	var dlq int64
+	if resultIdx < len(results) {
+		if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
+			if intVal, ok := val.(int64); ok {
+				dlq = intVal
+			}
+		} else {
+			return nil, err
+		}
 	}
-	dlq, err := r.rdb.SCard(ctx, r.keyQueueDLQ(cmd, "", sid)).Result()
-	if err != nil && err != redis.Nil {
-		return nil, err
-	}
+
 	return &domain.QueueStats{
 		Command:    cmd,
 		Ready:      ready,
@@ -1021,13 +1104,29 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 
 func (r *taskRedisRepo) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
 	sid := r.currentShard(ctx, cmd, "")
-	var total int64
+
+	// Build pipeline for all pending queue lengths
+	pipe := r.rdb.Pipeline()
 	for p := maxPriority; p >= minPriority; p-- {
-		n, err := r.rdb.LLen(ctx, r.keyQueuePending(cmd, p, "", sid)).Result()
-		if err != nil && err != redis.Nil {
+		pipe.LLen(ctx, r.keyQueuePending(cmd, p, "", sid))
+	}
+
+	// Execute all commands in single RTT
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	// Sum all results
+	var total int64
+	for _, result := range results {
+		if val, err := result.Val(), result.Err(); err == nil || err == redis.Nil {
+			if intVal, ok := val.(int64); ok {
+				total += intVal
+			}
+		} else {
 			return 0, err
 		}
-		total += n
 	}
 	return total, nil
 }
