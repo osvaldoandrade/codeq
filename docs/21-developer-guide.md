@@ -398,6 +398,36 @@ go build -o codeq cmd/codeq/main.go
 - **Comments**: Document exported functions and non-obvious logic
 - **Testing**: Write unit tests for services and repositories
 
+### Import Organization
+
+Go imports must be organized in three groups (separated by blank lines):
+
+1. **Standard library** (e.g., `fmt`, `context`, `net/http`)
+2. **External dependencies** (e.g., `github.com`, `golang.org`)
+3. **Internal packages** (e.g., `codeq/internal`, `codeq/pkg`)
+
+**Example:**
+
+````go
+import (
+	"context"
+	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
+
+	"codeq/internal/repository"
+	"codeq/pkg/domain"
+)
+````
+
+Use `goimports` to automatically fix import organization:
+
+````bash
+goimports -w ./cmd ./pkg ./internal
+````
+
 ### Adding a New Feature
 
 Example: Adding a new queue operation
@@ -474,11 +504,11 @@ See [`docs/26-load-testing.md`](26-load-testing.md) for comprehensive load testi
 2. **Create a feature branch**: `git checkout -b feature/your-feature`
 3. **Make changes and add tests**
 4. **Ensure tests pass**: `go test ./...`
-5. **Format code**: `gofmt -s -w .`
+5. **Format code**: `gofmt -s -w .` and `goimports -w ./cmd ./pkg ./internal`
 6. **Commit with clear messages**
 7. **Push and create a pull request**
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed guidelines.
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for detailed guidelines and import organization rules.
 
 ## Debugging Tips
 
