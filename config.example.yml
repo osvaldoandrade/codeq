@@ -90,6 +90,27 @@ rateLimit:
 #     SEND_EMAIL: "notification"
 #   tenantOverrides:
 #     "tenant-premium-abc": "premium-shard"
+#   backends:
+#     primary:
+#       address: "kvrocks-primary:6379"
+#       password: "${REDIS_PRIMARY_PASSWORD}"
+#       db: 0
+#       poolSize: 20
+#     compute-heavy:
+#       address: "kvrocks-heavy:6379"
+#       password: "${REDIS_HEAVY_PASSWORD}"
+#       db: 0
+#       poolSize: 30
+#     notification:
+#       address: "kvrocks-notification:6379"
+#       password: "${REDIS_NOTIFICATION_PASSWORD}"
+#       db: 0
+#       poolSize: 15
+#     premium-shard:
+#       address: "kvrocks-premium:6379"
+#       password: "${REDIS_PREMIUM_PASSWORD}"
+#       db: 0
+#       poolSize: 25
 
 # === Storage ===
 localArtifactsDir: /tmp/codeq-artifacts

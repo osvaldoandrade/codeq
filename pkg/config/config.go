@@ -61,10 +61,19 @@ type Config struct {
 
 // ShardingConfig holds the sharding configuration for multi-shard deployments.
 type ShardingConfig struct {
-	Enabled         bool              `yaml:"enabled"`
-	DefaultShard    string            `yaml:"defaultShard"`
-	CommandMappings map[string]string `yaml:"commandMappings"`
-	TenantOverrides map[string]string `yaml:"tenantOverrides"`
+	Enabled         bool                          `yaml:"enabled"`
+	DefaultShard    string                        `yaml:"defaultShard"`
+	CommandMappings map[string]string             `yaml:"commandMappings"`
+	TenantOverrides map[string]string             `yaml:"tenantOverrides"`
+	Backends        map[string]ShardBackendConfig `yaml:"backends"`
+}
+
+// ShardBackendConfig holds connection parameters for a single shard backend.
+type ShardBackendConfig struct {
+	Address  string `yaml:"address"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
+	PoolSize int    `yaml:"poolSize"`
 }
 
 type RateLimitConfig struct {
@@ -434,6 +443,32 @@ func (c *Config) Validate() error {
 	webhooksEnabled := c.SubscriptionMinIntervalSeconds > 0 || c.ResultWebhookMaxAttempts > 0
 	if webhooksEnabled && strings.TrimSpace(c.WebhookHmacSecret) == "" && !dev {
 		errs = append(errs, "webhookHmacSecret is required when webhooks are enabled")
+	}
+
+	// Validate sharding configuration
+	if c.Sharding.Enabled && len(c.Sharding.Backends) > 0 {
+		defaultShard := c.Sharding.DefaultShard
+		if defaultShard == "" {
+			defaultShard = "default"
+		}
+		if _, ok := c.Sharding.Backends[defaultShard]; !ok {
+			errs = append(errs, fmt.Sprintf("default shard %q not found in sharding backends", defaultShard))
+		}
+		for cmd, shardID := range c.Sharding.CommandMappings {
+			if _, ok := c.Sharding.Backends[shardID]; !ok {
+				errs = append(errs, fmt.Sprintf("command %s maps to undefined shard backend %q", cmd, shardID))
+			}
+		}
+		for tenant, shardID := range c.Sharding.TenantOverrides {
+			if _, ok := c.Sharding.Backends[shardID]; !ok {
+				errs = append(errs, fmt.Sprintf("tenant %s override maps to undefined shard backend %q", tenant, shardID))
+			}
+		}
+		for name, backend := range c.Sharding.Backends {
+			if strings.TrimSpace(backend.Address) == "" {
+				errs = append(errs, fmt.Sprintf("shard backend %q has empty address", name))
+			}
+		}
 	}
 
 	if len(errs) > 0 {

@@ -21,6 +21,7 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 )
 
 type Application struct {
@@ -114,7 +115,34 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		shardSupplier = shard.NewDefaultShardSupplier()
 	}
 
-	repo := repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds, shardSupplier)
+	// Create task repository: use sharded repository when multiple backends are configured
+	var repo repository.TaskRepository
+	if cfg.Sharding.Enabled && len(cfg.Sharding.Backends) > 0 {
+		clients := make(map[string]*redis.Client, len(cfg.Sharding.Backends))
+		for name, backend := range cfg.Sharding.Backends {
+			poolSize := backend.PoolSize
+			if poolSize <= 0 {
+				poolSize = 10
+			}
+			clients[name] = redis.NewClient(&redis.Options{
+				Addr:     backend.Address,
+				Password: backend.Password,
+				DB:       backend.DB,
+				PoolSize: poolSize,
+			})
+		}
+		defaultShard := cfg.Sharding.DefaultShard
+		if defaultShard == "" {
+			defaultShard = shard.DefaultShardID
+		}
+		clientMap, err := shard.NewClientMap(clients, defaultShard)
+		if err != nil {
+			return nil, fmt.Errorf("create shard client map: %w", err)
+		}
+		repo = repository.NewShardedTaskRepository(clientMap, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds, shardSupplier)
+	} else {
+		repo = repository.NewTaskRepository(redisClient, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds, shardSupplier)
+	}
 	subRepo := repository.NewSubscriptionRepository(redisClient, loc)
 	subs := services.NewSubscriptionService(subRepo)
 	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
