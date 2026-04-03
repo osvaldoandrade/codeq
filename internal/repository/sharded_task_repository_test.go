@@ -680,18 +680,30 @@ func TestShardedTaskRepository_AdminQueuesAggregatesAcrossShards(t *testing.T) {
 
 	// Check compute shard pending key
 	computeKey := "codeq:q:generate_master:s:compute:pending:5"
-	if v, ok := result[computeKey]; ok {
-		if count, ok := v.(int64); ok && count != 2 {
-			t.Fatalf("expected 2 in %s, got %d", computeKey, count)
-		}
+	v, ok := result[computeKey]
+	if !ok {
+		t.Fatalf("expected key %s to be present in admin queues result", computeKey)
+	}
+	count, ok := v.(int64)
+	if !ok {
+		t.Fatalf("expected value for %s to be int64, got %T", computeKey, v)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 in %s, got %d", computeKey, count)
 	}
 
-	// Check primary shard pending key
-	primaryKey := "codeq:q:generate_creative:pending:0"
-	if v, ok := result[primaryKey]; ok {
-		if count, ok := v.(int64); ok && count != 3 {
-			t.Fatalf("expected 3 in %s, got %d", primaryKey, count)
-		}
+	// Check primary shard pending key (defaultShard="primary" gets :s:primary: segment)
+	primaryKey := "codeq:q:generate_creative:s:primary:pending:0"
+	v, ok = result[primaryKey]
+	if !ok {
+		t.Fatalf("expected key %s to be present in admin queues result", primaryKey)
+	}
+	count, ok = v.(int64)
+	if !ok {
+		t.Fatalf("expected value for %s to be int64, got %T", primaryKey, v)
+	}
+	if count != 3 {
+		t.Fatalf("expected 3 in %s, got %d", primaryKey, count)
 	}
 }
 
@@ -850,8 +862,8 @@ func TestShardedTaskRepository_MoveDueDelayedOnCorrectShard(t *testing.T) {
 		t.Fatalf("expected 1 in delayed queue on compute shard, got %d", delayedCount)
 	}
 
-	// Verify task is NOT on primary shard's delayed queue
-	primaryDelayedKey := "codeq:q:generate_master:delayed"
+	// Verify task is NOT on primary shard's delayed queue (defaultShard="primary" gets :s:primary: segment)
+	primaryDelayedKey := "codeq:q:generate_master:s:primary:delayed"
 	primaryDelayed, _ := c1.ZCard(ctx, primaryDelayedKey).Result()
 	if primaryDelayed != 0 {
 		t.Fatalf("expected 0 in primary shard delayed queue, got %d", primaryDelayed)
