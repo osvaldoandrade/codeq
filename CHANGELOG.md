@@ -53,9 +53,14 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
 - DLQ depth uses `SCARD` (previously `LLEN`)
 - DLQ cleanup uses `SREM` O(1) (previously `LREM` O(N))
 
-**Migration required:**
-- **Recommended**: Drain DLQ before upgrading
-- **Alternative**: Convert existing LIST → SET during freeze window (rename list to a temp key, then `SADD` members)
+**Upgrade path for existing deployments:**
+1. **Option A (recommended)**: Drain all DLQ entries before upgrading, then deploy the new version.
+2. **Option B**: Convert LIST keys to SET during a brief write freeze: `RENAME` old key → `LRANGE` → `SADD` → `DEL` backup.
+3. **Rollback**: If needed, convert SET back to LIST via `SMEMBERS` → `LPUSH`.
+
+See [`docs/migration.md`](docs/migration.md) for detailed step-by-step procedures, rollback plan, and verification checklist.
+
+> **Note**: The in-progress queue underwent the same LIST → SET change in v1.1.0. Both queues now use SETs. The migration guide covers both conversions.
 
 ### Performance Improvements
 
