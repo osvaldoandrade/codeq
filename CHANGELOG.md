@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Benchmark Regression Testing CI** (`.github/workflows/benchmark-regression.yml`): Automated Go benchmark regression detection on every PR and commit to main. Runs `BenchmarkHTTP_CreateClaimComplete` and `BenchmarkScheduler_CreateClaimComplete` with 10s iterations and 3 runs, archives results (90d retention, 1yr history), and posts detailed comparisons to workflow summaries. Helps catch performance regressions early before they impact production.
+  - Automated baseline comparison and regression detection
+  - Results archived for 90 days with 1-year history for trend analysis
+  - Step summary output for quick PR review
+  - Interpretation guide: `.github/copilot/instructions/07-benchmark-regression-ci.md`
+  - Documentation: `docs/16-workflows.md` updated with setup and usage
 - **Performance Baselines Documentation** (`docs/30-performance-baselines.md`): Baseline load test results from all six k6 scenarios and Go benchmarks, including throughput, latency percentiles, and regression testing guidance
 - **Load Testing Results**: Ran all k6 scenarios (sustained throughput, burst load, many workers, prefill queue, mixed priorities, delayed tasks) with 0% error rates across the board
 
