@@ -219,12 +219,21 @@ func (s *shardedTaskRepository) CleanupExpired(ctx context.Context, limit int, b
 	if perShardLimit <= 0 {
 		perShardLimit = 1
 	}
+	remaining := limit
 	for _, repo := range s.repos {
-		deleted, err := repo.CleanupExpired(ctx, perShardLimit, before)
+		if remaining <= 0 {
+			break
+		}
+		shardLimit := perShardLimit
+		if shardLimit > remaining {
+			shardLimit = remaining
+		}
+		deleted, err := repo.CleanupExpired(ctx, shardLimit, before)
 		if err != nil {
 			return totalDeleted, err
 		}
 		totalDeleted += deleted
+		remaining -= deleted
 	}
 	return totalDeleted, nil
 }
