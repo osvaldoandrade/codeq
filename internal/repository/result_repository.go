@@ -71,7 +71,10 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	}
 
 	// Check if HGet result is nil
-	hgetCmd := results[1].(*redis.StringCmd)
+	hgetCmd, ok := results[1].(*redis.StringCmd)
+	if !ok {
+		return fmt.Errorf("unexpected pipeline result type for HGET")
+	}
 	js, err := hgetCmd.Val(), hgetCmd.Err()
 	if err == redis.Nil || js == "" || err != nil {
 		return nil
