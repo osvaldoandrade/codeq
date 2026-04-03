@@ -17,6 +17,11 @@ framework. These baselines serve as regression benchmarks for future releases.
 > the same machine. Production deployments with network latency, multiple replicas, or
 > sharding will show different numbers. Use these baselines for relative comparisons
 > between releases, not as absolute production targets.
+>
+> **Implementation details:** These baselines were collected with Redis pipelining optimizations enabled,
+> which consolidate multiple Redis round-trips into single batches in hot paths (AdminQueues, QueueStats,
+> result operations). See [`docs/17-performance-tuning.md` Section 9](17-performance-tuning.md#9-redis-pipelining-performance)
+> for details on pipelining performance improvements (90%+ RTT reductions in admin operations).
 
 ---
 
