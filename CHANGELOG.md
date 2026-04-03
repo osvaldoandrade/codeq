@@ -68,6 +68,12 @@ The DLQ queue has been changed from a Redis LIST to a SET to achieve O(1) remova
   - Expected improvements: 5-10% enqueue p50 latency reduction, 10-15% claim p50 latency reduction
   - Reduces garbage collection pressure by 10-20%, improving tail latencies (p99, p99.9)
   - No configuration needed; used transparently with graceful fallback handling
+- **Redis batch pipelining optimization**: Consolidated multiple Redis round-trips into single pipeline batches in hot paths for dramatic latency reduction. ([#367](https://github.com/osvaldoandrade/codeq/pull/367))
+  - `AdminQueues`: 80+ RTTs → 1-2 RTT (90% reduction) for queue depth queries
+  - `QueueStats`: 10-13 RTTs → 1 RTT (92% reduction) for queue statistics
+  - `PendingLength`: 10 RTTs → 1 RTT (90% reduction) for pending queue counts
+  - `SaveResult` / `UpdateTaskOnComplete` / `RemoveFromInprogAndClearLease`: 2 RTTs → 1 RTT (50% reduction) for result operations
+  - Expected improvements: 3-5x throughput increase in admin operations, 50-90% latency reduction
 - **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
 - **Optimized MoveDueDelayed batching**: Eliminated redundant task JSON reads and batch all updates in single pipeline. Reduces O(3M) round-trips to O(M) for M due tasks, achieving 50-70% latency reduction for delayed→pending migrations. ([#96](https://github.com/osvaldoandrade/codeq/pull/96))
 
