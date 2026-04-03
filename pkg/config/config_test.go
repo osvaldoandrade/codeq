@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -252,5 +253,184 @@ func TestLoadConfigOptional_ShardingDisabledByDefault(t *testing.T) {
 	}
 	if cfg.Sharding.DefaultShard != "" {
 		t.Errorf("Expected empty DefaultShard by default, got %q", cfg.Sharding.DefaultShard)
+	}
+}
+
+// TestLoadConfigOptional_ShardingBackends tests that shard backend configuration is loaded from YAML
+func TestLoadConfigOptional_ShardingBackends(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "sharding-backends.yaml")
+
+	configYAML := `
+port: 8080
+env: dev
+sharding:
+  enabled: true
+  defaultShard: "primary"
+  commandMappings:
+    GENERATE_MASTER: "compute"
+  backends:
+    primary:
+      address: "kvrocks-primary:6379"
+      password: "pass1"
+      db: 0
+      poolSize: 20
+    compute:
+      address: "kvrocks-compute:6379"
+      password: "pass2"
+      db: 1
+      poolSize: 30
+`
+	if err := os.WriteFile(configPath, []byte(configYAML), 0644); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	cfg, err := LoadConfigOptional(configPath)
+	if err != nil {
+		t.Fatalf("LoadConfigOptional should not error: %v", err)
+	}
+
+	if !cfg.Sharding.Enabled {
+		t.Fatal("Expected Sharding.Enabled=true")
+	}
+	if len(cfg.Sharding.Backends) != 2 {
+		t.Fatalf("Expected 2 backends, got %d", len(cfg.Sharding.Backends))
+	}
+	primary := cfg.Sharding.Backends["primary"]
+	if primary.Address != "kvrocks-primary:6379" {
+		t.Errorf("Expected primary address 'kvrocks-primary:6379', got %q", primary.Address)
+	}
+	if primary.Password != "pass1" {
+		t.Errorf("Expected primary password 'pass1', got %q", primary.Password)
+	}
+	if primary.DB != 0 {
+		t.Errorf("Expected primary DB 0, got %d", primary.DB)
+	}
+	if primary.PoolSize != 20 {
+		t.Errorf("Expected primary poolSize 20, got %d", primary.PoolSize)
+	}
+	compute := cfg.Sharding.Backends["compute"]
+	if compute.Address != "kvrocks-compute:6379" {
+		t.Errorf("Expected compute address 'kvrocks-compute:6379', got %q", compute.Address)
+	}
+	if compute.PoolSize != 30 {
+		t.Errorf("Expected compute poolSize 30, got %d", compute.PoolSize)
+	}
+}
+
+// TestValidate_ShardingBackendsMissingDefault tests validation catches missing default shard backend
+func TestValidate_ShardingBackendsMissingDefault(t *testing.T) {
+	cfg := &Config{
+		Env: "dev",
+		Sharding: ShardingConfig{
+			Enabled:      true,
+			DefaultShard: "primary",
+			Backends: map[string]ShardBackendConfig{
+				"compute": {Address: "kvrocks-compute:6379"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Expected validation error for missing default shard backend")
+	}
+	if !strings.Contains(err.Error(), "default shard") {
+		t.Errorf("Expected error about default shard, got: %v", err)
+	}
+}
+
+// TestValidate_ShardingBackendsMissingCommandShard tests validation catches undefined command shard
+func TestValidate_ShardingBackendsMissingCommandShard(t *testing.T) {
+	cfg := &Config{
+		Env: "dev",
+		Sharding: ShardingConfig{
+			Enabled:      true,
+			DefaultShard: "primary",
+			CommandMappings: map[string]string{
+				"GENERATE_MASTER": "compute",
+			},
+			Backends: map[string]ShardBackendConfig{
+				"primary": {Address: "kvrocks-primary:6379"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Expected validation error for missing command shard backend")
+	}
+	if !strings.Contains(err.Error(), "GENERATE_MASTER") {
+		t.Errorf("Expected error about GENERATE_MASTER, got: %v", err)
+	}
+}
+
+// TestValidate_ShardingBackendsMissingTenantShard tests validation catches undefined tenant shard
+func TestValidate_ShardingBackendsMissingTenantShard(t *testing.T) {
+	cfg := &Config{
+		Env: "dev",
+		Sharding: ShardingConfig{
+			Enabled:      true,
+			DefaultShard: "primary",
+			TenantOverrides: map[string]string{
+				"tenant-premium": "premium",
+			},
+			Backends: map[string]ShardBackendConfig{
+				"primary": {Address: "kvrocks-primary:6379"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Expected validation error for missing tenant shard backend")
+	}
+	if !strings.Contains(err.Error(), "tenant-premium") {
+		t.Errorf("Expected error about tenant-premium, got: %v", err)
+	}
+}
+
+// TestValidate_ShardingBackendsEmptyAddress tests validation catches empty backend address
+func TestValidate_ShardingBackendsEmptyAddress(t *testing.T) {
+	cfg := &Config{
+		Env: "dev",
+		Sharding: ShardingConfig{
+			Enabled:      true,
+			DefaultShard: "primary",
+			Backends: map[string]ShardBackendConfig{
+				"primary": {Address: ""},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Expected validation error for empty backend address")
+	}
+	if !strings.Contains(err.Error(), "empty address") {
+		t.Errorf("Expected error about empty address, got: %v", err)
+	}
+}
+
+// TestValidate_ShardingBackendsValidConfig tests validation passes with correct configuration
+func TestValidate_ShardingBackendsValidConfig(t *testing.T) {
+	cfg := &Config{
+		Env:            "dev",
+		WorkerAudience: "codeq-worker",
+		Sharding: ShardingConfig{
+			Enabled:      true,
+			DefaultShard: "primary",
+			CommandMappings: map[string]string{
+				"GENERATE_MASTER": "compute",
+			},
+			TenantOverrides: map[string]string{
+				"tenant-premium": "premium",
+			},
+			Backends: map[string]ShardBackendConfig{
+				"primary": {Address: "kvrocks-primary:6379"},
+				"compute": {Address: "kvrocks-compute:6379"},
+				"premium": {Address: "kvrocks-premium:6379"},
+			},
+		},
+	}
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("Expected no validation error, got: %v", err)
 	}
 }
