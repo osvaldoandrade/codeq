@@ -998,11 +998,12 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 	// Map results back to keys
 	for i, key := range keyOrder {
 		if i < len(results) {
-			cmd := results[i]
-			if val, err := cmd.Val(), cmd.Err(); err == nil || err == redis.Nil {
-				if intVal, ok := val.(int64); ok {
-					out[key] = intVal
-				}
+			intCmd, ok := results[i].(*redis.IntCmd)
+			if !ok {
+				continue
+			}
+			if val, err := intCmd.Val(), intCmd.Err(); err == nil || err == redis.Nil {
+				out[key] = val
 			} else {
 				return nil, err
 			}
@@ -1044,12 +1045,12 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 	// Sum pending queues
 	for p := maxPriority; p >= minPriority; p-- {
 		if resultIdx < len(results) {
-			if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
-				if intVal, ok := val.(int64); ok {
-					ready += intVal
+			if intCmd, ok := results[resultIdx].(*redis.IntCmd); ok {
+				if err := intCmd.Err(); err == nil || err == redis.Nil {
+					ready += intCmd.Val()
+				} else {
+					return nil, err
 				}
-			} else {
-				return nil, err
 			}
 		}
 		resultIdx++
@@ -1058,12 +1059,12 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 	// In-progress count
 	var inprog int64
 	if resultIdx < len(results) {
-		if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
-			if intVal, ok := val.(int64); ok {
-				inprog = intVal
+		if intCmd, ok := results[resultIdx].(*redis.IntCmd); ok {
+			if err := intCmd.Err(); err == nil || err == redis.Nil {
+				inprog = intCmd.Val()
+			} else {
+				return nil, err
 			}
-		} else {
-			return nil, err
 		}
 	}
 	resultIdx++
@@ -1071,12 +1072,12 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 	// Delayed count
 	var delayed int64
 	if resultIdx < len(results) {
-		if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
-			if intVal, ok := val.(int64); ok {
-				delayed = intVal
+		if intCmd, ok := results[resultIdx].(*redis.IntCmd); ok {
+			if err := intCmd.Err(); err == nil || err == redis.Nil {
+				delayed = intCmd.Val()
+			} else {
+				return nil, err
 			}
-		} else {
-			return nil, err
 		}
 	}
 	resultIdx++
@@ -1084,12 +1085,12 @@ func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*do
 	// DLQ count
 	var dlq int64
 	if resultIdx < len(results) {
-		if val, err := results[resultIdx].Val(), results[resultIdx].Err(); err == nil || err == redis.Nil {
-			if intVal, ok := val.(int64); ok {
-				dlq = intVal
+		if intCmd, ok := results[resultIdx].(*redis.IntCmd); ok {
+			if err := intCmd.Err(); err == nil || err == redis.Nil {
+				dlq = intCmd.Val()
+			} else {
+				return nil, err
 			}
-		} else {
-			return nil, err
 		}
 	}
 
@@ -1120,12 +1121,12 @@ func (r *taskRedisRepo) PendingLength(ctx context.Context, cmd domain.Command) (
 	// Sum all results
 	var total int64
 	for _, result := range results {
-		if val, err := result.Val(), result.Err(); err == nil || err == redis.Nil {
-			if intVal, ok := val.(int64); ok {
-				total += intVal
+		if intCmd, ok := result.(*redis.IntCmd); ok {
+			if err := intCmd.Err(); err == nil || err == redis.Nil {
+				total += intCmd.Val()
+			} else {
+				return 0, err
 			}
-		} else {
-			return 0, err
 		}
 	}
 	return total, nil

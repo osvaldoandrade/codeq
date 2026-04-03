@@ -71,16 +71,14 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	}
 
 	// Check if HGet result is nil
-	js, err := results[1].Val(), results[1].Err()
+	hgetCmd := results[1].(*redis.StringCmd)
+	js, err := hgetCmd.Val(), hgetCmd.Err()
 	if err == redis.Nil || js == "" || err != nil {
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("redis HGET task: %w", err)
-	}
 
 	var t domain.Task
-	if err := sonic.Unmarshal([]byte(js.(string)), &t); err != nil {
+	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
 	t.ResultKey = r.keyResultsHash()
