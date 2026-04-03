@@ -252,6 +252,79 @@ Agentic workflow that:
 
 ---
 
+### Test Coverage (`test-coverage.yml`)
+
+**Trigger**:
+- Push to `main` or `copilot/**` branches
+- Pull requests to `main`
+- Path-triggered: Only on changes to Go files, go.mod, or go.sum
+
+**Purpose**: Run unit tests and measure code coverage
+
+**Description**:
+
+Automated test execution workflow that:
+- Runs unit tests for core packages (backoff, repository, services, domain, config)
+- Generates coverage report and extracts total coverage percentage
+- Verifies coverage meets 70% threshold
+- Posts coverage summary to workflow run step summary
+- Archives coverage artifacts for 30 days
+- Runs on every PR and commit to main
+
+**Permissions**: `contents: read`, `pull-requests: write`
+
+**Example Output**: Step Summary shows total coverage percentage and pass/fail status against 70% threshold
+
+---
+
+### Benchmark Regression (`benchmark-regression.yml`)
+
+**Trigger**:
+- Push to `main` or `copilot/**` branches
+- Pull requests to `main`
+- Path-triggered: Only on changes to Go files, internal/bench/, go.mod, or go.sum
+
+**Purpose**: Detect performance regressions early through automated benchmarking
+
+**Description**:
+
+Automated benchmark workflow that:
+- Runs Go benchmarks (`BenchmarkHTTP_CreateClaimComplete` and `BenchmarkScheduler_CreateClaimComplete`)
+- Executes 10-second iterations with 3 runs each
+- Compares results against baseline metrics
+- Archives results for 90 days (history retention: 1 year for trend analysis)
+- Posts detailed benchmark output to workflow run step summary
+- Fails workflow if regressions are detected
+
+**Benchmarks Tracked**:
+- `BenchmarkHTTP_CreateClaimComplete` — HTTP layer create→claim→complete cycle
+- `BenchmarkScheduler_CreateClaimComplete` — Direct scheduler create→claim→complete cycle
+
+**Baseline Metrics** (from `docs/30-performance-baselines.md`):
+- HTTP benchmark: ~3.2ms/op, ~2MB/op
+- Scheduler benchmark: ~3.1ms/op, ~1.9MB/op
+
+**Permissions**: `contents: read`, `pull-requests: write`
+
+**Example Output**: Step Summary includes per-benchmark breakdown with ns/op, allocs/op, and comparison to previous runs
+
+**Local Reproduction**:
+
+````bash
+# Run benchmarks locally with same parameters
+go test -bench=. -benchtime=10s -count=3 -benchmem ./internal/bench
+````
+
+**Interpretation Guide**:
+
+See `.github/copilot/instructions/07-benchmark-regression-ci.md` for:
+- How to read benchmark output
+- Common performance bottlenecks
+- Optimization strategies
+- Regression detection workflow
+
+---
+
 ## Workflow Configuration
 
 ### Secrets Required
