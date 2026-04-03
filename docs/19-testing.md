@@ -96,11 +96,12 @@ See: `pkg/domain/domain_test.go`
 - Idempotency Bloom filter optimization (skip negative GET)
 - Ghost Bloom filter optimization (skip HGET for deleted tasks)
 - Priority-based claim
-- Nack with DLQ handling
+- Nack with DLQ handling (SET-based data structure)
 - Delayed queue scheduling
 - Lease expiry and cleanup
 - Heartbeat and abandon
 - Admin queues and stats
+- DLQ migration validation (LIST → SET conversion)
 
 **Result Repository**:
 - Task retrieval
@@ -137,7 +138,28 @@ The repository includes specific tests for both Bloom filter optimizations:
 
 These tests ensure the Bloom filter optimizations deliver measurable Redis operation reductions without compromising correctness.
 
+**DLQ Migration Tests**:
+
+The repository includes comprehensive migration tests validating the breaking change from LIST-based to SET-based DLQ structure. These tests ensure operators can safely migrate existing deployments using either drain-and-cutover or in-place conversion strategies:
+
+See: `internal/repository/dlq_migration_test.go` (611 lines, 9 test functions)
+
+Migration test scenarios:
+
+1. **`TestDLQMigrationOptionA_DrainAndCutover`**: Validates drain-and-cutover migration path where workers drain legacy LIST-based DLQ before system switches to SET-based DLQ for new entries
+2. **`TestDLQMigrationOptionB_InPlaceConversion`**: Validates in-place LIST→SET conversion using RENAME, LRANGE, SADD, DEL during freeze window
+3. **`TestInProgressMigrationOptionB_InPlaceConversion`**: Validates in-place conversion for in-progress queue (also LIST→SET)
+4. **`TestDLQMigrationEmptyQueue`**: Verifies migration succeeds with empty DLQ (fresh deploy or already drained)
+5. **`TestDLQMigrationLargeQueue`**: Validates in-place conversion with 1,000 DLQ entries to ensure LRANGE + SADD handles bulk data correctly
+6. **`TestDLQMigrationTaskIntegrity`**: Verifies task JSON data in tasks hash is preserved after DLQ migration
+7. **`TestDLQMigrationRollback`**: Validates rollback procedure converting SET-based DLQ back to LIST if needed
+8. **`TestDLQMigrationConcurrentAccess`**: Verifies SET-based DLQ handles concurrent SADD and SREM operations (migration window scenario)
+9. **`TestDLQMigrationDuplicateProtection`**: Verifies SET-based DLQ prevents duplicate task IDs
+
+These tests ensure safe migration paths and data integrity as documented in [`docs/migration.md`](migration.md).
+
 ### Services Layer (66.7%)
+
 
 **Scheduler Service**:
 - Task creation with validation
