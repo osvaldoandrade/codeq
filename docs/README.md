@@ -63,3 +63,4 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 ### Migration Guides (Task-Oriented)
 
 23. `docs/23-migration-plugin-system.md` - Migration from identity-middleware to plugin system
+31. `docs/31-persistence-migration-guide.md` - Persistence plugin migration, backward compatibility, and configuration guide
