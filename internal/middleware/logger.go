@@ -1,8 +1,9 @@
 package middleware
 
 import (
-	"github.com/gin-gonic/gin"
 	"log/slog"
+
+	"github.com/gin-gonic/gin"
 )
 
 func LoggerMiddleware(logger *slog.Logger) gin.HandlerFunc {

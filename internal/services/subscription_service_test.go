@@ -3,13 +3,13 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
-	"time"
 )
 
 func setupSubscriptionServiceTest(t *testing.T) (context.Context, SubscriptionService) {
