@@ -234,6 +234,38 @@ func signProducerJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub strin
 	return signingInput + "." + s
 }
 
+func signAdminJWT(t *testing.T, key *rsa.PrivateKey, kid, iss, aud, sub string) string {
+	t.Helper()
+	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
+	now := time.Now().Unix()
+	payload := map[string]any{
+		"iss":      iss,
+		"aud":      aud,
+		"sub":      sub,
+		"exp":      now + 3600,
+		"iat":      now - 10,
+		"jti":      "jid-admin",
+		"tenantId": "test-tenant",
+		"email":    "admin@codeq.local",
+		"role":     "ADMIN",
+		"scope":    "codeq:admin",
+	}
+	enc := func(v any) string {
+		b, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	h := enc(header)
+	p := enc(payload)
+	signingInput := h + "." + p
+	hashed := sha256.Sum256([]byte(signingInput))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, hashed[:])
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	s := base64.RawURLEncoding.EncodeToString(sig)
+	return signingInput + "." + s
+}
+
 func createTask(t *testing.T, ctx context.Context, baseURL, token, webhook string) string {
 	t.Helper()
 	body := map[string]any{
@@ -336,4 +368,162 @@ func doJSON(t *testing.T, ctx context.Context, method, url, token string, body a
 		_ = json.Unmarshal(b, out)
 	}
 	return resp.StatusCode, string(b)
+}
+
+// TestHTTPIntegrationFlow_Sharded verifies that the full task lifecycle works
+// correctly when queue sharding is enabled with multiple Redis backends.
+// It tests both shard routing and cross-shard admin aggregation.
+func TestHTTPIntegrationFlow_Sharded(t *testing.T) {
+	ctx := context.Background()
+
+	// Create two separate miniredis instances simulating two shard backends
+	mrPrimary, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis primary: %v", err)
+	}
+	t.Cleanup(mrPrimary.Close)
+
+	mrCompute, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("miniredis compute: %v", err)
+	}
+	t.Cleanup(mrCompute.Close)
+
+	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa key gen: %v", err)
+	}
+	const kid = "test-kid-shard"
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := base64.RawURLEncoding.EncodeToString(privKey.PublicKey.N.Bytes())
+		eBytes := []byte{0x01, 0x00, 0x01}
+		e := base64.RawURLEncoding.EncodeToString(eBytes)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"keys": []map[string]any{{"kty": "RSA", "kid": kid, "n": n, "e": e}},
+		})
+	}))
+	t.Cleanup(jwksSrv.Close)
+
+	cfg := &config.Config{
+		Port:                               0,
+		RedisAddr:                          mrPrimary.Addr(),
+		IdentityJwksURL:                    jwksSrv.URL,
+		IdentityIssuer:                     "codeq-test",
+		IdentityAudience:                   "codeq-producer",
+		Timezone:                           "UTC",
+		LogLevel:                           "error",
+		LogFormat:                          "json",
+		Env:                                "test",
+		DefaultLeaseSeconds:                60,
+		RequeueInspectLimit:                50,
+		LocalArtifactsDir:                  "/tmp/codeq-artifacts-test-shard",
+		MaxAttemptsDefault:                 5,
+		BackoffPolicy:                      "fixed",
+		BackoffBaseSeconds:                 1,
+		BackoffMaxSeconds:                  3,
+		WorkerJwksURL:                      jwksSrv.URL,
+		WorkerAudience:                     "codeq-worker",
+		WorkerIssuer:                       "codeq-test",
+		AllowedClockSkewSeconds:            60,
+		WebhookHmacSecret:                  "secret",
+		SubscriptionMinIntervalSeconds:     5,
+		SubscriptionCleanupIntervalSeconds: 60,
+		ResultWebhookMaxAttempts:           3,
+		ResultWebhookBaseBackoffSeconds:    1,
+		ResultWebhookMaxBackoffSeconds:     2,
+		Sharding: config.ShardingConfig{
+			Enabled:      true,
+			DefaultShard: "primary",
+			CommandMappings: map[string]string{
+				"GENERATE_MASTER": "compute",
+			},
+			TenantOverrides: map[string]string{},
+			Backends: map[string]config.ShardBackendConfig{
+				"primary": {Address: mrPrimary.Addr(), PoolSize: 5},
+				"compute": {Address: mrCompute.Addr(), PoolSize: 5},
+			},
+		},
+	}
+
+	cfg.ProducerAuthProvider = "jwks"
+	cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
+		"jwksUrl":     cfg.IdentityJwksURL,
+		"issuer":      cfg.IdentityIssuer,
+		"audience":    cfg.IdentityAudience,
+		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		"httpTimeout": 5 * time.Second,
+	})
+	cfg.WorkerAuthProvider = "jwks"
+	cfg.WorkerAuthConfig, _ = json.Marshal(map[string]interface{}{
+		"jwksUrl":     cfg.WorkerJwksURL,
+		"issuer":      cfg.WorkerIssuer,
+		"audience":    cfg.WorkerAudience,
+		"clockSkew":   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+		"httpTimeout": 5 * time.Second,
+	})
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("config validate: %v", err)
+	}
+
+	app, err := NewApplication(cfg)
+	if err != nil {
+		t.Fatalf("app init: %v", err)
+	}
+	SetupMappings(app)
+	server := httptest.NewServer(app.Engine)
+	t.Cleanup(server.Close)
+
+	workerToken := signWorkerJWT(t, privKey, kid, "codeq-test", "codeq-worker", "worker-1")
+	producerToken := signProducerJWT(t, privKey, kid, "codeq-test", "codeq-producer", "user-1")
+
+	// Create task (GENERATE_MASTER → compute shard)
+	taskID := createTask(t, ctx, server.URL, producerToken, "")
+
+	// Verify task data is on compute shard, NOT primary
+	computeClient := redis.NewClient(&redis.Options{Addr: mrCompute.Addr()})
+	t.Cleanup(func() { _ = computeClient.Close() })
+	primaryClient := redis.NewClient(&redis.Options{Addr: mrPrimary.Addr()})
+	t.Cleanup(func() { _ = primaryClient.Close() })
+
+	taskJSON, err := computeClient.HGet(ctx, "codeq:tasks", taskID).Result()
+	if err != nil || taskJSON == "" {
+		t.Fatalf("expected task on compute shard, got err=%v", err)
+	}
+	_, err = primaryClient.HGet(ctx, "codeq:tasks", taskID).Result()
+	if err == nil {
+		t.Fatal("task should NOT be on primary shard")
+	}
+
+	// Task operations through sharded repository: claim → heartbeat → nack → claim
+	claimTask(t, ctx, server.URL, workerToken, taskID)
+	heartbeatTask(t, ctx, server.URL, workerToken, taskID)
+	nackTask(t, ctx, server.URL, workerToken, taskID)
+	claimTask(t, ctx, server.URL, workerToken, taskID)
+
+	// Verify admin queues endpoint works with sharding (aggregates across shards)
+	adminToken := signAdminJWT(t, privKey, kid, "codeq-test", "codeq-producer", "admin-1")
+	var queues map[string]any
+	status, body := doJSON(t, ctx, http.MethodGet, server.URL+"/v1/codeq/admin/queues", adminToken, nil, &queues)
+	if status != http.StatusOK {
+		t.Fatalf("admin queues status %d body=%s", status, body)
+	}
+
+	// Verify queue stats endpoint works for sharded command
+	var stats map[string]any
+	status, body = doJSON(t, ctx, http.MethodGet, server.URL+"/v1/codeq/admin/queues/GENERATE_MASTER", adminToken, nil, &stats)
+	if status != http.StatusOK {
+		t.Fatalf("queue stats status %d body=%s", status, body)
+	}
+
+	// Verify GET task works (fans out to correct shard)
+	var task domain.Task
+	status, body = doJSON(t, ctx, http.MethodGet, server.URL+"/v1/codeq/tasks/"+taskID, producerToken, nil, &task)
+	if status != http.StatusOK {
+		t.Fatalf("get task status %d body=%s", status, body)
+	}
+	if task.ID != taskID {
+		t.Fatalf("get task returned wrong id: %s", task.ID)
+	}
 }
