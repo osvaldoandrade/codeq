@@ -53,6 +53,11 @@ func (m *ClientMap) DefaultClient() *redis.Client {
 	return m.clients[m.defaultShard]
 }
 
+// DefaultShard returns the default shard identifier.
+func (m *ClientMap) DefaultShard() string {
+	return m.defaultShard
+}
+
 // ShardIDs returns all shard identifiers in the map.
 func (m *ClientMap) ShardIDs() []string {
 	ids := make([]string, 0, len(m.clients))

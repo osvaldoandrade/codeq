@@ -9,6 +9,13 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
+// isNotFoundErr checks whether an error represents a "not-found" condition.
+// This maintains compatibility with the existing error convention used
+// throughout the codebase (fmt.Errorf("not-found")).
+func isNotFoundErr(err error) bool {
+	return err != nil && err.Error() == "not-found"
+}
+
 // shardedTaskRepository distributes task operations across multiple Redis backends.
 // Each shard gets its own taskRedisRepo instance, and operations are routed to the
 // appropriate shard based on the ShardSupplier resolution.
@@ -49,7 +56,7 @@ func NewShardedTaskRepository(
 	return &shardedTaskRepository{
 		shardSupplier: shardSupplier,
 		repos:         repos,
-		defaultShard:  shardIDs[0], // first shard as fallback
+		defaultShard:  clientMap.DefaultShard(),
 	}
 }
 
@@ -95,7 +102,7 @@ func (s *shardedTaskRepository) Heartbeat(ctx context.Context, taskID string, wo
 		if err == nil {
 			return nil
 		}
-		if err.Error() != "not-found" {
+		if !isNotFoundErr(err) {
 			return err
 		}
 	}
@@ -108,7 +115,7 @@ func (s *shardedTaskRepository) Abandon(ctx context.Context, taskID string, work
 		if err == nil {
 			return nil
 		}
-		if err.Error() != "not-found" {
+		if !isNotFoundErr(err) {
 			return err
 		}
 	}
@@ -121,7 +128,7 @@ func (s *shardedTaskRepository) Nack(ctx context.Context, taskID string, workerI
 		if err == nil {
 			return delay, dlq, nil
 		}
-		if err.Error() != "not-found" {
+		if !isNotFoundErr(err) {
 			return 0, false, err
 		}
 	}
@@ -156,7 +163,7 @@ func (s *shardedTaskRepository) Get(ctx context.Context, taskID string) (*domain
 		if err == nil {
 			return task, nil
 		}
-		if err.Error() != "not-found" {
+		if !isNotFoundErr(err) {
 			return nil, err
 		}
 	}
