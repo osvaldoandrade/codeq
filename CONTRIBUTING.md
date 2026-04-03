@@ -128,6 +128,33 @@ Closes #123
 - Add comments for complex logic
 - Keep functions focused and concise
 
+### Import Organization
+
+Go imports must be organized in the following order (with blank lines separating groups):
+
+1. **Standard library imports** (e.g., `fmt`, `context`, `io`)
+2. **External dependency imports** (e.g., `github.com`, `golang.org`)
+3. **Internal imports** (e.g., `codeq/pkg`, `codeq/internal`)
+
+Example:
+````go
+import (
+	"context"
+	"fmt"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/prometheus/client_golang/prometheus"
+
+	"codeq/internal/repository"
+	"codeq/pkg/domain"
+)
+````
+
+Use `goimports -w` to automatically format and organize imports:
+````bash
+goimports -w ./...
+````
+
 ## Testing
 
 ### Unit Tests
