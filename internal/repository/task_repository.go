@@ -339,26 +339,47 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 	}
 	js := marshal(task)
 
-	// HASH único: field=id, value=JSON
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), id, js).Err(); err != nil {
-		return nil, fmt.Errorf("redis HSET task: %w", err)
-	}
+	// Batch all three operations into a single pipeline for 67% latency reduction (3 RTTs → 1 RTT).
+	// Operations: HSet task data, ZAdd TTL index, and LPush/ZAdd queue.
+	pipe := r.rdb.Pipeline()
+	defer pipe.Close()
 
-	// Índice de retenção (não faz limpeza agora)
-	if err := r.registerTTL(ctx, id, now.Add(taskRetention)); err != nil {
-		return nil, fmt.Errorf("redis ZADD ttl-index: %w", err)
-	}
+	// Add task to main hash
+	pipe.HSet(ctx, r.keyTasksHash(), id, js)
 
-	// Enfileira na lista pending (imediato) ou no ZSET delayed (agendado).
+	// Add to TTL index for retention tracking
+	ttlScore := float64(now.Add(taskRetention).UTC().Unix())
+	pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: ttlScore, Member: id})
+
+	// Add to queue (either pending or delayed)
 	sid := r.currentShard(ctx, cmd, tenantID)
 	if scheduled {
 		visibleAtUnix := visibleAt.UTC().Unix()
-		if err := r.rdb.ZAdd(ctx, r.keyQueueDelayed(cmd, tenantID, sid), &redis.Z{Score: float64(visibleAtUnix), Member: id}).Err(); err != nil {
-			return nil, fmt.Errorf("redis ZADD delayed: %w", err)
-		}
+		pipe.ZAdd(ctx, r.keyQueueDelayed(cmd, tenantID, sid), &redis.Z{Score: float64(visibleAtUnix), Member: id})
 	} else {
-		if err := r.rdb.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID, sid), id).Err(); err != nil {
-			return nil, fmt.Errorf("redis LPUSH queue: %w", err)
+		pipe.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID, sid), id)
+	}
+
+	// Execute all operations in a single round-trip
+	cmds, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("redis pipeline enqueue: %w", err)
+	}
+
+	// Validate that all three commands succeeded
+	for i, cmd := range cmds {
+		if cmd.Err() != nil {
+			switch i {
+			case 0:
+				return nil, fmt.Errorf("redis HSET task: %w", cmd.Err())
+			case 1:
+				return nil, fmt.Errorf("redis ZADD ttl-index: %w", cmd.Err())
+			case 2:
+				if scheduled {
+					return nil, fmt.Errorf("redis ZADD delayed: %w", cmd.Err())
+				}
+				return nil, fmt.Errorf("redis LPUSH queue: %w", cmd.Err())
+			}
 		}
 	}
 
