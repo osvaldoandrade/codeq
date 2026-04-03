@@ -92,9 +92,9 @@ The Redis plugin uses the **exact same key formats** as the direct repository im
 When using tenant isolation or sharding, keys include additional segments:
 
 ```
-codeq:q:<cmd>:<tenant>:pending:<priority>        # with tenant
-codeq:q:<cmd>:s:<shard>:pending:<priority>        # with shard
-codeq:q:<cmd>:<tenant>:s:<shard>:pending:<priority>  # both
+codeq:q:<cmd>:<tenant>:pending:<priority>             # with tenant
+codeq:q:<cmd>:s:<shard>:pending:<priority>            # with shard
+codeq:q:<cmd>:<tenant>:s:<shard>:pending:<priority>   # both
 ```
 
 ## Rollback Instructions
