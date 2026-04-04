@@ -66,6 +66,80 @@ Response `202`:
 
 The `tenantId` field is automatically populated from JWT claims and cannot be specified in the request. It ensures complete isolation between tenants.
 
+## Create tasks (batch)
+
+`POST /v1/codeq/tasks/batch`
+
+Auth: producer token.
+
+**Rate limiting:** When producer rate limiting is enabled, may return `429 Too Many Requests` (same as single create).
+
+Batch create allows creating up to 100 tasks in a single request. Each task in the batch is processed independently—if one task fails, the others still succeed. The response contains results for each task.
+
+Request body:
+
+- `tasks` (array, required): array of task objects, max 100 items
+  - Each task object has the same fields as the single create endpoint: `command`, `payload`, `priority`, `maxAttempts`, `webhook`, `idempotencyKey`, `runAt`, `delaySeconds`
+
+Example:
+
+```json
+{
+  "tasks": [
+    {
+      "command": "GENERATE_MASTER",
+      "payload": {"jobId": "j-123"},
+      "priority": 5
+    },
+    {
+      "command": "RENDER_VIDEO",
+      "payload": {"videoId": "v-456"},
+      "priority": 3,
+      "maxAttempts": 3
+    }
+  ]
+}
+```
+
+Response `200`:
+
+````json
+{
+  "results": [
+    {
+      "task": {
+        "id": "a5a4d2ad-5f7e-4a55-a070-29a9a4c2a8f4",
+        "command": "GENERATE_MASTER",
+        "payload": "{\"jobId\":\"j-123\"}",
+        "priority": 5,
+        "status": "PENDING",
+        "tenantId": "tenant-abc123",
+        "createdAt": "2026-01-25T10:00:00-03:00",
+        "updatedAt": "2026-01-25T10:00:00-03:00"
+      }
+    },
+    {
+      "task": {
+        "id": "b6b5d3be-6g8f-5b66-b181-39b0b5d3b9g5",
+        "command": "RENDER_VIDEO",
+        "payload": "{\"videoId\":\"v-456\"}",
+        "priority": 3,
+        "status": "PENDING",
+        "tenantId": "tenant-abc123",
+        "createdAt": "2026-01-25T10:00:00-03:00",
+        "updatedAt": "2026-01-25T10:00:00-03:00"
+      }
+    }
+  ]
+}
+````
+
+**Notes:**
+- Partial success is possible: each task result includes either `task` (success) or `error` (failure)
+- Maximum batch size is 100 tasks
+- All batch rate limiting is applied at the batch level (not per-task)
+- `tenantId` is automatically populated for all created tasks
+
 ## Claim task (pull)
 
 `POST /v1/codeq/tasks/claim`
@@ -88,6 +162,72 @@ Response:
 
 - `200` with task
 - `204` if no task is available
+
+## Claim tasks (batch)
+
+`POST /v1/codeq/tasks/claim/batch`
+
+Auth: worker token with `codeq:claim`.
+
+**Rate limiting:** When worker claim rate limiting is enabled, may return `429 Too Many Requests` (same as single claim).
+
+Batch claim allows claiming up to 10 tasks in a single request. Tasks are claimed sequentially; if a claim succeeds but subsequent claims fail, partial results are returned.
+
+Request body:
+
+- `count` (int, required): number of tasks to claim, max 10
+- `commands` (array, optional): subset of token `eventTypes`. Default is token `eventTypes`.
+- `leaseSeconds` (int, optional, default 300)
+
+Example:
+
+```json
+{
+  "count": 5,
+  "commands": ["GENERATE_MASTER", "RENDER_VIDEO"],
+  "leaseSeconds": 600
+}
+```
+
+Response `200` (when tasks are claimed):
+
+````json
+{
+  "tasks": [
+    {
+      "id": "a5a4d2ad-5f7e-4a55-a070-29a9a4c2a8f4",
+      "command": "GENERATE_MASTER",
+      "payload": "{\"jobId\":\"j-123\"}",
+      "priority": 5,
+      "status": "CLAIMED",
+      "tenantId": "tenant-abc123",
+      "claimedBy": "worker-123",
+      "claimedAt": "2026-01-25T10:00:00-03:00",
+      "expiresAt": "2026-01-25T10:10:00-03:00"
+    },
+    {
+      "id": "b6b5d3be-6g8f-5b66-b181-39b0b5d3b9g5",
+      "command": "RENDER_VIDEO",
+      "payload": "{\"videoId\":\"v-456\"}",
+      "priority": 3,
+      "status": "CLAIMED",
+      "tenantId": "tenant-abc123",
+      "claimedBy": "worker-123",
+      "claimedAt": "2026-01-25T10:00:05-03:00",
+      "expiresAt": "2026-01-25T10:10:05-03:00"
+    }
+  ]
+}
+````
+
+Response `204` (no content): when no tasks are available.
+
+**Notes:**
+- Maximum batch size is 10 tasks
+- If some claims succeed and later claims fail, successful claims are returned with an `error` field indicating the reason for stopping
+- Worker must have permission (`eventTypes`) for all claimed tasks
+- Each claimed task has an `expiresAt` timestamp after which the lease expires and the task becomes visible again
+
 
 ## Heartbeat
 
@@ -149,6 +289,76 @@ Response `200`:
 Result submission is terminal. To retry work, use `/tasks/:id/nack` before completion.
 
 When a task has `webhook`, codeQ sends a result callback with the payload defined in `docs/12-webhooks.md`.
+
+## Submit results (batch)
+
+`POST /v1/codeq/tasks/batch/results`
+
+Auth: worker token with `codeq:result`.
+
+Batch result submission allows submitting results for up to 100 tasks in a single request. Each result is processed independently—if one submission fails, the others still succeed.
+
+Request body:
+
+- `results` (array, required): array of result objects, max 100 items
+  - `taskId` (string, required): the task ID
+  - `status` (string, required): `COMPLETED` or `FAILED`
+  - `result` (object, required if `COMPLETED`)
+  - `error` (string, required if `FAILED`)
+  - `artifacts` (array, optional): same structure as single submit result
+
+Example:
+
+```json
+{
+  "results": [
+    {
+      "taskId": "a5a4d2ad-5f7e-4a55-a070-29a9a4c2a8f4",
+      "status": "COMPLETED",
+      "result": {"ok": true, "data": "..."}
+    },
+    {
+      "taskId": "b6b5d3be-6g8f-5b66-b181-39b0b5d3b9g5",
+      "status": "FAILED",
+      "error": "Timeout during processing"
+    }
+  ]
+}
+```
+
+Response `200`:
+
+````json
+{
+  "results": [
+    {
+      "taskId": "a5a4d2ad-5f7e-4a55-a070-29a9a4c2a8f4",
+      "result": {
+        "taskId": "a5a4d2ad-5f7e-4a55-a070-29a9a4c2a8f4",
+        "status": "COMPLETED",
+        "result": {"ok": true, "data": "..."},
+        "completedAt": "2026-01-25T13:05:00Z"
+      }
+    },
+    {
+      "taskId": "b6b5d3be-6g8f-5b66-b181-39b0b5d3b9g5",
+      "result": {
+        "taskId": "b6b5d3be-6g8f-5b66-b181-39b0b5d3b9g5",
+        "status": "FAILED",
+        "error": "Timeout during processing",
+        "completedAt": "2026-01-25T13:05:10Z"
+      }
+    }
+  ]
+}
+````
+
+**Notes:**
+- Partial success is possible: each result includes either a success response or an `error` field
+- Maximum batch size is 100 results
+- Result submission is terminal for each task—use single `/tasks/:id/nack` to retry
+- Webhooks are triggered for each task that has one configured
+- Worker ID is automatically populated from JWT claims for all results
 
 ## NACK
 
