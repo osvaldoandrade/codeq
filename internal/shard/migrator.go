@@ -88,15 +88,32 @@ func Migrate(ctx context.Context, clients *ClientMap, opts MigrateOptions) (*Mig
 		res.DelayedMigrated = n
 	}
 
-	// Migrate in-progress queue (sorted set with lease scores)
+	// Migrate in-progress queue (set with lease tracking).
+	// Tasks in this queue have corresponding lease keys (codeq:lease:<id>). Moving
+	// the queue entries without also moving those leases would make them appear
+	// expired on the destination shard and can trigger premature requeue or
+	// duplication. Until lease-key migration is implemented, require operators
+	// to drain in-progress work before migrating.
 	{
 		srcKey := QueueKeyInProgress(opts.Command, opts.TenantID, opts.FromShard)
 		dstKey := QueueKeyInProgress(opts.Command, opts.TenantID, opts.ToShard)
-		n, err := migrateSet(ctx, src, dst, srcKey, dstKey, opts, "inprog")
+
+		inProgCount, err := src.SCard(ctx, srcKey).Result()
 		if err != nil {
-			return res, fmt.Errorf("migrate in-progress: %w", err)
+			return res, fmt.Errorf("check in-progress queue %q: %w", srcKey, err)
 		}
-		res.InProgMigrated = n
+		if inProgCount > 0 && !opts.DryRun {
+			return res, fmt.Errorf("cannot migrate: %d tasks are still in progress in %q (lease keys are not migrated); drain in-progress work before retrying", inProgCount, srcKey)
+		}
+		if opts.DryRun && inProgCount > 0 {
+			if opts.OnProgress != nil {
+				opts.OnProgress(MigrateProgress{QueueType: "inprog", Migrated: inProgCount, Total: inProgCount})
+			}
+			res.InProgMigrated = inProgCount
+		} else {
+			_ = dstKey // keep linter happy; will be used once lease migration is implemented
+			res.InProgMigrated = 0
+		}
 	}
 
 	// Migrate DLQ (set)
@@ -159,13 +176,15 @@ func migrateList(ctx context.Context, src, dst *redis.Client, srcKey, dstKey str
 			return migrated, fmt.Errorf("copy task data for %s: %w", srcKey, err)
 		}
 
-		// Push IDs to destination (preserving order)
+		// Push IDs to destination preserving FIFO order.
+		// LRANGE returns items in left-to-right order; RPUSH appends them at
+		// the right end so RPOP will drain them in the same order as the source.
 		ifaces := make([]interface{}, len(ids))
 		for i, id := range ids {
 			ifaces[i] = id
 		}
-		if err := dst.LPush(ctx, dstKey, ifaces...).Err(); err != nil {
-			return migrated, fmt.Errorf("LPUSH %s: %w", dstKey, err)
+		if err := dst.RPush(ctx, dstKey, ifaces...).Err(); err != nil {
+			return migrated, fmt.Errorf("RPUSH %s: %w", dstKey, err)
 		}
 
 		// Remove from source
@@ -302,10 +321,6 @@ func copyTaskData(ctx context.Context, src, dst *redis.Client, ids []string) err
 	}
 
 	// Read task data from source
-	ifaces := make([]interface{}, len(ids))
-	for i, id := range ids {
-		ifaces[i] = id
-	}
 	vals, err := src.HMGet(ctx, tasksHashKey, ids...).Result()
 	if err != nil {
 		return fmt.Errorf("HMGET %s: %w", tasksHashKey, err)

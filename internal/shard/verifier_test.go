@@ -101,15 +101,27 @@ func TestHealthCheck_UnhealthyShard(t *testing.T) {
 	}
 }
 
+func TestVerify_UnknownShardError(t *testing.T) {
+	ctx, _, _, cm := setupMigrationClients(t)
+
+	_, err := Verify(ctx, cm, "CMD", "", "nonexistent", "compute-shard")
+	if err == nil {
+		t.Error("expected error for unknown source shard")
+	}
+
+	_, err = Verify(ctx, cm, "CMD", "", "default", "nonexistent")
+	if err == nil {
+		t.Error("expected error for unknown destination shard")
+	}
+}
+
 func TestVerify_AllQueueTypes(t *testing.T) {
 	ctx, _, _, cm := setupMigrationClients(t)
 	src := cm.Client("default")
 
-	// Seed all queue types
+	// Seed queue types that can be migrated (no in-progress)
 	seedPendingTasks(ctx, t, src, "CMD", "", "default", 0, 2)
 	seedDelayedTasks(ctx, t, src, "CMD", "", "default", 3)
-	inprogKey := QueueKeyInProgress("CMD", "", "default")
-	seedSetTasks(ctx, t, src, inprogKey, 1, "ip")
 	dlqKey := QueueKeyDLQ("CMD", "", "default")
 	seedSetTasks(ctx, t, src, dlqKey, 4, "dq")
 
@@ -138,8 +150,8 @@ func TestVerify_AllQueueTypes(t *testing.T) {
 	if vr.DestCounts["delayed"] != 3 {
 		t.Errorf("dest delayed: got %d, want 3", vr.DestCounts["delayed"])
 	}
-	if vr.DestCounts["inprog"] != 1 {
-		t.Errorf("dest inprog: got %d, want 1", vr.DestCounts["inprog"])
+	if vr.DestCounts["inprog"] != 0 {
+		t.Errorf("dest inprog: got %d, want 0", vr.DestCounts["inprog"])
 	}
 	if vr.DestCounts["dlq"] != 4 {
 		t.Errorf("dest dlq: got %d, want 4", vr.DestCounts["dlq"])

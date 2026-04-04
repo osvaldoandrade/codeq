@@ -190,29 +190,36 @@ Also update the `commandMappings` in your server configuration to route new task
 
 ### Partial Migration Recovery
 
-If a migration fails partway through (e.g., network error), some tasks may already be on the destination. To recover:
+If a migration fails partway through (e.g., network error), some tasks may already be on the destination while still present on the source. Pending queue migration is **not idempotent** — re-running could insert duplicate task IDs into the destination list. To recover safely:
 
-1. **Run verification** to see current state:
+1. **Run a dry-run** to see remaining tasks on the source:
    ```bash
    codeq migrate-shards --config config.yaml \
        --command GENERATE_MASTER --from-shard default \
        --to-shard compute-shard --dry-run
    ```
-   This shows remaining tasks on the source.
 
-2. **Re-run migration** — the tool is idempotent for remaining tasks:
+2. **Rollback first, then re-run** — move everything back to the source, then perform a clean migration:
+   ```bash
+   # Move any tasks already on the destination back to source
+   codeq migrate-shards --config config.yaml \
+       --command GENERATE_MASTER --from-shard compute-shard \
+       --to-shard default --verify
+
+   # Re-run the full migration
+   codeq migrate-shards --config config.yaml \
+       --command GENERATE_MASTER --from-shard default \
+       --to-shard compute-shard --verify
+   ```
+
+3. **Or complete forward** — re-run the migration to move remaining tasks. Be aware that a small number of tasks may appear on both shards if the previous run was interrupted between writing to the destination and removing from the source. Use `--verify` to confirm counts:
    ```bash
    codeq migrate-shards --config config.yaml \
        --command GENERATE_MASTER --from-shard default \
        --to-shard compute-shard --verify
    ```
 
-3. **Or rollback** — move everything back:
-   ```bash
-   codeq migrate-shards --config config.yaml \
-       --command GENERATE_MASTER --from-shard compute-shard \
-       --to-shard default --verify
-   ```
+> **Note:** Delayed queues (sorted sets) and DLQ (sets) are safe from duplicates since their underlying data structures deduplicate members. Only pending queues (lists) are susceptible to duplicates after an interrupted migration.
 
 ## Performance Expectations
 

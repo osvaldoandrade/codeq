@@ -58,6 +58,12 @@ func (m *ClientMap) DefaultShard() string {
 	return m.defaultShard
 }
 
+// HasShard reports whether the given shard identifier exists in the map.
+func (m *ClientMap) HasShard(shardID string) bool {
+	_, ok := m.clients[shardID]
+	return ok
+}
+
 // ShardIDs returns all shard identifiers in the map.
 func (m *ClientMap) ShardIDs() []string {
 	ids := make([]string, 0, len(m.clients))

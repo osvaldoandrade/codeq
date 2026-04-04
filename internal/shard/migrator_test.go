@@ -138,6 +138,59 @@ func TestMigrate_PendingTasks(t *testing.T) {
 	}
 }
 
+func TestMigrate_PendingPreservesFIFOOrder(t *testing.T) {
+	ctx, _, _, cm := setupMigrationClients(t)
+	src := cm.Client("default")
+	dst := cm.Client("compute-shard")
+
+	// Seed tasks so that RPOP order on source is task-2, task-1, task-0
+	// (seedPendingTasks uses LPush, so list is [task-2, task-1, task-0])
+	seedPendingTasks(ctx, t, src, "CMD", "", "default", 0, 3)
+
+	// Verify source RPOP order before migration
+	srcKey := QueueKeyPending("CMD", "", "default", 0)
+	first, _ := src.LIndex(ctx, srcKey, -1).Result() // rightmost = first to pop
+	if first != "task-0" {
+		t.Fatalf("expected rightmost (first RPOP) to be task-0, got %s", first)
+	}
+
+	_, err := Migrate(ctx, cm, MigrateOptions{
+		Command:   "CMD",
+		FromShard: "default",
+		ToShard:   "compute-shard",
+		BatchSize: 10,
+	})
+	if err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Verify destination RPOP order matches source RPOP order
+	dstKey := QueueKeyPending("CMD", "", "compute-shard", 0)
+	firstDst, _ := dst.LIndex(ctx, dstKey, -1).Result()
+	if firstDst != "task-0" {
+		t.Errorf("FIFO broken: expected first RPOP to be task-0, got %s", firstDst)
+	}
+
+	// Pop all and verify full order
+	var order []string
+	for {
+		id, err := dst.RPop(ctx, dstKey).Result()
+		if err != nil {
+			break
+		}
+		order = append(order, id)
+	}
+	expected := []string{"task-0", "task-1", "task-2"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected %d tasks, got %d", len(expected), len(order))
+	}
+	for i, want := range expected {
+		if order[i] != want {
+			t.Errorf("position %d: got %s, want %s", i, order[i], want)
+		}
+	}
+}
+
 func TestMigrate_DelayedTasks(t *testing.T) {
 	ctx, _, _, cm := setupMigrationClients(t)
 	src := cm.Client("default")
@@ -202,7 +255,28 @@ func TestMigrate_DLQTasks(t *testing.T) {
 	}
 }
 
-func TestMigrate_InProgressTasks(t *testing.T) {
+func TestMigrate_InProgressTasks_BlocksWhenNonEmpty(t *testing.T) {
+	ctx, _, _, cm := setupMigrationClients(t)
+	src := cm.Client("default")
+
+	inprogKey := QueueKeyInProgress("GENERATE_MASTER", "", "default")
+	seedSetTasks(ctx, t, src, inprogKey, 2, "inprog")
+
+	_, err := Migrate(ctx, cm, MigrateOptions{
+		Command:   "GENERATE_MASTER",
+		FromShard: "default",
+		ToShard:   "compute-shard",
+		BatchSize: 10,
+	})
+	if err == nil {
+		t.Fatal("expected error when in-progress queue is non-empty")
+	}
+	if got := err.Error(); !contains(got, "still in progress") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestMigrate_InProgressTasks_DryRunReportsCounts(t *testing.T) {
 	ctx, _, _, cm := setupMigrationClients(t)
 	src := cm.Client("default")
 
@@ -213,14 +287,28 @@ func TestMigrate_InProgressTasks(t *testing.T) {
 		Command:   "GENERATE_MASTER",
 		FromShard: "default",
 		ToShard:   "compute-shard",
+		DryRun:    true,
 		BatchSize: 10,
 	})
 	if err != nil {
-		t.Fatalf("migrate: %v", err)
+		t.Fatalf("dry-run should not error: %v", err)
 	}
 	if res.InProgMigrated != 2 {
-		t.Errorf("expected 2 in-progress migrated, got %d", res.InProgMigrated)
+		t.Errorf("expected dry-run to report 2 in-progress, got %d", res.InProgMigrated)
 	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && searchSubstring(s, substr)
+}
+
+func searchSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMigrate_DryRun(t *testing.T) {
@@ -394,11 +482,9 @@ func TestMigrate_AllQueueTypes(t *testing.T) {
 	ctx, _, _, cm := setupMigrationClients(t)
 	src := cm.Client("default")
 
-	// Seed all queue types
+	// Seed queue types that can be migrated (no in-progress)
 	seedPendingTasks(ctx, t, src, "CMD", "", "default", 0, 2)
 	seedDelayedTasks(ctx, t, src, "CMD", "", "default", 3)
-	inprogKey := QueueKeyInProgress("CMD", "", "default")
-	seedSetTasks(ctx, t, src, inprogKey, 1, "ip")
 	dlqKey := QueueKeyDLQ("CMD", "", "default")
 	seedSetTasks(ctx, t, src, dlqKey, 2, "dq")
 
@@ -417,13 +503,13 @@ func TestMigrate_AllQueueTypes(t *testing.T) {
 	if res.DelayedMigrated != 3 {
 		t.Errorf("delayed: got %d, want 3", res.DelayedMigrated)
 	}
-	if res.InProgMigrated != 1 {
-		t.Errorf("inprog: got %d, want 1", res.InProgMigrated)
+	if res.InProgMigrated != 0 {
+		t.Errorf("inprog: got %d, want 0", res.InProgMigrated)
 	}
 	if res.DLQMigrated != 2 {
 		t.Errorf("dlq: got %d, want 2", res.DLQMigrated)
 	}
-	if res.TotalMigrated != 8 {
-		t.Errorf("total: got %d, want 8", res.TotalMigrated)
+	if res.TotalMigrated != 7 {
+		t.Errorf("total: got %d, want 7", res.TotalMigrated)
 	}
 }

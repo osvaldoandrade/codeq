@@ -10,7 +10,6 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/schollz/progressbar/v3"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 
 	"github.com/osvaldoandrade/codeq/internal/shard"
 	"github.com/osvaldoandrade/codeq/pkg/config"
@@ -204,17 +203,10 @@ Requires a codeQ server configuration file with sharding backends defined.`,
 	return migrate
 }
 
-// loadServerConfig loads a codeQ server configuration file.
+// loadServerConfig loads a codeQ server configuration file, applying
+// environment overrides and defaults consistent with the server startup path.
 func loadServerConfig(path string) (*config.Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	var cfg config.Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return &cfg, nil
+	return config.LoadConfig(path)
 }
 
 // buildClientMap creates a shard.ClientMap from the sharding configuration.

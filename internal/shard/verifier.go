@@ -23,6 +23,13 @@ type VerifyResult struct {
 // It counts remaining tasks in the source shard (should be zero after migration)
 // and tasks in the destination shard, and pings all shard connections.
 func Verify(ctx context.Context, clients *ClientMap, command, tenantID, fromShard, toShard string) (*VerifyResult, error) {
+	if !clients.HasShard(fromShard) {
+		return nil, fmt.Errorf("source shard %q not found in client map", fromShard)
+	}
+	if !clients.HasShard(toShard) {
+		return nil, fmt.Errorf("destination shard %q not found in client map", toShard)
+	}
+
 	src := clients.Client(fromShard)
 	dst := clients.Client(toShard)
 
