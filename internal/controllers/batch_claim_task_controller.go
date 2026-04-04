@@ -75,9 +75,11 @@ func (h *batchClaimTaskController) Handle(c *gin.Context) {
 	}
 
 	var tasks []*domain.Task
+	var claimErr string
 	for range req.Count {
 		task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, 0, tenantID)
 		if err != nil {
+			claimErr = err.Error()
 			break
 		}
 		if !ok {
@@ -87,8 +89,16 @@ func (h *batchClaimTaskController) Handle(c *gin.Context) {
 	}
 
 	if len(tasks) == 0 {
+		if claimErr != "" {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": claimErr})
+			return
+		}
 		c.Status(http.StatusNoContent)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"tasks": tasks})
+	resp := gin.H{"tasks": tasks}
+	if claimErr != "" {
+		resp["error"] = claimErr
+	}
+	c.JSON(http.StatusOK, resp)
 }

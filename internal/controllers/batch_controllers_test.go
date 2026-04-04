@@ -347,6 +347,60 @@ func TestBatchClaimTask_ForbiddenCommand(t *testing.T) {
 	}
 }
 
+func TestBatchClaimTask_ErrorReported(t *testing.T) {
+	svc := &mockSchedulerService{
+		claimFunc: func(_ context.Context, _ string, _ []domain.Command, _ int, _ int, _ string) (*domain.Task, bool, error) {
+			return nil, false, fmt.Errorf("redis connection failed")
+		},
+	}
+	ctrl := NewBatchClaimTaskController(svc)
+
+	body := jsonBody(t, map[string]any{"count": 3})
+	ctx, rec := newTestContext(t, body)
+	setWorkerClaims(ctx, "worker-1", []string{"*"})
+	ctrl.Handle(ctx)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestBatchClaimTask_PartialErrorReported(t *testing.T) {
+	callCount := 0
+	svc := &mockSchedulerService{
+		claimFunc: func(_ context.Context, _ string, _ []domain.Command, _ int, _ int, _ string) (*domain.Task, bool, error) {
+			callCount++
+			if callCount > 2 {
+				return nil, false, fmt.Errorf("connection lost")
+			}
+			return &domain.Task{ID: fmt.Sprintf("task-%d", callCount), Status: domain.StatusInProgress}, true, nil
+		},
+	}
+	ctrl := NewBatchClaimTaskController(svc)
+
+	body := jsonBody(t, map[string]any{"count": 5})
+	ctx, rec := newTestContext(t, body)
+	setWorkerClaims(ctx, "worker-1", []string{"*"})
+	ctrl.Handle(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Tasks []*domain.Task `json:"tasks"`
+		Error string         `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(resp.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(resp.Tasks))
+	}
+	if resp.Error == "" {
+		t.Error("expected error field in response")
+	}
+}
+
 // --- Batch Submit Result Tests ---
 
 func TestBatchSubmitResult_Success(t *testing.T) {
