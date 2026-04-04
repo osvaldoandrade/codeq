@@ -156,7 +156,7 @@ func migrateList(ctx context.Context, src, dst *redis.Client, srcKey, dstKey str
 
 		// Copy task data to destination
 		if err := copyTaskData(ctx, src, dst, ids); err != nil {
-			return migrated, err
+			return migrated, fmt.Errorf("copy task data for %s: %w", srcKey, err)
 		}
 
 		// Push IDs to destination (preserving order)
@@ -223,7 +223,7 @@ func migrateZSet(ctx context.Context, src, dst *redis.Client, srcKey, dstKey str
 
 		// Copy task data
 		if err := copyTaskData(ctx, src, dst, ids); err != nil {
-			return migrated, err
+			return migrated, fmt.Errorf("copy task data for %s: %w", srcKey, err)
 		}
 
 		// Add to destination sorted set
@@ -274,7 +274,7 @@ func migrateSet(ctx context.Context, src, dst *redis.Client, srcKey, dstKey stri
 
 		// Copy task data
 		if err := copyTaskData(ctx, src, dst, ids); err != nil {
-			return migrated, err
+			return migrated, fmt.Errorf("copy task data for %s: %w", srcKey, err)
 		}
 
 		// Add to destination set
@@ -313,9 +313,9 @@ func copyTaskData(ctx context.Context, src, dst *redis.Client, ids []string) err
 
 	// Read TTL scores for these tasks
 	pipe := src.Pipeline()
-	scoreCmds := make([]*redis.FloatSliceCmd, len(ids))
+	ttlScoreCmds := make([]*redis.FloatSliceCmd, len(ids))
 	for i, id := range ids {
-		scoreCmds[i] = pipe.ZMScore(ctx, ttlIndexKey, id)
+		ttlScoreCmds[i] = pipe.ZMScore(ctx, ttlIndexKey, id)
 	}
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return fmt.Errorf("pipeline ZMSCORE: %w", err)
@@ -334,8 +334,8 @@ func copyTaskData(ctx context.Context, src, dst *redis.Client, ids []string) err
 		dstPipe.HSet(ctx, tasksHashKey, id, js)
 
 		// Copy TTL index entry if present
-		if scoreCmds[i] != nil {
-			scores, _ := scoreCmds[i].Result()
+		if ttlScoreCmds[i] != nil {
+			scores, _ := ttlScoreCmds[i].Result()
 			if len(scores) > 0 && scores[0] > 0 {
 				dstPipe.ZAdd(ctx, ttlIndexKey, &redis.Z{Score: scores[0], Member: id})
 			}

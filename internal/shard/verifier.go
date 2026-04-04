@@ -112,7 +112,7 @@ func countQueueTasks(ctx context.Context, client *redis.Client, command, tenantI
 	dlqCmd := pipe.SCard(ctx, dlqKey)
 
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("pipeline count: %w", err)
+		return nil, fmt.Errorf("pipeline count for command=%s shard=%s: %w", command, shardID, err)
 	}
 
 	var pendingTotal int64

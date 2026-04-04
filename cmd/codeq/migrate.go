@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/schollz/progressbar/v3"
@@ -155,7 +156,7 @@ Requires a codeQ server configuration file with sharding backends defined.`,
 			fmt.Fprintf(os.Stderr, "  In-Progress: %s %d tasks\n", modeLabel, res.InProgMigrated)
 			fmt.Fprintf(os.Stderr, "  DLQ:         %s %d tasks\n", modeLabel, res.DLQMigrated)
 			fmt.Fprintf(os.Stderr, "  %s: %s %d tasks in %s\n",
-				ui.ok("Total"), modeLabel, res.TotalMigrated, res.Elapsed.Round(1000000))
+				ui.ok("Total"), modeLabel, res.TotalMigrated, res.Elapsed.Round(time.Millisecond))
 
 			// Post-migration verification
 			if verify && !dryRun {
