@@ -143,6 +143,53 @@ if (claimed) {
 }
 ```
 
+### Go SDK
+- **Location**: `sdks/go/`
+- **Frameworks**: Standard library, Gin, Echo, Fiber
+- **Features**:
+  - Zero external dependencies (standard library only)
+  - Context-based cancellation and timeouts
+  - Strong typing with Go structs
+  - Automatic retry with exponential backoff
+  - Thread-safe for concurrent use
+  - Full API coverage (tasks, subscriptions, admin)
+
+**Installation**:
+```bash
+go get github.com/osvaldoandrade/codeq/sdks/go
+```
+
+**Quick Start**:
+```go
+import codeq "github.com/osvaldoandrade/codeq/sdks/go"
+
+client := codeq.NewClient("https://codeq.example.com",
+    codeq.WithProducerToken("your-producer-token"),
+    codeq.WithWorkerToken("your-worker-token"),
+)
+
+// Create a task
+task, err := client.CreateTask(ctx, codeq.CreateTaskOptions{
+    Command: "GENERATE_MASTER",
+    Payload: map[string]any{"jobId": "123"},
+})
+
+// Claim a task
+waitSec := 10
+claimed, err := client.ClaimTask(ctx, codeq.ClaimTaskOptions{
+    Commands:    []string{"GENERATE_MASTER"},
+    WaitSeconds: &waitSec,
+})
+
+// Submit result
+if claimed != nil {
+    _, err := client.SubmitResult(ctx, claimed.ID, codeq.SubmitResultOptions{
+        Status: codeq.StatusCompleted,
+        Result: map[string]any{"success": true},
+    })
+}
+```
+
 ## 🚀 Integration Examples
 
 ### Java Examples
@@ -199,6 +246,8 @@ npm run start:dev
 - [Java Integration Guide](../docs/integrations/java-integration.md)
 - [Node.js/TypeScript Integration Guide](../docs/integrations/nodejs-integration.md)
 - [Python Integration Guide](../docs/integrations/python-integration.md)
+- [Go Integration Guide](../docs/integrations/go-integration.md)
+- [SDK Integration Overview](../SDK_INTEGRATION_OVERVIEW.md)
 
 ### Deployment Recipes
 - [Kubernetes Deployment](deploy/kubernetes/)
@@ -355,6 +404,12 @@ mvn test
 ```bash
 cd sdks/nodejs
 npm test
+```
+
+**Go**:
+```bash
+cd sdks/go
+go test -v ./...
 ```
 
 ### Integration Tests
