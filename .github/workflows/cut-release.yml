@@ -47,3 +47,16 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
 
+      - name: Create and push SDK tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ inputs.version }}"
+          GO_SDK_TAG="sdks/go/${TAG}"
+          if git rev-parse "$GO_SDK_TAG" >/dev/null 2>&1; then
+            echo "Tag $GO_SDK_TAG already exists, skipping."
+          else
+            git tag "$GO_SDK_TAG"
+            git push origin "$GO_SDK_TAG"
+          fi
+

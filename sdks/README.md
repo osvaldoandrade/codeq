@@ -17,7 +17,7 @@ This directory contains official SDKs and integration examples for CodeQ in mult
 
 **Installation**:
 ```bash
-go get github.com/osvaldoandrade/codeq-sdk-go
+go get github.com/osvaldoandrade/codeq/sdks/go
 ```
 
 **Quick Start**:
@@ -29,7 +29,7 @@ import (
 	"fmt"
 	"log"
 
-	codeq "github.com/osvaldoandrade/codeq-sdk-go"
+	codeq "github.com/osvaldoandrade/codeq/sdks/go"
 )
 
 func main() {
