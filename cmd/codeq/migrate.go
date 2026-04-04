@@ -230,5 +230,3 @@ func buildClientMap(sc config.ShardingConfig) (*shard.ClientMap, error) {
 	}
 	return shard.NewClientMap(clients, defaultShard)
 }
-
-

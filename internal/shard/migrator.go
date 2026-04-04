@@ -29,13 +29,13 @@ type MigrateOptions struct {
 
 // MigrateResult summarises a completed migration.
 type MigrateResult struct {
-	PendingMigrated  int64
-	DelayedMigrated  int64
-	InProgMigrated   int64
-	DLQMigrated      int64
-	TotalMigrated    int64
-	DryRun           bool
-	Elapsed          time.Duration
+	PendingMigrated int64
+	DelayedMigrated int64
+	InProgMigrated  int64
+	DLQMigrated     int64
+	TotalMigrated   int64
+	DryRun          bool
+	Elapsed         time.Duration
 }
 
 // Migrate moves tasks belonging to a command from one shard to another.

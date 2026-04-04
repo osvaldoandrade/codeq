@@ -55,9 +55,9 @@ func benchStdMarshal(b *testing.B, task domain.Task) {
 	}
 }
 
-func BenchmarkSonic_MarshalTask_Small(b *testing.B)  { benchSonicMarshal(b, sampleTask(64)) }
-func BenchmarkSonic_MarshalTask_Medium(b *testing.B) { benchSonicMarshal(b, sampleTask(1024)) }
-func BenchmarkSonic_MarshalTask_Large(b *testing.B)  { benchSonicMarshal(b, sampleTask(8192)) }
+func BenchmarkSonic_MarshalTask_Small(b *testing.B)    { benchSonicMarshal(b, sampleTask(64)) }
+func BenchmarkSonic_MarshalTask_Medium(b *testing.B)   { benchSonicMarshal(b, sampleTask(1024)) }
+func BenchmarkSonic_MarshalTask_Large(b *testing.B)    { benchSonicMarshal(b, sampleTask(8192)) }
 func BenchmarkStdJSON_MarshalTask_Small(b *testing.B)  { benchStdMarshal(b, sampleTask(64)) }
 func BenchmarkStdJSON_MarshalTask_Medium(b *testing.B) { benchStdMarshal(b, sampleTask(1024)) }
 func BenchmarkStdJSON_MarshalTask_Large(b *testing.B)  { benchStdMarshal(b, sampleTask(8192)) }
@@ -96,9 +96,9 @@ func benchStdUnmarshal(b *testing.B, task domain.Task) {
 	}
 }
 
-func BenchmarkSonic_UnmarshalTask_Small(b *testing.B)  { benchSonicUnmarshal(b, sampleTask(64)) }
-func BenchmarkSonic_UnmarshalTask_Medium(b *testing.B) { benchSonicUnmarshal(b, sampleTask(1024)) }
-func BenchmarkSonic_UnmarshalTask_Large(b *testing.B)  { benchSonicUnmarshal(b, sampleTask(8192)) }
+func BenchmarkSonic_UnmarshalTask_Small(b *testing.B)    { benchSonicUnmarshal(b, sampleTask(64)) }
+func BenchmarkSonic_UnmarshalTask_Medium(b *testing.B)   { benchSonicUnmarshal(b, sampleTask(1024)) }
+func BenchmarkSonic_UnmarshalTask_Large(b *testing.B)    { benchSonicUnmarshal(b, sampleTask(8192)) }
 func BenchmarkStdJSON_UnmarshalTask_Small(b *testing.B)  { benchStdUnmarshal(b, sampleTask(64)) }
 func BenchmarkStdJSON_UnmarshalTask_Medium(b *testing.B) { benchStdUnmarshal(b, sampleTask(1024)) }
 func BenchmarkStdJSON_UnmarshalTask_Large(b *testing.B)  { benchStdUnmarshal(b, sampleTask(8192)) }
