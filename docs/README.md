@@ -46,6 +46,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Integration Guides
 
+- `docs/integrations/go-integration.md` - Go SDK with Gin, Echo, and stdlib frameworks
 - `docs/integrations/java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
 - `docs/integrations/nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
 - `docs/integrations/python-integration.md` - Python SDK with FastAPI, Django, Flask
