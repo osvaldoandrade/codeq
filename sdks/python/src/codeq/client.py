@@ -17,6 +17,10 @@ from tenacity import (
 
 from .exceptions import CodeQAPIError, CodeQAuthError, CodeQTimeoutError
 from .types import (
+    BatchClaimOptions,
+    BatchCreateResult,
+    BatchSubmitItem,
+    BatchSubmitResult,
     ClaimTaskOptions,
     CleanupOptions,
     CleanupResult,
@@ -143,6 +147,41 @@ def _encode_id(value: str) -> str:
     return quote(value, safe="")
 
 
+def _build_batch_create_results(
+    items: list[dict[str, Any]],
+) -> list[BatchCreateResult]:
+    """Build a list of BatchCreateResult from a batch create response."""
+    results: list[BatchCreateResult] = []
+    for item in items:
+        if "task" in item and item["task"] is not None:
+            results.append(BatchCreateResult(task=_build_task(item["task"])))
+        else:
+            results.append(BatchCreateResult(error=item.get("error")))
+    return results
+
+
+def _build_batch_submit_results(
+    items: list[dict[str, Any]],
+) -> list[BatchSubmitResult]:
+    """Build a list of BatchSubmitResult from a batch submit response."""
+    results: list[BatchSubmitResult] = []
+    for item in items:
+        snake = _camel_to_snake_dict(item)
+        task_id = snake.get("task_id", "")
+        if "result" in item and item["result"] is not None:
+            results.append(
+                BatchSubmitResult(
+                    task_id=task_id,
+                    result=_build_result_record(item["result"]),
+                )
+            )
+        else:
+            results.append(
+                BatchSubmitResult(task_id=task_id, error=snake.get("error"))
+            )
+    return results
+
+
 class CodeQClient:
     """Async client for the CodeQ reactive task scheduling system.
 
@@ -238,6 +277,36 @@ class CodeQClient:
         )
         return _build_task(data)
 
+    async def batch_create_tasks(
+        self, tasks: list[CreateTaskOptions]
+    ) -> list[BatchCreateResult]:
+        """Create multiple tasks in a single request.
+
+        Requires a producer token. Each task is processed independently —
+        some may succeed while others fail (partial success).
+
+        Args:
+            tasks: List of task creation options (max 100).
+
+        Returns:
+            List of results, one per input task. Each result contains either
+            a ``task`` on success or an ``error`` message on failure.
+
+        Raises:
+            CodeQAuthError: If the producer token is missing.
+            CodeQAPIError: If the API request fails.
+        """
+        if not self._producer_token:
+            raise CodeQAuthError("Producer token is required to create tasks")
+
+        body = {"tasks": [_serialize_options(t) for t in tasks]}
+        data = await self._post(
+            "/v1/codeq/tasks/batch",
+            json=body,
+            token=self._producer_token,
+        )
+        return _build_batch_create_results(data["results"])
+
     # ──────────────────────────────────────────────
     # Worker Operations
     # ──────────────────────────────────────────────
@@ -271,6 +340,38 @@ class CodeQClient:
             return None
         return _build_task(resp.json())
 
+    async def batch_claim_tasks(
+        self, options: BatchClaimOptions
+    ) -> list[Task]:
+        """Claim multiple tasks from the queue in a single request.
+
+        Requires a worker token with ``codeq:claim`` scope.
+
+        Args:
+            options: Batch claim options including count, command filter, and
+                lease duration.
+
+        Returns:
+            List of claimed tasks (may be empty if no tasks are available).
+
+        Raises:
+            CodeQAuthError: If the worker token is missing.
+            CodeQAPIError: If the API request fails.
+        """
+        if not self._worker_token:
+            raise CodeQAuthError("Worker token is required to claim tasks")
+
+        resp = await self._request(
+            "POST",
+            "/v1/codeq/tasks/claim/batch",
+            json=_serialize_options(options),
+            token=self._worker_token,
+        )
+        if resp.status_code == 204:
+            return []
+        data = resp.json()
+        return [_build_task(t) for t in data.get("tasks", [])]
+
     async def submit_result(
         self, task_id: str, options: SubmitResultOptions
     ) -> ResultRecord:
@@ -298,6 +399,37 @@ class CodeQClient:
             token=self._worker_token,
         )
         return _build_result_record(data)
+
+    async def batch_submit_results(
+        self, items: list[BatchSubmitItem]
+    ) -> list[BatchSubmitResult]:
+        """Submit results for multiple tasks in a single request.
+
+        Requires a worker token with ``codeq:result`` scope. Each result is
+        processed independently — some may succeed while others fail.
+
+        Args:
+            items: List of result items, each containing a task ID and result
+                data (max 100).
+
+        Returns:
+            List of results, one per input item. Each result contains either
+            a ``result`` record on success or an ``error`` message on failure.
+
+        Raises:
+            CodeQAuthError: If the worker token is missing.
+            CodeQAPIError: If the API request fails.
+        """
+        if not self._worker_token:
+            raise CodeQAuthError("Worker token is required to submit results")
+
+        body = {"results": [_serialize_options(item) for item in items]}
+        data = await self._post(
+            "/v1/codeq/tasks/batch/results",
+            json=body,
+            token=self._worker_token,
+        )
+        return _build_batch_submit_results(data["results"])
 
     async def heartbeat(self, task_id: str, extend_seconds: int = 300) -> None:
         """Send a heartbeat to extend the lease on a claimed task.

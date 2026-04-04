@@ -16,6 +16,8 @@ from tenacity import (
 )
 
 from .client import (
+    _build_batch_create_results,
+    _build_batch_submit_results,
     _build_result_record,
     _build_task,
     _camel_to_snake_dict,
@@ -25,6 +27,10 @@ from .client import (
 )
 from .exceptions import CodeQAPIError, CodeQAuthError, CodeQTimeoutError
 from .types import (
+    BatchClaimOptions,
+    BatchCreateResult,
+    BatchSubmitItem,
+    BatchSubmitResult,
     ClaimTaskOptions,
     CleanupOptions,
     CleanupResult,
@@ -127,6 +133,24 @@ class SyncCodeQClient:
         )
         return _build_task(data)
 
+    def batch_create_tasks(
+        self, tasks: list[CreateTaskOptions]
+    ) -> list[BatchCreateResult]:
+        """Create multiple tasks in a single request.
+
+        See :meth:`CodeQClient.batch_create_tasks` for full documentation.
+        """
+        if not self._producer_token:
+            raise CodeQAuthError("Producer token is required to create tasks")
+
+        body = {"tasks": [_serialize_options(t) for t in tasks]}
+        data = self._post(
+            "/v1/codeq/tasks/batch",
+            json=body,
+            token=self._producer_token,
+        )
+        return _build_batch_create_results(data["results"])
+
     # ──────────────────────────────────────────────
     # Worker Operations
     # ──────────────────────────────────────────────
@@ -149,6 +173,25 @@ class SyncCodeQClient:
             return None
         return _build_task(resp.json())
 
+    def batch_claim_tasks(self, options: BatchClaimOptions) -> list[Task]:
+        """Claim multiple tasks from the queue in a single request.
+
+        See :meth:`CodeQClient.batch_claim_tasks` for full documentation.
+        """
+        if not self._worker_token:
+            raise CodeQAuthError("Worker token is required to claim tasks")
+
+        resp = self._request(
+            "POST",
+            "/v1/codeq/tasks/claim/batch",
+            json=_serialize_options(options),
+            token=self._worker_token,
+        )
+        if resp.status_code == 204:
+            return []
+        data = resp.json()
+        return [_build_task(t) for t in data.get("tasks", [])]
+
     def submit_result(
         self, task_id: str, options: SubmitResultOptions
     ) -> ResultRecord:
@@ -165,6 +208,24 @@ class SyncCodeQClient:
             token=self._worker_token,
         )
         return _build_result_record(data)
+
+    def batch_submit_results(
+        self, items: list[BatchSubmitItem]
+    ) -> list[BatchSubmitResult]:
+        """Submit results for multiple tasks in a single request.
+
+        See :meth:`CodeQClient.batch_submit_results` for full documentation.
+        """
+        if not self._worker_token:
+            raise CodeQAuthError("Worker token is required to submit results")
+
+        body = {"results": [_serialize_options(item) for item in items]}
+        data = self._post(
+            "/v1/codeq/tasks/batch/results",
+            json=body,
+            token=self._worker_token,
+        )
+        return _build_batch_submit_results(data["results"])
 
     def heartbeat(self, task_id: str, extend_seconds: int = 300) -> None:
         """Send a heartbeat to extend the lease on a claimed task.

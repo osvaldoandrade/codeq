@@ -4,7 +4,8 @@ Official Python SDK for the [CodeQ](https://github.com/osvaldoandrade/codeq) rea
 
 ## Features
 
-- **Full API coverage** — Task creation, claiming, results, webhooks, and admin operations
+- **Full API coverage** — Task creation, claiming, results, webhooks, batch operations, and admin operations
+- **Batch operations** — Create, claim, and submit results for multiple tasks in a single request
 - **Type hints throughout** — Complete type annotations with PEP 561 marker
 - **Async and sync variants** — `CodeQClient` (async/await) and `SyncCodeQClient` (blocking)
 - **Automatic retry** — Exponential backoff on transient failures (via tenacity)
@@ -116,6 +117,58 @@ result = await client.wait_for_result(
 print(result.result.status, result.result.result)
 ```
 
+### Batch operations
+
+```python
+import asyncio
+from codeq import (
+    CodeQClient,
+    CreateTaskOptions,
+    BatchClaimOptions,
+    BatchSubmitItem,
+)
+
+async def main():
+    async with CodeQClient(
+        base_url="http://localhost:8080",
+        producer_token="your-producer-jwt",
+        worker_token="your-worker-jwt",
+    ) as client:
+        # Batch create up to 100 tasks
+        results = await client.batch_create_tasks([
+            CreateTaskOptions(command="RENDER", payload={"frame": i})
+            for i in range(10)
+        ])
+        for r in results:
+            if r.task:
+                print("Created:", r.task.id)
+            else:
+                print("Error:", r.error)
+
+        # Batch claim up to 10 tasks
+        tasks = await client.batch_claim_tasks(
+            BatchClaimOptions(count=5, commands=["RENDER"], lease_seconds=120)
+        )
+        print(f"Claimed {len(tasks)} tasks")
+
+        # Batch submit results
+        submit_results = await client.batch_submit_results([
+            BatchSubmitItem(
+                task_id=t.id,
+                status="COMPLETED",
+                result={"frame": t.payload.get("frame"), "ok": True},
+            )
+            for t in tasks
+        ])
+        for sr in submit_results:
+            if sr.result:
+                print(f"Task {sr.task_id}: {sr.result.status}")
+            else:
+                print(f"Task {sr.task_id} error: {sr.error}")
+
+asyncio.run(main())
+```
+
 ### Webhook subscriptions
 
 ```python
@@ -183,13 +236,16 @@ await admin.close()
 | Method | Description |
 |--------|-------------|
 | `create_task(options)` | Create a new task |
+| `batch_create_tasks(tasks)` | Create up to 100 tasks in one request |
 
 ### Worker Methods
 
 | Method | Description |
 |--------|-------------|
 | `claim_task(options)` | Claim a task (returns `None` if none available) |
+| `batch_claim_tasks(options)` | Claim up to 10 tasks in one request |
 | `submit_result(task_id, options)` | Submit a completed/failed result |
+| `batch_submit_results(items)` | Submit results for up to 100 tasks in one request |
 | `heartbeat(task_id, extend_seconds=300)` | Extend task lease |
 | `abandon(task_id)` | Return task to queue |
 | `nack(task_id, delay_seconds, reason)` | Negative ack with retry delay |
@@ -241,6 +297,10 @@ from codeq import (
     WaitForResultOptions,
     CleanupOptions,
     CleanupResult,
+    BatchCreateResult,
+    BatchClaimOptions,
+    BatchSubmitItem,
+    BatchSubmitResult,
 )
 ```
 
