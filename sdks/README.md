@@ -266,6 +266,7 @@ npm run start:dev
 ## 📚 Documentation
 
 ### Integration Guides
+- [Go Integration Guide](../docs/integrations/go-integration.md)
 - [Java Integration Guide](../docs/integrations/java-integration.md)
 - [Node.js/TypeScript Integration Guide](../docs/integrations/nodejs-integration.md)
 - [Python Integration Guide](../docs/integrations/python-integration.md)

@@ -23,7 +23,7 @@ codeQ provides:
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
-- **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- **Official SDKs** for Go, Java, Node.js/TypeScript, and Python with framework integrations.
 - **Distributed tracing** with OpenTelemetry support for end-to-end observability.
 - **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
 - **Load testing framework**: Comprehensive k6 scenarios and Go benchmarks for performance validation and regression testing.
@@ -65,9 +65,14 @@ Upgrade:
 npm i -g @osvaldoandrade/codeq@latest
 ```
 
-### Use SDKs for Java and Node.js
+### Use Official SDKs
 
-Integrate codeQ into your microservices with official SDKs:
+Integrate codeQ into your microservices with official SDKs for Go, Java, Node.js, and Python:
+
+**Go** (Gin, Echo, standard library):
+```bash
+go get github.com/osvaldoandrade/codeq-sdk-go
+```
 
 **Java** (Spring Boot, Quarkus, Micronaut):
 ```xml
@@ -83,10 +88,17 @@ Integrate codeQ into your microservices with official SDKs:
 npm install @osvaldoandrade/codeq-client
 ```
 
+**Python** (FastAPI, Django, Flask):
+```bash
+pip install codeq-client
+```
+
 📚 **SDK Documentation**:
 - [SDK Overview & Quick Start](sdks/README.md)
+- [Go Integration Guide](docs/integrations/go-integration.md)
 - [Java Integration Guide](docs/integrations/java-integration.md)
 - [Node.js Integration Guide](docs/integrations/nodejs-integration.md)
+- [Python Integration Guide](docs/integrations/python-integration.md)
 - [Example Applications](examples/)
 
 ### 1) Helm (small cluster)
@@ -161,10 +173,12 @@ Key references:
 - **Security**: `docs/09-security.md` - Authentication, authorization, and tenant isolation
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
-- **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs
+- **SDK Integration**: `sdks/README.md` - Official Go, Java, Node.js, and Python SDKs
+  - [Go Integration](docs/integrations/go-integration.md) - Gin, Echo, standard library
   - [Java Integration](docs/integrations/java-integration.md) - Spring Boot, Quarkus, Micronaut
   - [Node.js Integration](docs/integrations/nodejs-integration.md) - Express, NestJS, React
-- **Examples**: `examples/` - Working examples with Java and Node.js frameworks
+  - [Python Integration](docs/integrations/python-integration.md) - FastAPI, Django, Flask
+- **Examples**: `examples/` - Working examples with Go, Java, Node.js, and Python frameworks
 - **Developer Guide**: `docs/21-developer-guide.md` - Contributing and internal architecture
 - **Queue model**: `docs/05-queueing-model.md` - Queue semantics
 - **Storage layout**: `docs/07-storage-kvrocks.md` - KVRocks data structures
