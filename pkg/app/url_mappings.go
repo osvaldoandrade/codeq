@@ -17,12 +17,15 @@ func SetupMappings(app *Application) {
 	anyAuth := v1.Group("", middleware.AnyAuthMiddleware(app.WorkerValidator, app.ProducerValidator, app.Config))
 	{
 		producer.POST("/tasks", middleware.RateLimitProducer(app.RateLimiter, app.Config), controllers.NewCreateTaskController(app.Scheduler).Handle)
+		producer.POST("/tasks/batch", middleware.RateLimitProducer(app.RateLimiter, app.Config), controllers.NewBatchCreateTaskController(app.Scheduler).Handle)
 
 		worker.POST("/tasks/claim", middleware.RequireWorkerScope("codeq:claim"), middleware.RateLimitWorkerClaim(app.RateLimiter, app.Config), controllers.NewClaimTaskController(app.Scheduler).Handle)
+		worker.POST("/tasks/claim/batch", middleware.RequireWorkerScope("codeq:claim"), middleware.RateLimitWorkerClaim(app.RateLimiter, app.Config), controllers.NewBatchClaimTaskController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/heartbeat", middleware.RequireWorkerScope("codeq:heartbeat"), controllers.NewHeartbeatController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/abandon", middleware.RequireWorkerScope("codeq:abandon"), controllers.NewAbandonController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/nack", middleware.RequireWorkerScope("codeq:nack"), controllers.NewNackController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/result", middleware.RequireWorkerScope("codeq:result"), controllers.NewSubmitResultController(app.Results).Handle)
+		worker.POST("/tasks/batch/results", middleware.RequireWorkerScope("codeq:result"), controllers.NewBatchSubmitResultController(app.Results).Handle)
 		worker.POST("/workers/subscriptions", middleware.RequireWorkerScope("codeq:subscribe"), controllers.NewCreateSubscriptionController(app.Subs).Handle)
 		worker.POST("/workers/subscriptions/:id/heartbeat", middleware.RequireWorkerScope("codeq:subscribe"), controllers.NewHeartbeatSubscriptionController(app.Subs).Handle)
 
