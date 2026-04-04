@@ -687,3 +687,278 @@ class TestURLEncoding:
             task = await client.get_task("task/special")
         assert task.id == "task-123"
         assert route.called
+
+
+# ──────────────────────────────────────────────
+# batch_create_tasks Tests
+# ──────────────────────────────────────────────
+
+
+class TestBatchCreateTasks:
+    @respx.mock
+    async def test_creates_tasks_in_batch(self) -> None:
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/batch").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"task": SAMPLE_TASK},
+                        {"task": {**SAMPLE_TASK, "id": "task-456", "command": "CMD2"}},
+                    ]
+                },
+            )
+        )
+        async with CodeQClient(base_url=BASE_URL, producer_token="pt") as client:
+            results = await client.batch_create_tasks(
+                [
+                    CreateTaskOptions(command="GENERATE_MASTER", payload={"jobId": "j-1"}),
+                    CreateTaskOptions(command="CMD2", payload={"jobId": "j-2"}),
+                ]
+            )
+        assert len(results) == 2
+        assert results[0].task is not None
+        assert results[0].task.id == "task-123"
+        assert results[0].error is None
+        assert results[1].task is not None
+        assert results[1].task.id == "task-456"
+        assert route.called
+        req = route.calls.last.request
+        assert req.headers["Authorization"] == "Bearer pt"
+
+    @respx.mock
+    async def test_handles_partial_failure(self) -> None:
+        respx.post(f"{BASE_URL}/v1/codeq/tasks/batch").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"task": SAMPLE_TASK},
+                        {"error": "duplicate idempotency key"},
+                    ]
+                },
+            )
+        )
+        async with CodeQClient(base_url=BASE_URL, producer_token="pt") as client:
+            results = await client.batch_create_tasks(
+                [
+                    CreateTaskOptions(command="CMD", payload={}),
+                    CreateTaskOptions(command="CMD", payload={}, idempotency_key="dup"),
+                ]
+            )
+        assert len(results) == 2
+        assert results[0].task is not None
+        assert results[0].error is None
+        assert results[1].task is None
+        assert results[1].error == "duplicate idempotency key"
+
+    @respx.mock
+    async def test_sends_correct_body(self) -> None:
+        import json
+
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/batch").mock(
+            return_value=httpx.Response(200, json={"results": [{"task": SAMPLE_TASK}]})
+        )
+        async with CodeQClient(base_url=BASE_URL, producer_token="pt") as client:
+            await client.batch_create_tasks(
+                [
+                    CreateTaskOptions(
+                        command="CMD",
+                        payload={"k": "v"},
+                        priority=3,
+                        max_attempts=8,
+                    )
+                ]
+            )
+        body = json.loads(route.calls.last.request.content)
+        assert "tasks" in body
+        assert len(body["tasks"]) == 1
+        assert body["tasks"][0]["command"] == "CMD"
+        assert body["tasks"][0]["priority"] == 3
+        assert body["tasks"][0]["maxAttempts"] == 8
+
+    async def test_throws_without_producer_token(self) -> None:
+        async with CodeQClient(base_url=BASE_URL) as client:
+            with pytest.raises(CodeQAuthError, match="Producer token"):
+                await client.batch_create_tasks(
+                    [CreateTaskOptions(command="CMD", payload={})]
+                )
+
+
+# ──────────────────────────────────────────────
+# batch_claim_tasks Tests
+# ──────────────────────────────────────────────
+
+
+class TestBatchClaimTasks:
+    @respx.mock
+    async def test_claims_multiple_tasks(self) -> None:
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/claim/batch").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "tasks": [
+                        SAMPLE_TASK,
+                        {**SAMPLE_TASK, "id": "task-456"},
+                    ]
+                },
+            )
+        )
+        async with CodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchClaimOptions
+
+            tasks = await client.batch_claim_tasks(
+                BatchClaimOptions(count=5, commands=["GENERATE_MASTER"])
+            )
+        assert len(tasks) == 2
+        assert tasks[0].id == "task-123"
+        assert tasks[1].id == "task-456"
+        assert route.called
+        req = route.calls.last.request
+        assert req.headers["Authorization"] == "Bearer wt"
+
+    @respx.mock
+    async def test_returns_empty_on_204(self) -> None:
+        respx.post(f"{BASE_URL}/v1/codeq/tasks/claim/batch").mock(
+            return_value=httpx.Response(204)
+        )
+        async with CodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchClaimOptions
+
+            tasks = await client.batch_claim_tasks(BatchClaimOptions(count=5))
+        assert tasks == []
+
+    @respx.mock
+    async def test_sends_correct_body(self) -> None:
+        import json
+
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/claim/batch").mock(
+            return_value=httpx.Response(200, json={"tasks": [SAMPLE_TASK]})
+        )
+        async with CodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchClaimOptions
+
+            await client.batch_claim_tasks(
+                BatchClaimOptions(count=3, commands=["CMD1", "CMD2"], lease_seconds=120)
+            )
+        body = json.loads(route.calls.last.request.content)
+        assert body["count"] == 3
+        assert body["commands"] == ["CMD1", "CMD2"]
+        assert body["leaseSeconds"] == 120
+
+    async def test_throws_without_worker_token(self) -> None:
+        async with CodeQClient(base_url=BASE_URL) as client:
+            from codeq import BatchClaimOptions
+
+            with pytest.raises(CodeQAuthError, match="Worker token"):
+                await client.batch_claim_tasks(BatchClaimOptions(count=5))
+
+
+# ──────────────────────────────────────────────
+# batch_submit_results Tests
+# ──────────────────────────────────────────────
+
+
+class TestBatchSubmitResults:
+    @respx.mock
+    async def test_submits_multiple_results(self) -> None:
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/batch/results").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"taskId": "task-123", "result": SAMPLE_RESULT},
+                        {"taskId": "task-456", "result": {**SAMPLE_RESULT, "taskId": "task-456"}},
+                    ]
+                },
+            )
+        )
+        async with CodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchSubmitItem
+
+            results = await client.batch_submit_results(
+                [
+                    BatchSubmitItem(
+                        task_id="task-123",
+                        status="COMPLETED",
+                        result={"output": "done"},
+                    ),
+                    BatchSubmitItem(
+                        task_id="task-456",
+                        status="COMPLETED",
+                        result={"output": "done"},
+                    ),
+                ]
+            )
+        assert len(results) == 2
+        assert results[0].task_id == "task-123"
+        assert results[0].result is not None
+        assert results[0].result.status == "COMPLETED"
+        assert results[0].error is None
+        assert results[1].task_id == "task-456"
+        assert route.called
+        req = route.calls.last.request
+        assert req.headers["Authorization"] == "Bearer wt"
+
+    @respx.mock
+    async def test_handles_partial_failure(self) -> None:
+        respx.post(f"{BASE_URL}/v1/codeq/tasks/batch/results").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"taskId": "task-123", "result": SAMPLE_RESULT},
+                        {"taskId": "task-456", "error": "task not found"},
+                    ]
+                },
+            )
+        )
+        async with CodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchSubmitItem
+
+            results = await client.batch_submit_results(
+                [
+                    BatchSubmitItem(task_id="task-123", status="COMPLETED", result={}),
+                    BatchSubmitItem(task_id="task-456", status="FAILED", error="oops"),
+                ]
+            )
+        assert len(results) == 2
+        assert results[0].result is not None
+        assert results[0].error is None
+        assert results[1].result is None
+        assert results[1].error == "task not found"
+
+    @respx.mock
+    async def test_sends_correct_body(self) -> None:
+        import json
+
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/batch/results").mock(
+            return_value=httpx.Response(
+                200, json={"results": [{"taskId": "t-1", "result": SAMPLE_RESULT}]}
+            )
+        )
+        async with CodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchSubmitItem
+
+            await client.batch_submit_results(
+                [
+                    BatchSubmitItem(
+                        task_id="t-1",
+                        status="COMPLETED",
+                        result={"ok": True},
+                    )
+                ]
+            )
+        body = json.loads(route.calls.last.request.content)
+        assert "results" in body
+        assert len(body["results"]) == 1
+        assert body["results"][0]["taskId"] == "t-1"
+        assert body["results"][0]["status"] == "COMPLETED"
+
+    async def test_throws_without_worker_token(self) -> None:
+        async with CodeQClient(base_url=BASE_URL) as client:
+            from codeq import BatchSubmitItem
+
+            with pytest.raises(CodeQAuthError, match="Worker token"):
+                await client.batch_submit_results(
+                    [BatchSubmitItem(task_id="t-1", status="COMPLETED")]
+                )

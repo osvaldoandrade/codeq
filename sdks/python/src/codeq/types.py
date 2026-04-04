@@ -295,3 +295,62 @@ class CleanupResult:
 
     limit: int
     """Limit that was applied."""
+
+
+@dataclass
+class BatchCreateResult:
+    """Result for a single task in a batch create response."""
+
+    task: Task | None = None
+    """The created task (present on success)."""
+
+    error: str | None = None
+    """Error message (present on failure)."""
+
+
+@dataclass
+class BatchClaimOptions:
+    """Options for claiming multiple tasks in a single request."""
+
+    count: int
+    """Number of tasks to claim (max: 10)."""
+
+    commands: list[str] | None = None
+    """Command names to filter tasks by."""
+
+    lease_seconds: int | None = None
+    """Lease duration in seconds (default: 300)."""
+
+
+@dataclass
+class BatchSubmitItem:
+    """A single result item for batch result submission."""
+
+    task_id: str
+    """ID of the task to submit a result for."""
+
+    status: Literal["COMPLETED", "FAILED"]
+    """Result status."""
+
+    result: dict[str, Any] | None = None
+    """Result data (should be provided when status is COMPLETED)."""
+
+    error: str | None = None
+    """Error message (required if status is FAILED)."""
+
+    artifacts: list[ArtifactIn] | None = None
+    """Optional artifacts to attach."""
+
+
+@dataclass
+class BatchSubmitResult:
+    """Result for a single item in a batch submit response."""
+
+    task_id: str
+    """ID of the associated task."""
+
+    result: ResultRecord | None = None
+    """The result record (present on success)."""
+
+    error: str | None = None
+    """Error message (present on failure)."""

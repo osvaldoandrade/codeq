@@ -307,3 +307,113 @@ class TestSyncURLEncoding:
             task = client.get_task("task/special")
         assert task.id == "task-123"
         assert route.called
+
+
+# ──────────────────────────────────────────────
+# Batch Operations (Sync)
+# ──────────────────────────────────────────────
+
+
+class TestSyncBatchCreateTasks:
+    @respx.mock
+    def test_creates_tasks_in_batch(self) -> None:
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/batch").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"task": SAMPLE_TASK},
+                        {"task": {**SAMPLE_TASK, "id": "task-456"}},
+                    ]
+                },
+            )
+        )
+        with SyncCodeQClient(base_url=BASE_URL, producer_token="pt") as client:
+            results = client.batch_create_tasks(
+                [
+                    CreateTaskOptions(command="CMD", payload={}),
+                    CreateTaskOptions(command="CMD2", payload={}),
+                ]
+            )
+        assert len(results) == 2
+        assert results[0].task is not None
+        assert results[0].task.id == "task-123"
+        assert results[1].task is not None
+        assert results[1].task.id == "task-456"
+        assert route.called
+
+    def test_throws_without_producer_token(self) -> None:
+        with SyncCodeQClient(base_url=BASE_URL) as client:
+            with pytest.raises(CodeQAuthError, match="Producer token"):
+                client.batch_create_tasks(
+                    [CreateTaskOptions(command="CMD", payload={})]
+                )
+
+
+class TestSyncBatchClaimTasks:
+    @respx.mock
+    def test_claims_multiple_tasks(self) -> None:
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/claim/batch").mock(
+            return_value=httpx.Response(
+                200,
+                json={"tasks": [SAMPLE_TASK, {**SAMPLE_TASK, "id": "task-456"}]},
+            )
+        )
+        with SyncCodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchClaimOptions
+
+            tasks = client.batch_claim_tasks(
+                BatchClaimOptions(count=5, commands=["CMD"])
+            )
+        assert len(tasks) == 2
+        assert tasks[0].id == "task-123"
+        assert route.called
+
+    @respx.mock
+    def test_returns_empty_on_204(self) -> None:
+        respx.post(f"{BASE_URL}/v1/codeq/tasks/claim/batch").mock(
+            return_value=httpx.Response(204)
+        )
+        with SyncCodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchClaimOptions
+
+            tasks = client.batch_claim_tasks(BatchClaimOptions(count=5))
+        assert tasks == []
+
+
+class TestSyncBatchSubmitResults:
+    @respx.mock
+    def test_submits_multiple_results(self) -> None:
+        route = respx.post(f"{BASE_URL}/v1/codeq/tasks/batch/results").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"taskId": "task-123", "result": SAMPLE_RESULT},
+                    ]
+                },
+            )
+        )
+        with SyncCodeQClient(base_url=BASE_URL, worker_token="wt") as client:
+            from codeq import BatchSubmitItem
+
+            results = client.batch_submit_results(
+                [
+                    BatchSubmitItem(
+                        task_id="task-123", status="COMPLETED", result={"ok": True}
+                    ),
+                ]
+            )
+        assert len(results) == 1
+        assert results[0].task_id == "task-123"
+        assert results[0].result is not None
+        assert route.called
+
+    def test_throws_without_worker_token(self) -> None:
+        with SyncCodeQClient(base_url=BASE_URL) as client:
+            from codeq import BatchSubmitItem
+
+            with pytest.raises(CodeQAuthError, match="Worker token"):
+                client.batch_submit_results(
+                    [BatchSubmitItem(task_id="t-1", status="COMPLETED")]
+                )
