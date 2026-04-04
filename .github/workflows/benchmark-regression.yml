@@ -46,6 +46,12 @@ jobs:
           go test -bench=. -benchmem -benchtime=10s -count=3 ./internal/bench > benchmark-results.txt 2>&1
           cat benchmark-results.txt
 
+      - name: Run Bloom Filter Benchmarks
+        run: |
+          echo "=== Running Bloom Filter Benchmarks ==="
+          go test -bench=BenchmarkBloom -run='^$' -benchmem -benchtime=10s -count=3 ./internal/repository > bloom-results.txt 2>&1
+          cat bloom-results.txt
+
       - name: Store benchmark results
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -62,6 +68,15 @@ jobs:
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
+          if [ -f bloom-results.txt ]; then
+            echo "## Bloom Filter Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            cat bloom-results.txt >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
           # Extract key metrics for summary
           echo "### Key Metrics" >> $GITHUB_STEP_SUMMARY
           echo "Benchmarks completed on $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
@@ -76,6 +91,20 @@ jobs:
           SCHEDULER_RESULT=$(grep "BenchmarkScheduler_CreateClaimComplete" benchmark-results.txt | head -1)
           if [ -n "$SCHEDULER_RESULT" ]; then
             echo "- **Scheduler Create→Claim→Complete**: $SCHEDULER_RESULT" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Parse Sonic codec comparison
+          SONIC_MARSHAL=$(grep "BenchmarkSonic_MarshalTask_Medium" benchmark-results.txt | head -1)
+          STD_MARSHAL=$(grep "BenchmarkStdJSON_MarshalTask_Medium" benchmark-results.txt | head -1)
+          if [ -n "$SONIC_MARSHAL" ] && [ -n "$STD_MARSHAL" ]; then
+            echo "- **Sonic Marshal (medium)**: $SONIC_MARSHAL" >> $GITHUB_STEP_SUMMARY
+            echo "- **StdJSON Marshal (medium)**: $STD_MARSHAL" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Parse GC pressure
+          GC_ENQUEUE=$(grep "BenchmarkGCPressure_SustainedEnqueue" benchmark-results.txt | head -1)
+          if [ -n "$GC_ENQUEUE" ]; then
+            echo "- **GC Pressure (Enqueue)**: $GC_ENQUEUE" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Check for regressions (relative to main)
@@ -99,9 +128,22 @@ jobs:
           echo "## Benchmark Regression Analysis" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
+          # Install benchstat for comparison
+          go install golang.org/x/perf/cmd/benchstat@latest || true
+
           # Simple comparison - just flag if baseline exists
           if [ -f benchmark-baseline.txt ]; then
             echo "✅ Baseline benchmarks retrieved from main for comparison" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Use benchstat for statistical comparison if available
+            if command -v benchstat &> /dev/null; then
+              echo "### Statistical Comparison (benchstat)" >> $GITHUB_STEP_SUMMARY
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+              benchstat benchmark-baseline.txt benchmark-results.txt >> $GITHUB_STEP_SUMMARY 2>&1 || true
+              echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            fi
+
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Note**: Performance regression detection is configured. Benchmarks should be reviewed for improvement or degradation." >> $GITHUB_STEP_SUMMARY
           else
@@ -115,6 +157,7 @@ jobs:
           name: benchmark-results
           path: |
             benchmark-results.txt
+            bloom-results.txt
             benchmark-baseline.txt
           retention-days: 90
 

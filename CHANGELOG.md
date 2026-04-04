@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Performance Regression Testing Framework**: Comprehensive benchmark suite for validating performance optimizations and detecting regressions
+  - Sonic codec benchmarks (`internal/bench/sonic_bench_test.go`): Compares Sonic vs `encoding/json` across small, medium, and large payloads for both marshal and unmarshal operations
+  - Bloom filter benchmarks (`internal/repository/bloom_bench_test.go`): Validates Add/MaybeHas throughput, memory footprint, and false positive rates (target: ≤1%)
+  - GC pressure benchmarks (`internal/bench/gc_pressure_bench_test.go`): Tracks allocation counts, GC cycles, and pause times under sustained enqueue and claim/submit workloads
+  - Staging validation runbook (`docs/33-staging-validation-runbook.md`): Step-by-step procedures for running benchmarks, acceptable performance ranges, and dashboard guidance
+  - CI workflow updated to include Sonic, Bloom filter, and GC pressure benchmarks with `benchstat` comparison
 - **Benchmark Regression Testing CI** (`.github/workflows/benchmark-regression.yml`): Automated Go benchmark regression detection on every PR and commit to main. Runs `BenchmarkHTTP_CreateClaimComplete` and `BenchmarkScheduler_CreateClaimComplete` with 10s iterations and 3 runs, archives results (90d retention, 1yr history), and posts detailed comparisons to workflow summaries. Helps catch performance regressions early before they impact production.
   - Automated baseline comparison and regression detection
   - Results archived for 90 days with 1-year history for trend analysis
