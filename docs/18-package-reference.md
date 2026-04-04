@@ -538,15 +538,19 @@ defer span.End()
 
 **Key files**:
 - `static_supplier.go`: `StaticShardSupplier` implementation with config-driven routing
+- `client_map.go`: Multi-client management for shard-aware Redis access
 - `key.go`: Shard-aware queue key generation utilities
 
 **Types**:
 - `StaticShardSupplier`: Implements `domain.ShardSupplier` with tenant override → command mapping → default shard precedence
+- `ClientMap`: Maps shard identifiers to Redis clients
 - `StaticConfig`: Configuration struct for the static supplier
 
 **Functions**:
 - `NewStaticShardSupplier(cfg)`: Creates a supplier from YAML-loaded configuration
 - `NewDefaultShardSupplier()`: Returns a single-shard supplier for backward compatibility
+- `NewClientMap(clients, defaultShard)`: Creates a validated shard-to-client map
+- `NewSingleClientMap(client)`: Creates a single-client map for backward compatibility
 - `QueueKeyPending(command, tenantID, shardID, priority)`: Builds shard-aware pending key
 - `QueueKeyInProgress(command, tenantID, shardID)`: Builds shard-aware in-progress key
 - `QueueKeyDelayed(command, tenantID, shardID)`: Builds shard-aware delayed key
@@ -554,6 +558,19 @@ defer span.End()
 - `ShardKeySegment(shardID)`: Returns the `:s:<shardID>` segment (empty for default)
 
 **See**: `docs/06-sharding.md` for configuration and `docs/24-queue-sharding-hld.md` for design
+
+---
+
+### `internal/repository`
+
+**ShardedTaskRepository** (optional):
+- `sharded_task_repository.go`: Routes operations across multiple per-shard repositories
+- Wraps `internal/repository/task_repository.go` instances for each shard
+- Delegates routing decisions to a `ShardSupplier` (e.g., `StaticShardSupplier`)
+- Aggregates cross-shard operations (e.g., `QueueStats`)
+- Maintains backward compatibility with single-shard deployments
+
+**See**: `docs/06-sharding.md#repository-layer` for implementation details
 
 ---
 

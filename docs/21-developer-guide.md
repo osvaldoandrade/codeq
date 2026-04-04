@@ -182,6 +182,12 @@ Repositories handle data persistence using KVRocks (Redis protocol).
   - Command-to-URL mappings
   - TTL-based expiration
 
+- **`sharded_task_repository.go`**: Shard-aware task operations (optional)
+  - Wraps per-shard repositories for horizontal scaling
+  - Routes operations based on `ShardSupplier` resolution
+  - Aggregates cross-shard stats queries
+  - Maintains backward compatibility with single-shard deployments
+
 **Repository pattern:**
 
 ````go
@@ -193,6 +199,34 @@ type TaskRepository interface {
     // ... other methods
 }
 ````
+
+**Sharding in repositories:**
+
+For multi-shard deployments, `ShardedTaskRepository` implements the `TaskRepository` interface while routing operations across multiple per-shard repositories. The routing decision is delegated to a `ShardSupplier` (e.g., `StaticShardSupplier`), which maps (command, tenantID) → shard ID.
+
+Example:
+```go
+// In application initialization
+supplier := shard.NewStaticShardSupplier(
+    commandMappings,    // map[string]string (command → shard)
+    tenantOverrides,    // map[string]string (tenant → shard)
+    defaultShard,       // fallback shard
+)
+
+taskRepo := repository.NewShardedTaskRepository(
+    clientMap,          // shard ID → Redis client mapping
+    tz,
+    backoffPolicy,
+    backoffBaseSeconds,
+    backoffMaxSeconds,
+    supplier,           // ShardSupplier for routing decisions
+)
+
+// Operations transparently route across shards
+task, err := taskRepo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+```
+
+See **[Sharding](06-sharding.md)** for configuration details and architectural patterns.
 
 #### Middleware (`internal/middleware/`)
 

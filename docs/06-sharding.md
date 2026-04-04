@@ -46,6 +46,98 @@ sharding:
 
 When `sharding.enabled` is `false` or the section is absent, codeQ behaves as a single-shard deployment with no changes to queue key format.
 
+## Repository Layer
+
+The repository layer implements shard-aware task operations through the **ShardedTaskRepository** pattern.
+
+### ClientMap
+
+The `ClientMap` (`internal/shard/client_map.go`) manages the mapping of shard identifiers to Redis clients:
+
+```go
+// Manages shard-to-client routing
+type ClientMap struct {
+    clients      map[string]*redis.Client  // Shard ID → Redis client
+    defaultShard string                    // Fallback shard ID
+}
+```
+
+**Key methods:**
+- `NewClientMap(clients, defaultShard)` — creates a map with validation that all references exist
+- `Client(shardID)` — returns the Redis client for a shard (falls back to default if not found)
+- `DefaultClient()` — returns the client for the default shard
+- `ShardIDs()` — returns all configured shard identifiers
+- `Close()` — gracefully closes all Redis connections
+
+**Single-shard mode:** `NewSingleClientMap(client)` creates a ClientMap with a single Redis client, maintaining backward compatibility.
+
+### ShardedTaskRepository
+
+The `ShardedTaskRepository` (`internal/repository/sharded_task_repository.go`) wraps per-shard repositories and routes operations based on ShardSupplier resolution:
+
+```go
+type shardedTaskRepository struct {
+    shardSupplier domain.ShardSupplier      // Shard routing logic
+    repos         map[string]TaskRepository // One repo per shard
+    defaultShard  string                    // Fallback shard ID
+}
+```
+
+**Routing pattern:**
+
+1. For each operation (Enqueue, Claim, etc.):
+   - Call `ShardSupplier.CurrentShard(ctx, command, tenantID)` to determine target shard
+   - Route to the corresponding `TaskRepository` instance
+   - If shard resolution fails, fall back to default shard
+
+2. For cross-shard operations (QueueStats):
+   - Call `ShardSupplier.QueueShards(ctx, command, tenantID)` to get all relevant shards
+   - Aggregate results across all shard repositories
+   - Return consolidated view to caller
+
+**Error handling:**
+
+- If a shard is not found in `repos`, operations transparently fall back to the default shard
+- "Not-found" errors from individual shards are properly propagated
+- Network or Redis errors from any shard are returned directly
+
+### Example: Multi-Shard Setup
+
+```go
+// Create per-shard Redis clients
+primaryClient := redis.NewClient(&redis.Options{Addr: "kvrocks-primary:6379"})
+heavyClient := redis.NewClient(&redis.Options{Addr: "kvrocks-compute:6379"})
+
+// Create ClientMap
+clientMap, _ := shard.NewClientMap(
+    map[string]*redis.Client{
+        "primary": primaryClient,
+        "compute": heavyClient,
+    },
+    "primary", // default shard
+)
+
+// Create StaticShardSupplier with routing rules
+supplier := shard.NewStaticShardSupplier(
+    map[string]string{"GENERATE_MASTER": "compute"},      // command mappings
+    map[string]string{"tenant-vip": "compute"},           // tenant overrides
+    "primary",                                             // default
+)
+
+// Create sharded task repository
+taskRepo := repository.NewShardedTaskRepository(
+    clientMap,
+    time.UTC,
+    "exp_full_jitter",
+    5, 900,
+    supplier,
+)
+
+// Operations now transparently route across shards
+task, _ := taskRepo.Enqueue(ctx, "GENERATE_MASTER", payload, 1, webhook, maxAttempts, idempKey, visibleAt, "tenant-vip")
+// → routed to "compute" shard via ShardSupplier
+```
+
 ## Queue Key Format
 
 Queue keys include an optional shard segment inserted after the tenant identifier:
