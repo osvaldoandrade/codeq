@@ -6,6 +6,10 @@ from .sync_client import SyncCodeQClient
 from .types import (
     ArtifactIn,
     ArtifactOut,
+    BatchClaimOptions,
+    BatchCreateResult,
+    BatchSubmitItem,
+    BatchSubmitResult,
     ClaimTaskOptions,
     CleanupOptions,
     CleanupResult,
@@ -47,4 +51,8 @@ __all__ = [
     "WaitForResultOptions",
     "CleanupOptions",
     "CleanupResult",
+    "BatchCreateResult",
+    "BatchClaimOptions",
+    "BatchSubmitItem",
+    "BatchSubmitResult",
 ]
