@@ -76,7 +76,7 @@ func (h *batchClaimTaskController) Handle(c *gin.Context) {
 
 	var tasks []*domain.Task
 	var claimErr string
-	for range req.Count {
+	for i := 0; i < req.Count; i++ {
 		task, ok, err := h.svc.ClaimTask(c.Request.Context(), claims.Subject, req.Commands, req.LeaseSeconds, 0, tenantID)
 		if err != nil {
 			claimErr = err.Error()
