@@ -245,6 +245,7 @@ func main() {
 	root.AddCommand(taskCmd(&baseURL, &producerToken, &workerToken, &admin, ui))
 	root.AddCommand(workerCmd(&baseURL, &producerToken, &workerToken, &admin, ui))
 	root.AddCommand(queueCmd(&baseURL, &producerToken, &workerToken, &admin, ui))
+	root.AddCommand(migrateCmd(ui))
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, ui.err("[ERROR]"), err.Error())
