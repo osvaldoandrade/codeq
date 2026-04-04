@@ -10,6 +10,10 @@ Complete guide for integrating CodeQ with Python microservices using FastAPI, Dj
 - [Django Integration](#django-integration)
 - [Flask Integration](#flask-integration)
 - [Best Practices](#best-practices)
+  - [Connection Management](#connection-management)
+  - [Error Handling](#error-handling)
+  - [Heartbeat Pattern](#heartbeat-pattern)
+  - [Batch Operations](#batch-operations)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -304,6 +308,111 @@ async def process_with_heartbeat(client, task):
         )
     finally:
         heartbeat_task.cancel()
+```
+
+### Batch Operations
+
+For high-throughput scenarios, use batch operations to improve efficiency:
+
+```python
+from codeq import (
+    CodeQClient,
+    CreateTaskOptions,
+    BatchClaimOptions,
+    BatchSubmitItem,
+)
+
+async def batch_producer_example(client):
+    # Batch create up to 100 tasks
+    results = await client.batch_create_tasks([
+        CreateTaskOptions(
+            command="RENDER_FRAME",
+            payload={"frame_number": i, "quality": "high"},
+            priority=i % 10,
+        )
+        for i in range(50)
+    ])
+    
+    created_count = sum(1 for r in results if r.task)
+    failed_count = sum(1 for r in results if r.error)
+    print(f"Created: {created_count}, Failed: {failed_count}")
+    
+    return [r.task.id for r in results if r.task]
+
+
+async def batch_worker_example(client):
+    # Batch claim up to 10 tasks
+    tasks = await client.batch_claim_tasks(
+        BatchClaimOptions(
+            count=10,
+            commands=["RENDER_FRAME"],
+            lease_seconds=300,
+        )
+    )
+    print(f"Claimed {len(tasks)} tasks")
+    
+    # Process tasks
+    results_to_submit = []
+    for task in tasks:
+        try:
+            # Simulate processing
+            result = {"frame": task.payload["frame_number"], "status": "ok"}
+            results_to_submit.append(
+                BatchSubmitItem(
+                    task_id=task.id,
+                    status="COMPLETED",
+                    result=result,
+                )
+            )
+        except Exception as e:
+            results_to_submit.append(
+                BatchSubmitItem(
+                    task_id=task.id,
+                    status="FAILED",
+                    error=str(e),
+                )
+            )
+    
+    # Batch submit results
+    submit_results = await client.batch_submit_results(results_to_submit)
+    
+    for sr in submit_results:
+        if sr.result:
+            print(f"Task {sr.task_id}: {sr.result.status}")
+        else:
+            print(f"Task {sr.task_id} error: {sr.error}")
+```
+
+#### Performance Considerations
+
+- **Batch create**: Up to 100 tasks per request. Useful for bulk imports or scheduled bulk task creation.
+- **Batch claim**: Up to 10 tasks per request. Reduces latency in high-throughput worker pools.
+- **Batch submit**: Up to 100 results per request. Minimize round-trips when processing multiple tasks.
+- **Retry logic**: Batch operations include automatic retry with exponential backoff via tenacity.
+
+#### FastAPI Batch Endpoint Example
+
+```python
+from fastapi import FastAPI, BackgroundTasks
+from codeq import CodeQClient, CreateTaskOptions
+
+@app.post("/batch-jobs")
+async def create_batch_jobs(job_ids: list[str], background_tasks: BackgroundTasks):
+    global client
+    
+    async def batch_create():
+        results = await client.batch_create_tasks([
+            CreateTaskOptions(
+                command="BATCH_PROCESS",
+                payload={"jobId": jid},
+            )
+            for jid in job_ids
+        ])
+        created = [r.task.id for r in results if r.task]
+        return {"created": len(created), "failed": len(results) - len(created)}
+    
+    background_tasks.add_task(batch_create)
+    return {"message": "Batch jobs submitted", "count": len(job_ids)}
 ```
 
 ## Troubleshooting
