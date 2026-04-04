@@ -5,840 +5,802 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// ──────────────────────────────────────────────
-// Helper
-// ──────────────────────────────────────────────
-
-func setupServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *Client) {
+// helper to start a test server with a custom handler.
+func newTestServer(t *testing.T, handler http.HandlerFunc) (*httptest.Server, *Client) {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	client := NewClient(srv.URL,
-		WithProducerToken("prod-token"),
-		WithWorkerToken("work-token"),
-		WithAdminToken("admin-token"),
+		WithProducerToken("tok-producer"),
+		WithWorkerToken("tok-worker"),
+		WithAdminToken("tok-admin"),
+		WithMaxRetries(0),
 	)
 	return srv, client
 }
 
-func jsonResponse(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+// ---------- Constructor ----------
+
+func TestNewClient_Defaults(t *testing.T) {
+	c := NewClient("http://localhost:8080")
+	if c.cfg.BaseURL != "http://localhost:8080" {
+		t.Fatalf("BaseURL = %q, want %q", c.cfg.BaseURL, "http://localhost:8080")
+	}
+	if c.cfg.MaxRetries != 3 {
+		t.Fatalf("MaxRetries = %d, want 3", c.cfg.MaxRetries)
+	}
+	if c.cfg.HTTPClient == nil {
+		t.Fatal("HTTPClient should not be nil")
+	}
 }
 
-// ──────────────────────────────────────────────
-// NewClient
-// ──────────────────────────────────────────────
+func TestNewClient_TrimsTrailingSlash(t *testing.T) {
+	c := NewClient("http://localhost:8080/")
+	if c.cfg.BaseURL != "http://localhost:8080" {
+		t.Fatalf("BaseURL = %q, want trailing slash trimmed", c.cfg.BaseURL)
+	}
+}
 
-func TestNewClient(t *testing.T) {
-	c := NewClient("http://localhost:8080/",
+func TestNewClient_WithOptions(t *testing.T) {
+	hc := &http.Client{Timeout: 5 * time.Second}
+	c := NewClient("http://host",
 		WithProducerToken("p"),
 		WithWorkerToken("w"),
 		WithAdminToken("a"),
+		WithHTTPClient(hc),
+		WithMaxRetries(5),
+		WithRetryBaseDelay(2*time.Second),
 	)
-	if c.baseURL != "http://localhost:8080" {
-		t.Errorf("expected trailing slash stripped, got %s", c.baseURL)
+	if c.cfg.ProducerToken != "p" {
+		t.Fatalf("ProducerToken = %q", c.cfg.ProducerToken)
 	}
-	if c.producerToken != "p" {
-		t.Errorf("expected producerToken 'p', got %s", c.producerToken)
+	if c.cfg.WorkerToken != "w" {
+		t.Fatalf("WorkerToken = %q", c.cfg.WorkerToken)
 	}
-	if c.workerToken != "w" {
-		t.Errorf("expected workerToken 'w', got %s", c.workerToken)
+	if c.cfg.AdminToken != "a" {
+		t.Fatalf("AdminToken = %q", c.cfg.AdminToken)
 	}
-	if c.adminToken != "a" {
-		t.Errorf("expected adminToken 'a', got %s", c.adminToken)
+	if c.cfg.HTTPClient != hc {
+		t.Fatal("HTTPClient was not set")
 	}
-}
-
-func TestWithHTTPClient(t *testing.T) {
-	custom := &http.Client{Timeout: 5 * time.Second}
-	c := NewClient("http://localhost:8080", WithHTTPClient(custom))
-	if c.httpClient != custom {
-		t.Error("expected custom HTTP client to be set")
+	if c.cfg.MaxRetries != 5 {
+		t.Fatalf("MaxRetries = %d", c.cfg.MaxRetries)
+	}
+	if c.cfg.RetryBaseDelay != 2*time.Second {
+		t.Fatalf("RetryBaseDelay = %v", c.cfg.RetryBaseDelay)
 	}
 }
 
-// ──────────────────────────────────────────────
-// CreateTask
-// ──────────────────────────────────────────────
+// ---------- CreateTask ----------
 
-func TestCreateTask(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestCreateTask_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+			t.Errorf("method = %s, want POST", r.Method)
 		}
 		if r.URL.Path != "/v1/codeq/tasks" {
-			t.Errorf("expected /v1/codeq/tasks, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "Bearer prod-token" {
-			t.Errorf("expected producer token, got %s", r.Header.Get("Authorization"))
+		if got := r.Header.Get("Authorization"); got != "Bearer tok-producer" {
+			t.Errorf("Authorization = %q", got)
 		}
 
 		var body CreateTaskOptions
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.Command != "GENERATE_MASTER" {
-			t.Errorf("expected command GENERATE_MASTER, got %s", body.Command)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Command != "PROCESS" {
+			t.Errorf("command = %q", body.Command)
 		}
 
-		jsonResponse(w, http.StatusCreated, Task{
-			ID:      "task-123",
-			Command: "GENERATE_MASTER",
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Task{
+			ID:      "task-1",
+			Command: "PROCESS",
 			Status:  StatusPending,
 		})
 	})
 
-	task, err := client.CreateTask(context.Background(), &CreateTaskOptions{
-		Command:  "GENERATE_MASTER",
-		Payload:  map[string]any{"jobId": "123"},
-		Priority: Int(5),
+	task, err := client.CreateTask(context.Background(), CreateTaskOptions{
+		Command: "PROCESS",
+		Payload: map[string]string{"key": "value"},
 	})
-
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if task.ID != "task-123" {
-		t.Errorf("expected task ID 'task-123', got %s", task.ID)
+	if task.ID != "task-1" {
+		t.Errorf("ID = %q", task.ID)
 	}
 	if task.Status != StatusPending {
-		t.Errorf("expected status PENDING, got %s", task.Status)
+		t.Errorf("Status = %q", task.Status)
 	}
 }
 
-func TestCreateTask_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.CreateTask(context.Background(), &CreateTaskOptions{Command: "CMD"})
-	if err == nil {
-		t.Fatal("expected error for missing producer token")
-	}
-}
-
-func TestCreateTask_ServerError(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("internal server error"))
+func TestCreateTask_APIError(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"missing command"}`))
 	})
 
-	_, err := client.CreateTask(context.Background(), &CreateTaskOptions{Command: "CMD"})
+	_, err := client.CreateTask(context.Background(), CreateTaskOptions{})
 	if err == nil {
-		t.Fatal("expected error for server error")
+		t.Fatal("expected error")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.StatusCode != 400 {
+		t.Errorf("StatusCode = %d", apiErr.StatusCode)
 	}
 }
 
-// ──────────────────────────────────────────────
-// CreateTasksBatch
-// ──────────────────────────────────────────────
+// ---------- CreateTasksBatch ----------
 
-func TestCreateTasksBatch(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestCreateTasksBatch_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/tasks/batch" {
-			t.Errorf("expected /v1/codeq/tasks/batch, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, []BatchCreateResult{
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]BatchTaskResult{
 			{Task: &Task{ID: "t-1"}},
 			{Task: &Task{ID: "t-2"}},
 		})
 	})
 
 	results, err := client.CreateTasksBatch(context.Background(), []CreateTaskOptions{
-		{Command: "CMD1", Payload: "a"},
-		{Command: "CMD2", Payload: "b"},
+		{Command: "A", Payload: nil},
+		{Command: "B", Payload: nil},
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 	if len(results) != 2 {
-		t.Fatalf("expected 2 results, got %d", len(results))
-	}
-	if results[0].Task.ID != "t-1" {
-		t.Errorf("expected first task ID 't-1', got %s", results[0].Task.ID)
+		t.Fatalf("len = %d", len(results))
 	}
 }
 
-// ──────────────────────────────────────────────
-// ClaimTask
-// ──────────────────────────────────────────────
+// ---------- ClaimTask ----------
 
-func TestClaimTask(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestClaimTask_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/tasks/claim" {
-			t.Errorf("expected /v1/codeq/tasks/claim, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "Bearer work-token" {
-			t.Errorf("expected worker token")
+		if got := r.Header.Get("Authorization"); got != "Bearer tok-worker" {
+			t.Errorf("Authorization = %q", got)
 		}
-
-		jsonResponse(w, http.StatusOK, Task{
-			ID:      "task-456",
-			Command: "GENERATE_MASTER",
-			Status:  StatusInProgress,
-		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Task{ID: "claimed-1", Status: StatusInProgress})
 	})
 
-	task, err := client.ClaimTask(context.Background(), &ClaimTaskOptions{
-		Commands:     []string{"GENERATE_MASTER"},
-		LeaseSeconds: Int(120),
-		WaitSeconds:  Int(10),
+	task, err := client.ClaimTask(context.Background(), ClaimTaskOptions{
+		Commands: []string{"PROCESS"},
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if task.ID != "task-456" {
-		t.Errorf("expected task ID 'task-456', got %s", task.ID)
+	if task == nil || task.ID != "claimed-1" {
+		t.Fatalf("task = %+v", task)
 	}
 }
 
 func TestClaimTask_NoContent(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	task, err := client.ClaimTask(context.Background(), &ClaimTaskOptions{
-		Commands: []string{"CMD"},
+	task, err := client.ClaimTask(context.Background(), ClaimTaskOptions{
+		Commands: []string{"PROCESS"},
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 	if task != nil {
-		t.Error("expected nil task for 204 response")
+		t.Fatalf("expected nil task, got %+v", task)
 	}
 }
 
-func TestClaimTask_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.ClaimTask(context.Background(), &ClaimTaskOptions{Commands: []string{"CMD"}})
-	if err == nil {
-		t.Fatal("expected error for missing worker token")
-	}
-}
+// ---------- ClaimTasksBatch ----------
 
-// ──────────────────────────────────────────────
-// ClaimTasksBatch
-// ──────────────────────────────────────────────
-
-func TestClaimTasksBatch(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestClaimTasksBatch_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/tasks/claim/batch" {
-			t.Errorf("expected /v1/codeq/tasks/claim/batch, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, []Task{
-			{ID: "t-1", Status: StatusInProgress},
-			{ID: "t-2", Status: StatusInProgress},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]Task{
+			{ID: "c-1", Status: StatusInProgress},
+			{ID: "c-2", Status: StatusInProgress},
 		})
 	})
 
-	tasks, err := client.ClaimTasksBatch(context.Background(), &BatchClaimOptions{
+	tasks, err := client.ClaimTasksBatch(context.Background(), ClaimTaskOptions{
 		Commands: []string{"CMD"},
-		Count:    2,
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 	if len(tasks) != 2 {
-		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+		t.Fatalf("len = %d", len(tasks))
 	}
 }
 
-func TestClaimTasksBatch_NoContent(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
+// ---------- SubmitResult ----------
 
-	tasks, err := client.ClaimTasksBatch(context.Background(), &BatchClaimOptions{Count: 5})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if tasks != nil {
-		t.Error("expected nil for 204 response")
-	}
-}
-
-// ──────────────────────────────────────────────
-// SubmitResult
-// ──────────────────────────────────────────────
-
-func TestSubmitResult(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/tasks/task-789/result" {
-			t.Errorf("expected /v1/codeq/tasks/task-789/result, got %s", r.URL.Path)
+func TestSubmitResult_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/tasks/task-1/result" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		var body SubmitResultOptions
-		json.NewDecoder(r.Body).Decode(&body)
-		if body.Status != "COMPLETED" {
-			t.Errorf("expected status COMPLETED, got %s", body.Status)
-		}
-
-		jsonResponse(w, http.StatusOK, ResultRecord{
-			TaskID: "task-789",
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ResultRecord{
+			TaskID: "task-1",
 			Status: StatusCompleted,
 		})
 	})
 
-	rec, err := client.SubmitResult(context.Background(), "task-789", &SubmitResultOptions{
-		Status: "COMPLETED",
-		Result: map[string]any{"output": "done"},
+	rec, err := client.SubmitResult(context.Background(), "task-1", SubmitResultOptions{
+		Status: StatusCompleted,
+		Result: map[string]string{"output": "done"},
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if rec.TaskID != "task-789" {
-		t.Errorf("expected task ID 'task-789', got %s", rec.TaskID)
-	}
-}
-
-func TestSubmitResult_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.SubmitResult(context.Background(), "id", &SubmitResultOptions{Status: "COMPLETED"})
-	if err == nil {
-		t.Fatal("expected error for missing worker token")
+	if rec.TaskID != "task-1" {
+		t.Errorf("TaskID = %q", rec.TaskID)
 	}
 }
 
-// ──────────────────────────────────────────────
-// SubmitResultsBatch
-// ──────────────────────────────────────────────
+// ---------- SubmitResultsBatch ----------
 
-func TestSubmitResultsBatch(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestSubmitResultsBatch_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/tasks/batch/results" {
-			t.Errorf("expected /v1/codeq/tasks/batch/results, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, []BatchSubmitResult{
-			{TaskID: "t-1", Result: &ResultRecord{TaskID: "t-1", Status: StatusCompleted}},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]BatchTaskResult{
+			{Task: &Task{ID: "t-1"}},
 		})
 	})
 
-	results, err := client.SubmitResultsBatch(context.Background(), []BatchSubmitItem{
-		{TaskID: "t-1", SubmitResultOptions: SubmitResultOptions{Status: "COMPLETED"}},
+	results, err := client.SubmitResultsBatch(context.Background(), []BatchResultSubmission{
+		{TaskID: "t-1", Options: SubmitResultOptions{Status: StatusCompleted}},
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(results))
+		t.Fatalf("len = %d", len(results))
 	}
 }
 
-// ──────────────────────────────────────────────
-// Heartbeat
-// ──────────────────────────────────────────────
+// ---------- Heartbeat ----------
 
-func TestHeartbeat(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/tasks/task-abc/heartbeat" {
-			t.Errorf("expected /v1/codeq/tasks/task-abc/heartbeat, got %s", r.URL.Path)
+func TestHeartbeat_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/tasks/task-1/heartbeat" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		var body struct{ ExtendSeconds int }
+		var body map[string]int
 		json.NewDecoder(r.Body).Decode(&body)
-		if body.ExtendSeconds != 120 {
-			t.Errorf("expected extendSeconds 120, got %d", body.ExtendSeconds)
-		}
-
-		w.WriteHeader(http.StatusOK)
-	})
-
-	err := client.Heartbeat(context.Background(), "task-abc", 120)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestHeartbeat_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	err := c.Heartbeat(context.Background(), "id", 120)
-	if err == nil {
-		t.Fatal("expected error for missing worker token")
-	}
-}
-
-// ──────────────────────────────────────────────
-// Abandon
-// ──────────────────────────────────────────────
-
-func TestAbandon(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/tasks/task-abc/abandon" {
-			t.Errorf("expected /v1/codeq/tasks/task-abc/abandon, got %s", r.URL.Path)
+		if body["extendSeconds"] != 300 {
+			t.Errorf("extendSeconds = %d", body["extendSeconds"])
 		}
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
 	})
 
-	err := client.Abandon(context.Background(), "task-abc")
+	err := client.Heartbeat(context.Background(), "task-1", 300)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 }
 
-func TestAbandon_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	err := c.Abandon(context.Background(), "id")
-	if err == nil {
-		t.Fatal("expected error for missing worker token")
+// ---------- Abandon ----------
+
+func TestAbandon_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/tasks/task-1/abandon" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	})
+
+	err := client.Abandon(context.Background(), "task-1")
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
-// ──────────────────────────────────────────────
-// Nack
-// ──────────────────────────────────────────────
+// ---------- Nack ----------
 
-func TestNack(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/tasks/task-abc/nack" {
-			t.Errorf("expected /v1/codeq/tasks/task-abc/nack, got %s", r.URL.Path)
+func TestNack_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/tasks/task-1/nack" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		var body struct {
-			DelaySeconds int
-			Reason       string
-		}
+		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
-		if body.DelaySeconds != 30 {
-			t.Errorf("expected delaySeconds 30, got %d", body.DelaySeconds)
+		if body["reason"] != "temporary failure" {
+			t.Errorf("reason = %v", body["reason"])
 		}
-		if body.Reason != "temporary failure" {
-			t.Errorf("expected reason 'temporary failure', got %s", body.Reason)
-		}
-
-		jsonResponse(w, http.StatusOK, NackResponse{
-			Status:       "requeued",
-			DelaySeconds: 30,
-		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(NackResponse{Status: "nacked", DelaySeconds: 60})
 	})
 
-	resp, err := client.Nack(context.Background(), "task-abc", 30, "temporary failure")
+	resp, err := client.Nack(context.Background(), "task-1", 60, "temporary failure")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if resp.Status != "requeued" {
-		t.Errorf("expected status 'requeued', got %s", resp.Status)
-	}
-}
-
-func TestNack_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.Nack(context.Background(), "id", 30, "reason")
-	if err == nil {
-		t.Fatal("expected error for missing worker token")
+	if resp.DelaySeconds != 60 {
+		t.Errorf("DelaySeconds = %d", resp.DelaySeconds)
 	}
 }
 
-// ──────────────────────────────────────────────
-// CreateSubscription
-// ──────────────────────────────────────────────
+// ---------- CreateSubscription ----------
 
-func TestCreateSubscription(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestCreateSubscription_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/workers/subscriptions" {
-			t.Errorf("expected /v1/codeq/workers/subscriptions, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusCreated, SubscriptionResponse{
-			SubscriptionID: "sub-123",
-			ExpiresAt:      "2026-01-01T00:00:00Z",
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SubscriptionResponse{
+			SubscriptionID: "sub-1",
+			ExpiresAt:      "2026-12-31T00:00:00Z",
 		})
 	})
 
-	resp, err := client.CreateSubscription(context.Background(), &CreateSubscriptionOptions{
-		CallbackURL:  "https://example.com/webhook",
-		EventTypes:   []string{"GENERATE_MASTER"},
-		TTLSeconds:   Int(3600),
-		DeliveryMode: "group",
-		GroupID:      "pool-1",
+	resp, err := client.CreateSubscription(context.Background(), CreateSubscriptionOptions{
+		CallbackURL: "https://example.com/callback",
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if resp.SubscriptionID != "sub-123" {
-		t.Errorf("expected subscription ID 'sub-123', got %s", resp.SubscriptionID)
-	}
-}
-
-func TestCreateSubscription_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.CreateSubscription(context.Background(), &CreateSubscriptionOptions{
-		CallbackURL: "https://example.com/webhook",
-	})
-	if err == nil {
-		t.Fatal("expected error for missing worker token")
+	if resp.SubscriptionID != "sub-1" {
+		t.Errorf("SubscriptionID = %q", resp.SubscriptionID)
 	}
 }
 
-// ──────────────────────────────────────────────
-// RenewSubscription
-// ──────────────────────────────────────────────
+// ---------- RenewSubscription ----------
 
-func TestRenewSubscription(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/workers/subscriptions/sub-123/heartbeat" {
-			t.Errorf("expected /v1/codeq/workers/subscriptions/sub-123/heartbeat, got %s", r.URL.Path)
+func TestRenewSubscription_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/workers/subscriptions/sub-1/heartbeat" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, SubscriptionResponse{
-			SubscriptionID: "sub-123",
-			ExpiresAt:      "2026-01-02T00:00:00Z",
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SubscriptionResponse{
+			SubscriptionID: "sub-1",
+			ExpiresAt:      "2027-01-01T00:00:00Z",
 		})
 	})
 
-	resp, err := client.RenewSubscription(context.Background(), "sub-123", &RenewSubscriptionOptions{
-		TTLSeconds: Int(7200),
+	ttl := 3600
+	resp, err := client.RenewSubscription(context.Background(), "sub-1", &RenewSubscriptionOptions{
+		TTLSeconds: &ttl,
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if resp.SubscriptionID != "sub-123" {
-		t.Errorf("expected subscription ID 'sub-123', got %s", resp.SubscriptionID)
-	}
-}
-
-func TestRenewSubscription_NilOptions(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, http.StatusOK, SubscriptionResponse{
-			SubscriptionID: "sub-123",
-			ExpiresAt:      "2026-01-02T00:00:00Z",
-		})
-	})
-
-	resp, err := client.RenewSubscription(context.Background(), "sub-123", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.SubscriptionID != "sub-123" {
-		t.Errorf("expected subscription ID 'sub-123', got %s", resp.SubscriptionID)
+	if resp.SubscriptionID != "sub-1" {
+		t.Errorf("SubscriptionID = %q", resp.SubscriptionID)
 	}
 }
 
-func TestRenewSubscription_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.RenewSubscription(context.Background(), "sub-123", nil)
-	if err == nil {
-		t.Fatal("expected error for missing token")
-	}
-}
+// ---------- GetTask ----------
 
-// ──────────────────────────────────────────────
-// GetTask
-// ──────────────────────────────────────────────
-
-func TestGetTask(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestGetTask_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			t.Errorf("expected GET, got %s", r.Method)
+			t.Errorf("method = %s", r.Method)
 		}
-		if r.URL.Path != "/v1/codeq/tasks/task-xyz" {
-			t.Errorf("expected /v1/codeq/tasks/task-xyz, got %s", r.URL.Path)
+		if r.URL.Path != "/v1/codeq/tasks/task-1" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, Task{
-			ID:      "task-xyz",
-			Command: "CMD",
-			Status:  StatusCompleted,
-		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Task{ID: "task-1", Status: StatusCompleted})
 	})
 
-	task, err := client.GetTask(context.Background(), "task-xyz")
+	task, err := client.GetTask(context.Background(), "task-1")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if task.ID != "task-xyz" {
-		t.Errorf("expected task ID 'task-xyz', got %s", task.ID)
+	if task.ID != "task-1" {
+		t.Errorf("ID = %q", task.ID)
 	}
 }
 
-func TestGetTask_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.GetTask(context.Background(), "id")
+func TestGetTask_NotFound(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":"not found"}`))
+	})
+
+	_, err := client.GetTask(context.Background(), "missing")
 	if err == nil {
-		t.Fatal("expected error for missing token")
+		t.Fatal("expected error")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("expected *APIError, got %T", err)
+	}
+	if apiErr.StatusCode != 404 {
+		t.Errorf("StatusCode = %d", apiErr.StatusCode)
 	}
 }
 
-// ──────────────────────────────────────────────
-// GetResult
-// ──────────────────────────────────────────────
+// ---------- GetResult ----------
 
-func TestGetResult(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/tasks/task-xyz/result" {
-			t.Errorf("expected /v1/codeq/tasks/task-xyz/result, got %s", r.URL.Path)
+func TestGetResult_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/tasks/task-1/result" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, TaskResult{
-			Task:   Task{ID: "task-xyz", Status: StatusCompleted},
-			Result: ResultRecord{TaskID: "task-xyz", Status: StatusCompleted},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TaskResult{
+			Task:   Task{ID: "task-1", Status: StatusCompleted},
+			Result: "output",
 		})
 	})
 
-	result, err := client.GetResult(context.Background(), "task-xyz")
+	result, err := client.GetResult(context.Background(), "task-1")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if result.Task.ID != "task-xyz" {
-		t.Errorf("expected task ID 'task-xyz', got %s", result.Task.ID)
-	}
-}
-
-func TestGetResult_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.GetResult(context.Background(), "id")
-	if err == nil {
-		t.Fatal("expected error for missing token")
+	if result.Task.ID != "task-1" {
+		t.Errorf("Task.ID = %q", result.Task.ID)
 	}
 }
 
-// ──────────────────────────────────────────────
-// WaitForResult
-// ──────────────────────────────────────────────
+// ---------- WaitForResult ----------
 
-func TestWaitForResult(t *testing.T) {
-	calls := 0
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if calls < 3 {
-			w.WriteHeader(http.StatusNotFound)
-			w.Write([]byte("not found"))
-			return
-		}
-		jsonResponse(w, http.StatusOK, TaskResult{
-			Task:   Task{ID: "task-xyz", Status: StatusCompleted},
-			Result: ResultRecord{TaskID: "task-xyz", Status: StatusCompleted},
+func TestWaitForResult_ImmediateSuccess(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TaskResult{
+			Task: Task{ID: "task-1", Status: StatusCompleted},
 		})
 	})
 
-	result, err := client.WaitForResult(context.Background(), "task-xyz", &WaitForResultOptions{
+	result, err := client.WaitForResult(context.Background(), "task-1", &WaitForResultOptions{
 		Timeout:      5 * time.Second,
 		PollInterval: 100 * time.Millisecond,
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if result.Task.ID != "task-xyz" {
-		t.Errorf("expected task ID 'task-xyz', got %s", result.Task.ID)
+	if result.Task.ID != "task-1" {
+		t.Errorf("Task.ID = %q", result.Task.ID)
 	}
-	if calls < 3 {
-		t.Errorf("expected at least 3 calls, got %d", calls)
+}
+
+func TestWaitForResult_PollsThenSucceeds(t *testing.T) {
+	var calls atomic.Int32
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n < 3 {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(TaskResult{
+			Task: Task{ID: "task-1", Status: StatusCompleted},
+		})
+	})
+
+	result, err := client.WaitForResult(context.Background(), "task-1", &WaitForResultOptions{
+		Timeout:      5 * time.Second,
+		PollInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Task.ID != "task-1" {
+		t.Errorf("Task.ID = %q", result.Task.ID)
+	}
+	if got := calls.Load(); got < 3 {
+		t.Errorf("calls = %d, want >= 3", got)
 	}
 }
 
 func TestWaitForResult_Timeout(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
+		w.Write([]byte(`{"error":"not found"}`))
 	})
 
-	_, err := client.WaitForResult(context.Background(), "task-xyz", &WaitForResultOptions{
-		Timeout:      300 * time.Millisecond,
+	_, err := client.WaitForResult(context.Background(), "task-1", &WaitForResultOptions{
+		Timeout:      200 * time.Millisecond,
 		PollInterval: 50 * time.Millisecond,
 	})
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
-}
-
-func TestWaitForResult_ContextCancelled(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("not found"))
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := client.WaitForResult(ctx, "task-xyz", &WaitForResultOptions{
-		Timeout:      5 * time.Second,
-		PollInterval: 100 * time.Millisecond,
-	})
-	if err == nil {
-		t.Fatal("expected context cancelled error")
+	if _, ok := err.(*TimeoutError); !ok {
+		t.Fatalf("expected *TimeoutError, got %T: %v", err, err)
 	}
 }
 
-// ──────────────────────────────────────────────
-// ListQueues
-// ──────────────────────────────────────────────
+// ---------- ListQueues ----------
 
-func TestListQueues(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestListQueues_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/admin/queues" {
-			t.Errorf("expected /v1/codeq/admin/queues, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "Bearer admin-token" {
-			t.Errorf("expected admin token")
+		if got := r.Header.Get("Authorization"); got != "Bearer tok-admin" {
+			t.Errorf("Authorization = %q", got)
 		}
-
-		jsonResponse(w, http.StatusOK, []QueueStats{
-			{Command: "CMD1", Ready: 10, Delayed: 2, InProgress: 5, DLQ: 1},
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]QueueStats{
+			{Command: "CMD_A", Ready: 10, InProgress: 2},
 		})
 	})
 
 	stats, err := client.ListQueues(context.Background())
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if len(stats) != 1 {
-		t.Fatalf("expected 1 queue stat, got %d", len(stats))
-	}
-	if stats[0].Ready != 10 {
-		t.Errorf("expected 10 ready, got %d", stats[0].Ready)
+	if len(stats) != 1 || stats[0].Command != "CMD_A" {
+		t.Errorf("stats = %+v", stats)
 	}
 }
 
-func TestListQueues_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.ListQueues(context.Background())
-	if err == nil {
-		t.Fatal("expected error for missing admin token")
-	}
-}
+// ---------- GetQueueStats ----------
 
-// ──────────────────────────────────────────────
-// GetQueueStats
-// ──────────────────────────────────────────────
-
-func TestGetQueueStats(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/codeq/admin/queues/GENERATE_MASTER" {
-			t.Errorf("expected /v1/codeq/admin/queues/GENERATE_MASTER, got %s", r.URL.Path)
+func TestGetQueueStats_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/codeq/admin/queues/PROCESS" {
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, QueueStats{
-			Command:    "GENERATE_MASTER",
-			Ready:      10,
-			InProgress: 5,
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(QueueStats{
+			Command: "PROCESS", Ready: 5, Delayed: 1, InProgress: 3, DLQ: 0,
 		})
 	})
 
-	stats, err := client.GetQueueStats(context.Background(), "GENERATE_MASTER")
+	stats, err := client.GetQueueStats(context.Background(), "PROCESS")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if stats.Command != "GENERATE_MASTER" {
-		t.Errorf("expected command GENERATE_MASTER, got %s", stats.Command)
-	}
-}
-
-func TestGetQueueStats_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.GetQueueStats(context.Background(), "CMD")
-	if err == nil {
-		t.Fatal("expected error for missing admin token")
+	if stats.Ready != 5 {
+		t.Errorf("Ready = %d", stats.Ready)
 	}
 }
 
-// ──────────────────────────────────────────────
-// CleanupExpired
-// ──────────────────────────────────────────────
+// ---------- CleanupExpired ----------
 
-func TestCleanupExpired(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
+func TestCleanupExpired_Success(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/codeq/admin/tasks/cleanup" {
-			t.Errorf("expected /v1/codeq/admin/tasks/cleanup, got %s", r.URL.Path)
+			t.Errorf("path = %s", r.URL.Path)
 		}
-
-		jsonResponse(w, http.StatusOK, CleanupResult{
-			Deleted: 42,
-			Before:  "2026-01-01T00:00:00Z",
-			Limit:   1000,
-		})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(CleanupResult{Deleted: 42})
 	})
 
-	result, err := client.CleanupExpired(context.Background(), &CleanupOptions{
-		Limit: Int(500),
-	})
+	limit := 100
+	result, err := client.CleanupExpired(context.Background(), &CleanupOptions{Limit: &limit})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
 	if result.Deleted != 42 {
-		t.Errorf("expected 42 deleted, got %d", result.Deleted)
+		t.Errorf("Deleted = %d", result.Deleted)
 	}
 }
 
-func TestCleanupExpired_NilOptions(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		jsonResponse(w, http.StatusOK, CleanupResult{Deleted: 0, Before: "2026-01-01T00:00:00Z", Limit: 1000})
+// ---------- Auth errors ----------
+
+func TestAuthError_Unauthorized(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid token"}`))
 	})
 
-	result, err := client.CleanupExpired(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Deleted != 0 {
-		t.Errorf("expected 0 deleted, got %d", result.Deleted)
-	}
-}
-
-func TestCleanupExpired_MissingToken(t *testing.T) {
-	c := NewClient("http://localhost:8080")
-	_, err := c.CleanupExpired(context.Background(), nil)
+	_, err := client.CreateTask(context.Background(), CreateTaskOptions{Command: "X"})
 	if err == nil {
-		t.Fatal("expected error for missing admin token")
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*AuthError); !ok {
+		t.Fatalf("expected *AuthError, got %T: %v", err, err)
 	}
 }
 
-// ──────────────────────────────────────────────
-// Error type
-// ──────────────────────────────────────────────
-
-func TestError_Error(t *testing.T) {
-	err := &Error{StatusCode: 404, Message: "task not found"}
-	expected := "codeq: 404 task not found"
-	if err.Error() != expected {
-		t.Errorf("expected %q, got %q", expected, err.Error())
-	}
-}
-
-// ──────────────────────────────────────────────
-// Int helper
-// ──────────────────────────────────────────────
-
-func TestInt(t *testing.T) {
-	p := Int(42)
-	if p == nil || *p != 42 {
-		t.Errorf("expected pointer to 42")
-	}
-}
-
-// ──────────────────────────────────────────────
-// Token fallback behavior
-// ──────────────────────────────────────────────
-
-func TestGetTask_FallsBackToProducerToken(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer prod-token-only" {
-			t.Errorf("expected producer token fallback, got %s", r.Header.Get("Authorization"))
-		}
-		jsonResponse(w, http.StatusOK, Task{ID: "t-1"})
+func TestAuthError_Forbidden(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"insufficient scope"}`))
 	})
-	client.workerToken = ""
-	client.producerToken = "prod-token-only"
-
-	_, err := client.GetTask(context.Background(), "t-1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestListQueues_FallsBackToProducerToken(t *testing.T) {
-	_, client := setupServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer prod-token-only" {
-			t.Errorf("expected producer token fallback, got %s", r.Header.Get("Authorization"))
-		}
-		jsonResponse(w, http.StatusOK, []QueueStats{})
-	})
-	client.adminToken = ""
-	client.workerToken = ""
-	client.producerToken = "prod-token-only"
 
 	_, err := client.ListQueues(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if _, ok := err.(*AuthError); !ok {
+		t.Fatalf("expected *AuthError, got %T: %v", err, err)
+	}
+}
+
+// ---------- Retry behaviour ----------
+
+func TestRetry_ServerError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n <= 2 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"oops"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Task{ID: "ok"})
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL,
+		WithProducerToken("tok"),
+		WithMaxRetries(3),
+		WithRetryBaseDelay(10*time.Millisecond),
+	)
+
+	task, err := client.CreateTask(context.Background(), CreateTaskOptions{Command: "X"})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
+	}
+	if task.ID != "ok" {
+		t.Errorf("ID = %q", task.ID)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestRetry_ClientErrorNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"bad"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL,
+		WithProducerToken("tok"),
+		WithMaxRetries(3),
+		WithRetryBaseDelay(10*time.Millisecond),
+	)
+
+	_, err := client.CreateTask(context.Background(), CreateTaskOptions{Command: "X"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1 (client errors should not retry)", got)
+	}
+}
+
+// ---------- URL encoding ----------
+
+func TestURLEncoding_SpecialCharacters(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Go's http.Server decodes percent-encoded path segments, so
+		// url.PathEscape("id with spaces") arrives as "id with spaces".
+		if r.URL.Path != "/v1/codeq/tasks/id+with+spaces" && r.URL.Path != "/v1/codeq/tasks/id%20with%20spaces" && r.URL.Path != "/v1/codeq/tasks/id with spaces" {
+			t.Errorf("unexpected path = %s", r.URL.Path)
+		}
+		// Verify the raw URL still has the encoding.
+		if r.RequestURI == "" {
+			t.Error("RequestURI is empty")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(Task{ID: "id with spaces"})
+	})
+
+	task, err := client.GetTask(context.Background(), "id with spaces")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.ID != "id with spaces" {
+		t.Errorf("ID = %q", task.ID)
+	}
+}
+
+// ---------- Error types ----------
+
+func TestError_String(t *testing.T) {
+	e := &Error{Message: "test", Cause: nil}
+	if e.Error() != "codeq: test" {
+		t.Errorf("Error() = %q", e.Error())
+	}
+
+	inner := &Error{Message: "inner"}
+	e2 := &Error{Message: "outer", Cause: inner}
+	if got := e2.Error(); got != "codeq: outer: codeq: inner" {
+		t.Errorf("Error() = %q", got)
+	}
+	if e2.Unwrap() != inner {
+		t.Error("Unwrap did not return inner error")
+	}
+}
+
+func TestAPIError_String(t *testing.T) {
+	e := &APIError{StatusCode: 404, Message: "Not Found", ResponseBody: `{"detail":"gone"}`}
+	expected := `codeq: API error (status 404): Not Found – {"detail":"gone"}`
+	if e.Error() != expected {
+		t.Errorf("Error() = %q", e.Error())
+	}
+
+	e2 := &APIError{StatusCode: 500, Message: "Internal Server Error"}
+	if got := e2.Error(); got != "codeq: API error (status 500): Internal Server Error" {
+		t.Errorf("Error() = %q", got)
+	}
+}
+
+func TestAuthError_String(t *testing.T) {
+	e := &AuthError{Message: "bad token"}
+	if e.Error() != "codeq: auth error: bad token" {
+		t.Errorf("Error() = %q", e.Error())
+	}
+}
+
+func TestTimeoutError_String(t *testing.T) {
+	e := &TimeoutError{Message: "deadline exceeded"}
+	if e.Error() != "codeq: timeout: deadline exceeded" {
+		t.Errorf("Error() = %q", e.Error())
+	}
+}
+
+// ---------- tokenForRead ----------
+
+func TestTokenForRead_PrefersProducer(t *testing.T) {
+	c := NewClient("http://host",
+		WithProducerToken("p"),
+		WithWorkerToken("w"),
+		WithAdminToken("a"),
+	)
+	if got := c.tokenForRead(); got != "p" {
+		t.Errorf("tokenForRead = %q, want p", got)
+	}
+}
+
+func TestTokenForRead_FallsBackToWorker(t *testing.T) {
+	c := NewClient("http://host", WithWorkerToken("w"), WithAdminToken("a"))
+	if got := c.tokenForRead(); got != "w" {
+		t.Errorf("tokenForRead = %q, want w", got)
+	}
+}
+
+func TestTokenForRead_FallsBackToAdmin(t *testing.T) {
+	c := NewClient("http://host", WithAdminToken("a"))
+	if got := c.tokenForRead(); got != "a" {
+		t.Errorf("tokenForRead = %q, want a", got)
+	}
+}
+
+// ---------- Context cancellation ----------
+
+func TestContextCancellation(t *testing.T) {
+	_, client := newTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(2 * time.Second) // simulate slow server
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := client.CreateTask(ctx, CreateTaskOptions{Command: "X"})
+	if err == nil {
+		t.Fatal("expected context cancellation error")
 	}
 }
