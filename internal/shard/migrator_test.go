@@ -3,6 +3,7 @@ package shard
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/alicebob/miniredis/v2"
@@ -271,7 +272,7 @@ func TestMigrate_InProgressTasks_BlocksWhenNonEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when in-progress queue is non-empty")
 	}
-	if got := err.Error(); !contains(got, "still in progress") {
+	if got := err.Error(); !strings.Contains(got, "still in progress") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -296,19 +297,6 @@ func TestMigrate_InProgressTasks_DryRunReportsCounts(t *testing.T) {
 	if res.InProgMigrated != 2 {
 		t.Errorf("expected dry-run to report 2 in-progress, got %d", res.InProgMigrated)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchSubstring(s, substr)
-}
-
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestMigrate_DryRun(t *testing.T) {

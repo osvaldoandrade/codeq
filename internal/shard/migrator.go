@@ -96,7 +96,6 @@ func Migrate(ctx context.Context, clients *ClientMap, opts MigrateOptions) (*Mig
 	// to drain in-progress work before migrating.
 	{
 		srcKey := QueueKeyInProgress(opts.Command, opts.TenantID, opts.FromShard)
-		dstKey := QueueKeyInProgress(opts.Command, opts.TenantID, opts.ToShard)
 
 		inProgCount, err := src.SCard(ctx, srcKey).Result()
 		if err != nil {
@@ -111,7 +110,6 @@ func Migrate(ctx context.Context, clients *ClientMap, opts MigrateOptions) (*Mig
 			}
 			res.InProgMigrated = inProgCount
 		} else {
-			_ = dstKey // keep linter happy; will be used once lease migration is implemented
 			res.InProgMigrated = 0
 		}
 	}
