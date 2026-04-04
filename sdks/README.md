@@ -4,6 +4,76 @@ This directory contains official SDKs and integration examples for CodeQ in mult
 
 ## 📦 Available SDKs
 
+### Go SDK
+- **Location**: `sdks/go/`
+- **Features**:
+  - Idiomatic Go API with `context.Context` support
+  - Functional options pattern for configuration
+  - Zero external dependencies (stdlib `net/http` + `encoding/json`)
+  - Full API coverage (tasks, subscriptions, admin, batch operations)
+  - Automatic token-based authentication
+  - Custom `*http.Client` support for advanced use cases
+  - Convenience `WaitForResult` polling method
+
+**Installation**:
+```bash
+go get github.com/osvaldoandrade/codeq-sdk-go
+```
+
+**Quick Start**:
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	codeq "github.com/osvaldoandrade/codeq-sdk-go"
+)
+
+func main() {
+	client := codeq.NewClient("https://codeq.example.com",
+		codeq.WithProducerToken("your-producer-token"),
+		codeq.WithWorkerToken("your-worker-token"),
+	)
+
+	ctx := context.Background()
+
+	// Create a task
+	task, err := client.CreateTask(ctx, &codeq.CreateTaskOptions{
+		Command:  "GENERATE_MASTER",
+		Payload:  map[string]any{"jobId": "123"},
+		Priority: codeq.Int(5),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("Created task:", task.ID)
+
+	// Claim a task
+	claimed, err := client.ClaimTask(ctx, &codeq.ClaimTaskOptions{
+		Commands:     []string{"GENERATE_MASTER"},
+		LeaseSeconds: codeq.Int(120),
+		WaitSeconds:  codeq.Int(10),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Submit result
+	if claimed != nil {
+		_, err = client.SubmitResult(ctx, claimed.ID, &codeq.SubmitResultOptions{
+			Status: "COMPLETED",
+			Result: map[string]any{"success": true},
+		})
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+```
+
 ### Java SDK
 - **Location**: `sdks/java/core/`
 - **Frameworks**: Spring Boot, Quarkus, Micronaut
@@ -337,6 +407,12 @@ CODEQ_WORKER_TOKEN=your-worker-token
 ## 🧪 Testing
 
 ### Unit Tests
+
+**Go**:
+```bash
+cd sdks/go
+go test ./... -v
+```
 
 **Python**:
 ```bash
