@@ -107,6 +107,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           cd sdks/python
           sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
+          grep -q "^version = \"${VERSION}\"" pyproject.toml || {
+            echo "Failed to set version to ${VERSION} in pyproject.toml" >&2
+            exit 1
+          }
 
       - name: Build package
         run: python -m build sdks/python
