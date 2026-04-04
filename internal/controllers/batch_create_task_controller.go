@@ -47,7 +47,11 @@ func (h *batchCreateTaskController) Handle(c *gin.Context) {
 
 	results := make([]batchCreateResult, len(req.Tasks))
 	for i, t := range req.Tasks {
-		payloadJSON, _ := jsonMarshal(t.Payload)
+		payloadJSON, err := jsonMarshal(t.Payload)
+		if err != nil {
+			results[i] = batchCreateResult{Error: err.Error()}
+			continue
+		}
 
 		var runAt time.Time
 		if t.RunAt != "" {
