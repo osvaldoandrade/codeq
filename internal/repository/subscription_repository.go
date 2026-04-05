@@ -128,19 +128,49 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	subs := make([]domain.Subscription, 0, len(ids))
+
+	// Pipeline all HGET operations in one RTT instead of N RTTs
+	pipe := r.rdb.Pipeline()
 	for _, id := range ids {
-		sub, err := r.Get(ctx, id)
-		if err != nil {
-			_ = r.rdb.ZRem(ctx, key, id).Err()
+		pipe.HGet(ctx, r.keySubsHash(), id)
+	}
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("redis pipeline: %w", err)
+	}
+
+	subs := make([]domain.Subscription, 0, len(ids))
+	staleIDs := make([]interface{}, 0)
+	for i, result := range results {
+		cmd, ok := result.(*redis.StringCmd)
+		if !ok {
+			continue
+		}
+		js, err := cmd.Result()
+		if err == redis.Nil || js == "" || err != nil {
+			staleIDs = append(staleIDs, ids[i])
+			continue
+		}
+		var sub domain.Subscription
+		if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
+			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
 		if sub.ExpiresAt.Before(now) {
-			_ = r.rdb.ZRem(ctx, key, id).Err()
+			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
-		subs = append(subs, *sub)
+		subs = append(subs, sub)
 	}
+
+	// Clean up stale subscription IDs in background
+	if len(staleIDs) > 0 {
+		go func() {
+			ctx := context.Background()
+			_ = r.rdb.ZRem(ctx, key, staleIDs...).Err()
+		}()
+	}
+
 	return subs, nil
 }
 
