@@ -28,9 +28,9 @@ type batchSubmitReq struct {
 }
 
 type batchSubmitResult struct {
-	TaskID string              `json:"taskId"`
+	TaskID string               `json:"taskId"`
 	Result *domain.ResultRecord `json:"result,omitempty"`
-	Error  string              `json:"error,omitempty"`
+	Error  string               `json:"error,omitempty"`
 }
 
 func (h *batchSubmitResultController) Handle(c *gin.Context) {
