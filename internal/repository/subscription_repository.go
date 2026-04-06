@@ -128,19 +128,51 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	subs := make([]domain.Subscription, 0, len(ids))
+
+	// Batch fetch all subscription data in a single pipeline (1 RTT instead of N RTTs)
+	pipe := r.rdb.Pipeline()
 	for _, id := range ids {
-		sub, err := r.Get(ctx, id)
+		pipe.HGet(ctx, r.keySubsHash(), id)
+	}
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("redis pipeline HGET: %w", err)
+	}
+
+	var toRemove []string
+	subs := make([]domain.Subscription, 0, len(ids))
+	for i, id := range ids {
+		strCmd, ok := results[i].(*redis.StringCmd)
+		if !ok {
+			_ = r.rdb.ZRem(ctx, key, id).Err()
+			continue
+		}
+		js, err := strCmd.Result()
+		if err == redis.Nil || js == "" {
+			toRemove = append(toRemove, id)
+			continue
+		}
 		if err != nil {
 			_ = r.rdb.ZRem(ctx, key, id).Err()
 			continue
 		}
-		if sub.ExpiresAt.Before(now) {
+		var sub domain.Subscription
+		if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
 			_ = r.rdb.ZRem(ctx, key, id).Err()
 			continue
 		}
-		subs = append(subs, *sub)
+		if sub.ExpiresAt.Before(now) {
+			toRemove = append(toRemove, id)
+			continue
+		}
+		subs = append(subs, sub)
 	}
+
+	// Batch remove expired/invalid subscriptions
+	if len(toRemove) > 0 {
+		_ = r.rdb.ZRem(ctx, key, toRemove...).Err()
+	}
+
 	return subs, nil
 }
 
