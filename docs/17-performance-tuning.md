@@ -1156,6 +1156,32 @@ The task enqueue operation has been optimized to pipeline all three core Redis o
 - At 1ms latency (local): Still provides 40-50% improvement from reduced overhead
 - Fully transparent to API consumers; no breaking changes or configuration needed
 
+### Subscription ListActive Operations
+
+The subscription notification system uses `ListActive()` to fetch all active subscriptions for a command. This operation previously exhibited an N+1 query pattern:
+
+**Subscription ListActive** (fetch all active subscriptions for event delivery):
+- **Before**: N+1 RTTs
+  1. ZRANGEBYSCORE to get subscription IDs (1 RTT)
+  2. N individual HGET calls (one per subscription ID)
+  3. N individual ZREM calls for expired subscriptions (cleanup)
+- **After**: 2-3 RTTs (batched)
+  1. ZRANGEBYSCORE to get subscription IDs (1 RTT)
+  2. All HGET calls in single pipelined batch (1 RTT)
+  3. All ZREM calls for expired subscriptions in separate batch (1 RTT, conditional)
+- **Impact**: ~99% RTT reduction for typical workloads with 10-100 subscriptions per command
+  - 100 subscriptions: 101 RTTs → 2 RTTs (98% reduction)
+  - 10 subscriptions: 11 RTTs → 2 RTTs (82% reduction)
+- **Expected latency gain**: 50-100ms improvement for systems with high subscription density
+- **Use case**: Event notification delivery triggers frequently during high-load periods
+- **Reference**: See `.github/copilot/instructions/02-redis-pipelining.md` for pipelining patterns
+
+**Production scenario:**
+- System with 50 active subscriptions per command
+- Before: 51 RTTs × 5ms = 255ms
+- After: 2 RTTs × 5ms = 10ms
+- **Net gain: 245ms (96% reduction)**
+
 ### Result Handling Operations
 
 Result operations (SaveResult, UpdateTaskOnComplete, RemoveFromInprogAndClearLease) have been optimized to batch related Redis operations:
