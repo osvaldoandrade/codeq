@@ -216,27 +216,86 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 		if err != nil && err != redis.Nil {
 			return removed, err
 		}
+
+		// Batch get all subscription data (1 RTT instead of N RTTs)
+		subsMap := make(map[string]*domain.Subscription)
+		invalidIDs := make([]string, 0)
+
+		// Fetch all subscriptions in one batch
+		pipe := r.rdb.Pipeline()
 		for _, id := range ids {
-			sub, err := r.Get(ctx, id)
-			if err != nil {
-				_ = r.rdb.ZRem(ctx, key, id).Err()
-				_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
-				_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
-				removed++
-				continue
+			pipe.HGet(ctx, r.keySubsHash(), id)
+		}
+		results, err := pipe.Exec(ctx)
+		if err != nil && err != redis.Nil {
+			return removed, err
+		}
+
+		// Parse results
+		for i, id := range ids {
+			if i < len(results) {
+				if strCmd, ok := results[i].(*redis.StringCmd); ok {
+					js, err := strCmd.Result()
+					if err == redis.Nil || js == "" || err != nil {
+						invalidIDs = append(invalidIDs, id)
+						continue
+					}
+					var sub domain.Subscription
+					if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
+						invalidIDs = append(invalidIDs, id)
+						continue
+					}
+					subsMap[id] = &sub
+				}
 			}
-			if sub.ExpiresAt.After(before) {
-				_ = r.rdb.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID}).Err()
-				continue
+		}
+
+		// Separate into expired and valid (rejuvenated)
+		toDelete := make([]*domain.Subscription, 0)
+		toRejuvenate := make([]*domain.Subscription, 0)
+
+		for _, id := range ids {
+			if sub, ok := subsMap[id]; ok {
+				if sub.ExpiresAt.After(before) {
+					toRejuvenate = append(toRejuvenate, sub)
+				} else {
+					toDelete = append(toDelete, sub)
+				}
 			}
-			pipe := r.rdb.TxPipeline()
-			for _, ev := range sub.EventTypes {
-				pipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
+		}
+
+		// Add invalid IDs to delete list
+		toDelete_IDs := make([]string, 0, len(invalidIDs)+len(toDelete))
+		toDelete_IDs = append(toDelete_IDs, invalidIDs...)
+		for _, sub := range toDelete {
+			toDelete_IDs = append(toDelete_IDs, sub.ID)
+		}
+
+		// Batch re-additions in one pipeline
+		if len(toRejuvenate) > 0 {
+			rejuvPipe := r.rdb.Pipeline()
+			for _, sub := range toRejuvenate {
+				rejuvPipe.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID})
 			}
-			pipe.HDel(ctx, r.keySubsHash(), sub.ID)
-			pipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
-			if _, err := pipe.Exec(ctx); err == nil {
-				removed++
+			_, _ = rejuvPipe.Exec(ctx)
+		}
+
+		// Batch cleanup of expired + invalid subscriptions (N operations → 1 RTT)
+		if len(toDelete_IDs) > 0 {
+			cleanupPipe := r.rdb.Pipeline()
+			for _, id := range toDelete_IDs {
+				// Cleanup this subscription's entries
+				if sub, ok := subsMap[id]; ok {
+					for _, ev := range sub.EventTypes {
+						cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), id)
+					}
+				}
+				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
+				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				cleanupPipe.ZRem(ctx, key, id)
+			}
+			if _, err := cleanupPipe.Exec(ctx); err == nil {
+				removed += len(toDelete_IDs)
 			}
 		}
 	}
