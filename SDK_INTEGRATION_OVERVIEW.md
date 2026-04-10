@@ -7,7 +7,7 @@ their capabilities, and guidance on choosing the right SDK for your environment.
 
 | SDK | Language | Package | Status |
 |-----|----------|---------|--------|
-| [Java SDK](sdks/java/core/) | Java 17+ | `io.codeq:codeq-sdk` | ✅ Production |
+| [Java SDK](sdks/java/README.md) | Java 17+ | `io.codeq:codeq-sdk-java` | ✅ Production |
 | [Node.js SDK](sdks/nodejs/) | Node.js 18+ / TypeScript | `@codeq/sdk` | ✅ Production |
 | [Python SDK](sdks/python/) | Python 3.10+ | `codeq-client` | ✅ Production |
 | [Go SDK](sdks/go/) | Go 1.22+ | `github.com/osvaldoandrade/codeq/sdks/go` | ✅ Production |
