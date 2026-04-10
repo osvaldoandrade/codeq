@@ -142,6 +142,33 @@ for _, cmd := range cmds {
 }
 ```
 
+## Case Study: Subscription ListActive N+1 Optimization
+
+### Problem
+The `ListActive()` method was fetching subscription metadata in a loop:
+```go
+for _, id := range ids {
+    sub, err := r.Get(ctx, id)  // Each Get() = 1 HGET = 1 RTT
+}
+// 100 subscriptions = 100 RTTs ≈ 100ms latency
+```
+
+### Solution
+Pipeline all HGET operations:
+```go
+pipe := r.rdb.Pipeline()
+for _, id := range ids {
+    pipe.HGet(ctx, r.keySubsHash(), id)
+}
+results, _ := pipe.Exec(ctx)  // All HGETs in 1 RTT
+// 100 subscriptions = 1 RTT ≈ 1ms latency
+```
+
+### Results
+- **Latency reduction**: 100 RTTs → 1 RTT (99% improvement)
+- **For 100 subscriptions**: ~99ms latency reduction
+- Also batch removes expired subscriptions in single ZRem
+
 ## Success Metrics
 - ✅ P99 task claim latency < 100ms
 - ✅ Throughput increase 3-5x with pipelining
