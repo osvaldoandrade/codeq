@@ -169,6 +169,45 @@ results, _ := pipe.Exec(ctx)  // All HGETs in 1 RTT
 - **For 100 subscriptions**: ~99ms latency reduction
 - Also batch removes expired subscriptions in single ZRem
 
+## Case Study: Task CleanupExpired N+1 Optimization
+
+### Problem
+The `CleanupExpired()` method was removing expired tasks inefficiently:
+```go
+for _, id := range expiredIDs {  // 100 expired tasks
+    removeTaskFully(ctx, id)  // Each removal = 1 HGet + 1 TxPipeline = 2 RTTs
+}
+// 100 tasks = 200 RTTs ≈ 2000ms latency
+```
+
+### Solution
+Batch all fetches in one pipeline, then batch all removals in another:
+```go
+// Fetch all task data in 1 RTT
+fetchPipe := r.rdb.Pipeline()
+for _, id := range expiredIDs {
+    fetchPipe.HGet(ctx, r.keyTasksHash(), id)
+}
+results, _ := fetchPipe.Exec(ctx)
+
+// Then cleanup all in 1 TxPipeline
+cleanupPipe := r.rdb.TxPipeline()
+for i, result := range results {
+    // ... parse and add cleanup operations ...
+    cleanupPipe.HDel(ctx, r.keyTasksHash(), id)
+    cleanupPipe.ZRem(ctx, r.keyTTLIndex(), id)
+    // ... more operations ...
+}
+cleanupPipe.Exec(ctx)  // All cleanups in 1 RTT
+// 100 tasks = 2 RTTs ≈ 20ms latency
+```
+
+### Results
+- **Latency reduction**: 200 RTTs → 2 RTTs (99.5% improvement)
+- **For 100 expired tasks**: ~1980ms latency reduction
+- **For 1000 tasks**: ~19.8 seconds faster cleanup
+- Enables more frequent cleanup cycles without Redis load impact
+
 ## Success Metrics
 - ✅ P99 task claim latency < 100ms
 - ✅ Throughput increase 3-5x with pipelining
