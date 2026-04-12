@@ -165,10 +165,13 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		if remaining < sleep {
 			sleep = remaining
 		}
+		// Use NewTimer instead of time.After to avoid allocations in the retry loop
+		t := time.NewTimer(sleep)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return nil, false, ctx.Err()
-		case <-time.After(sleep):
+		case <-t.C:
 		}
 	}
 }
