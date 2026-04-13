@@ -170,7 +170,11 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 
 	// Batch remove expired/invalid subscriptions
 	if len(toRemove) > 0 {
-		_ = r.rdb.ZRem(ctx, key, toRemove...).Err()
+		members := make([]interface{}, len(toRemove))
+		for i, id := range toRemove {
+			members[i] = id
+		}
+		_ = r.rdb.ZRem(ctx, key, members...).Err()
 	}
 
 	return subs, nil
