@@ -61,33 +61,35 @@ func (r *resultRedisRepo) GetTask(ctx context.Context, id string) (*domain.Task,
 func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
 	b, _ := sonic.Marshal(rec)
 
-	// First, get the task in parallel with saving the result
-	pipe := r.rdb.Pipeline()
-	pipe.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b))
-	pipe.HGet(ctx, r.keyTasksHash(), rec.TaskID)
-	results, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("redis pipeline: %w", err)
-	}
-
-	// Check if HGet result is nil
-	hgetCmd, ok := results[1].(*redis.StringCmd)
-	if !ok {
-		return fmt.Errorf("unexpected pipeline result type for HGET")
-	}
-	js, err := hgetCmd.Val(), hgetCmd.Err()
+	// Get the task
+	js, err := r.rdb.HGet(ctx, r.keyTasksHash(), rec.TaskID).Result()
 	if err == redis.Nil || js == "" || err != nil {
+		// Even if task doesn't exist, save the result
+		if err := r.rdb.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b)).Err(); err != nil {
+			return fmt.Errorf("redis HSET result: %w", err)
+		}
 		return nil
 	}
 
 	var t domain.Task
 	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
-		return fmt.Errorf("unmarshal task: %w", err)
+		// If unmarshal fails, still save the result and task
+		if err := r.rdb.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b)).Err(); err != nil {
+			return fmt.Errorf("redis HSET result: %w", err)
+		}
+		return nil
 	}
+
+	// Update task with result reference and save both in a single pipeline
 	t.ResultKey = r.keyResultsHash()
 	nb, _ := sonic.Marshal(t)
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb)).Err(); err != nil {
-		return fmt.Errorf("redis HSET task: %w", err)
+	
+	pipe := r.rdb.Pipeline()
+	pipe.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b))
+	pipe.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb))
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
 	}
 	return nil
 }
