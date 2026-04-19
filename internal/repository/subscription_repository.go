@@ -216,26 +216,66 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 		if err != nil && err != redis.Nil {
 			return removed, err
 		}
+		
+		if len(ids) == 0 {
+			continue
+		}
+		
+		// Batch fetch all subscriptions in a single pipeline to avoid N+1 query pattern
+		pipe := r.rdb.Pipeline()
 		for _, id := range ids {
-			sub, err := r.Get(ctx, id)
-			if err != nil {
+			pipe.HGet(ctx, r.keySubsHash(), id)
+		}
+		results, err := pipe.Exec(ctx)
+		if err != nil {
+			return removed, err
+		}
+		
+		for i, id := range ids {
+			if i >= len(results) {
+				break
+			}
+			
+			cmd, ok := results[i].(*redis.StringCmd)
+			if !ok {
 				_ = r.rdb.ZRem(ctx, key, id).Err()
 				_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
 				_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
 				removed++
 				continue
 			}
+			
+			js, err := cmd.Result()
+			if err != nil || js == "" {
+				_ = r.rdb.ZRem(ctx, key, id).Err()
+				_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
+				_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
+				removed++
+				continue
+			}
+			
+			var sub domain.Subscription
+			if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
+				_ = r.rdb.ZRem(ctx, key, id).Err()
+				_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
+				_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
+				removed++
+				continue
+			}
+			
 			if sub.ExpiresAt.After(before) {
 				_ = r.rdb.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID}).Err()
 				continue
 			}
-			pipe := r.rdb.TxPipeline()
+			
+			// Batch delete operations for all event types
+			delPipe := r.rdb.TxPipeline()
 			for _, ev := range sub.EventTypes {
-				pipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
+				delPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
 			}
-			pipe.HDel(ctx, r.keySubsHash(), sub.ID)
-			pipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
-			if _, err := pipe.Exec(ctx); err == nil {
+			delPipe.HDel(ctx, r.keySubsHash(), sub.ID)
+			delPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
+			if _, err := delPipe.Exec(ctx); err == nil {
 				removed++
 			}
 		}

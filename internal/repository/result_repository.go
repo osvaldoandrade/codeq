@@ -86,8 +86,13 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	}
 	t.ResultKey = r.keyResultsHash()
 	nb, _ := sonic.Marshal(t)
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb)).Err(); err != nil {
-		return fmt.Errorf("redis HSET task: %w", err)
+	
+	// Pipeline the task update in a single RTT instead of separate HSet
+	updatePipe := r.rdb.Pipeline()
+	updatePipe.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb))
+	updatePipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(24 * time.Hour).UTC().Unix()), Member: rec.TaskID})
+	if _, err := updatePipe.Exec(ctx); err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
 	}
 	return nil
 }
