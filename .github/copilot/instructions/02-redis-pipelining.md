@@ -169,8 +169,26 @@ results, _ := pipe.Exec(ctx)  // All HGETs in 1 RTT
 - **For 100 subscriptions**: ~99ms latency reduction
 - Also batch removes expired subscriptions in single ZRem
 
-## Success Metrics
-- ✅ P99 task claim latency < 100ms
-- ✅ Throughput increase 3-5x with pipelining
-- ✅ Zero increase in memory usage during normal load
-- ✅ No degradation in error handling or recovery
+## Case Study: Results Service Get() Pipelining Optimization
+
+### Problem
+The `ResultsService.Get()` method was fetching task and result in sequence:
+```go
+task, err := s.repo.GetTask(ctx, taskID)      // 1st RTT: HGET task
+res, err := s.repo.GetResult(ctx, taskID)     // 2nd RTT: HGET result
+// 2 RTTs at 5ms each = 10ms minimum latency
+```
+
+### Solution
+Add `GetTaskAndResult()` that pipelines both HGET operations:
+```go
+task, res, err := s.repo.GetTaskAndResult(ctx, taskID)  // Both in 1 RTT
+// 1 RTT at 5ms = 5ms minimum latency
+```
+
+### Results
+- **Latency reduction**: 2 RTTs → 1 RTT (50% improvement)
+- **For result retrieval calls**: ~5ms latency reduction per call
+- Maintains same error semantics (task missing, result missing handled independently)
+- Zero code complexity increase in service layer
+

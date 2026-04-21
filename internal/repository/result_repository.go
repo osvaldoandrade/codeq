@@ -15,6 +15,7 @@ import (
 
 type ResultRepository interface {
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
+	GetTaskAndResult(ctx context.Context, id string) (*domain.Task, *domain.ResultRecord, error)
 	SaveResult(ctx context.Context, rec domain.ResultRecord) error
 	GetResult(ctx context.Context, id string) (*domain.ResultRecord, error)
 	UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error
@@ -105,6 +106,45 @@ func (r *resultRedisRepo) GetResult(ctx context.Context, id string) (*domain.Res
 		return nil, fmt.Errorf("unmarshal result: %w", err)
 	}
 	return &rec, nil
+}
+
+func (r *resultRedisRepo) GetTaskAndResult(ctx context.Context, id string) (*domain.Task, *domain.ResultRecord, error) {
+	// Pipeline both HGET calls to reduce RTT from 2 to 1
+	pipe := r.rdb.Pipeline()
+	taskCmd := pipe.HGet(ctx, r.keyTasksHash(), id)
+	resultCmd := pipe.HGet(ctx, r.keyResultsHash(), id)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("redis pipeline: %w", err)
+	}
+
+	// Parse task
+	taskJS, err := taskCmd.Result()
+	if err == redis.Nil || taskJS == "" {
+		return nil, nil, fmt.Errorf("task not-found")
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("redis HGET task: %w", err)
+	}
+	var task domain.Task
+	if err := sonic.Unmarshal([]byte(taskJS), &task); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal task: %w", err)
+	}
+
+	// Parse result
+	resultJS, err := resultCmd.Result()
+	if err == redis.Nil || resultJS == "" {
+		return &task, nil, fmt.Errorf("result not-found")
+	}
+	if err != nil {
+		return &task, nil, fmt.Errorf("redis HGET result: %w", err)
+	}
+	var rec domain.ResultRecord
+	if err := sonic.Unmarshal([]byte(resultJS), &rec); err != nil {
+		return &task, nil, fmt.Errorf("unmarshal result: %w", err)
+	}
+
+	return &task, &rec, nil
 }
 
 func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error {

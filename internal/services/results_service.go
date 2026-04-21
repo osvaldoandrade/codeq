@@ -143,13 +143,13 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 }
 
 func (s *resultsService) Get(ctx context.Context, taskID string) (*domain.ResultRecord, *domain.Task, error) {
-	task, err := s.repo.GetTask(ctx, taskID)
+	task, res, err := s.repo.GetTaskAndResult(ctx, taskID)
 	if err != nil {
+		// Handle case where task exists but result doesn't
+		if task != nil {
+			return nil, task, fmt.Errorf("result not found")
+		}
 		return nil, nil, fmt.Errorf("task not found")
-	}
-	res, err := s.repo.GetResult(ctx, taskID)
-	if err != nil {
-		return nil, task, fmt.Errorf("result not found")
 	}
 	return res, task, nil
 }
