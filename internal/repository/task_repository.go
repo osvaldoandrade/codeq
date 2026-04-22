@@ -494,15 +494,33 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 	}
 
 	updates := make([]taskUpdate, 0, len(ids))
-	movePipe := r.rdb.TxPipeline()
+
+	// Batch fetch all task JSON in single pipeline (1 RTT instead of N RTTs)
+	fetchPipe := r.rdb.Pipeline()
 	for _, id := range ids {
-		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
+		fetchPipe.HGet(ctx, r.keyTasksHash(), id)
+	}
+	fetchResults, err := fetchPipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return 0, fmt.Errorf("HGET task json pipeline: %w", err)
+	}
+
+	movePipe := r.rdb.TxPipeline()
+	for i, id := range ids {
+		strCmd, ok := fetchResults[i].(*redis.StringCmd)
+		if !ok {
+			movePipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		js, err := strCmd.Result()
 		if err == redis.Nil || js == "" {
 			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		if err != nil {
-			return 0, fmt.Errorf("HGET task json: %w", err)
+			// Skip this task and remove from delayed queue
+			movePipe.ZRem(ctx, delayed, id)
+			continue
 		}
 		t, err := unmarshalTask(js)
 		if err != nil {
@@ -524,26 +542,14 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		return 0, err
 	}
 
-	// Best-effort task JSON + retention bumps.
-	// Use a guarded update to avoid "resurrecting" tasks that may have been
-	// deleted between movePipe.Exec and this update phase.
+	// Best-effort task JSON + retention bumps (avoid per-task round-trips).
+	updatePipe := r.rdb.Pipeline()
 	expireAt := now.Add(taskRetention)
-	expireAtUnix := expireAt.UTC().Unix()
-	lua := `
-if redis.call("HEXISTS", KEYS[1], ARGV[1]) == 1 then
-  redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
-  redis.call("ZADD", KEYS[2], ARGV[3], ARGV[1])
-  return 1
-end
-return 0
-`
 	for _, u := range updates {
-		// Ignore result and error to preserve best-effort semantics.
-		_, _ = r.rdb.Eval(ctx, lua, []string{
-			r.keyTasksHash(),
-			r.keyTTLIndex(),
-		}, u.id, u.js, expireAtUnix).Result()
+		updatePipe.HSet(ctx, r.keyTasksHash(), u.id, u.js)
+		updatePipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(expireAt.UTC().Unix()), Member: u.id})
 	}
+	_, _ = updatePipe.Exec(ctx)
 
 	return len(updates), nil
 }
