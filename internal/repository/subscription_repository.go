@@ -139,7 +139,7 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 		return nil, fmt.Errorf("redis pipeline HGET: %w", err)
 	}
 
-	var toRemove []string
+	var toRemove []interface{}
 	subs := make([]domain.Subscription, 0, len(ids))
 	for i, id := range ids {
 		strCmd, ok := results[i].(*redis.StringCmd)
