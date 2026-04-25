@@ -129,25 +129,29 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 		return nil, nil
 	}
 
-	// Pipeline all HGET operations in one RTT instead of N RTTs
+	// Batch fetch all subscription data in a single pipeline (1 RTT instead of N RTTs)
 	pipe := r.rdb.Pipeline()
 	for _, id := range ids {
 		pipe.HGet(ctx, r.keySubsHash(), id)
 	}
 	results, err := pipe.Exec(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("redis pipeline: %w", err)
+		return nil, fmt.Errorf("redis pipeline HGET: %w", err)
 	}
 
 	subs := make([]domain.Subscription, 0, len(ids))
 	staleIDs := make([]interface{}, 0)
 	for i, result := range results {
-		cmd, ok := result.(*redis.StringCmd)
+		strCmd, ok := result.(*redis.StringCmd)
 		if !ok {
 			continue
 		}
-		js, err := cmd.Result()
-		if err == redis.Nil || js == "" || err != nil {
+		js, err := strCmd.Result()
+		if err == redis.Nil || js == "" {
+			staleIDs = append(staleIDs, ids[i])
+			continue
+		}
+		if err != nil {
 			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
@@ -163,7 +167,7 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 		subs = append(subs, sub)
 	}
 
-	// Clean up stale subscription IDs in background
+	// Clean up stale subscription IDs in background to avoid blocking the hot path
 	if len(staleIDs) > 0 {
 		go func() {
 			ctx := context.Background()

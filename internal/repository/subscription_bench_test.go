@@ -36,7 +36,7 @@ func BenchmarkSubscription_ListActive(b *testing.B) {
 		sub := domain.Subscription{
 			ID:                 fmt.Sprintf("sub-%d", i),
 			EventTypes:         []domain.Command{cmd},
-			WebhookURL:         "http://example.com/webhook",
+			CallbackURL:        "http://example.com/webhook",
 			MinIntervalSeconds: 5,
 		}
 		_, err := repo.Create(ctx, sub, 300)
@@ -79,7 +79,7 @@ func BenchmarkSubscription_ListActive_Scaled(b *testing.B) {
 		sub := domain.Subscription{
 			ID:                 fmt.Sprintf("sub-large-%d", i),
 			EventTypes:         []domain.Command{cmd},
-			WebhookURL:         "http://example.com/webhook",
+			CallbackURL:        "http://example.com/webhook",
 			MinIntervalSeconds: 5,
 		}
 		_, err := repo.Create(ctx, sub, 300)

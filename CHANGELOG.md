@@ -97,6 +97,12 @@ See [`docs/migration.md`](docs/migration.md) for detailed step-by-step procedure
   - Production impact: 60-70% enqueue latency reduction observed
   - Fully transparent to API consumers; no breaking changes
   - See `.github/copilot/instructions/08-enqueue-optimization.md` for implementation details
+- **Claim finalization pipelining**: Optimized claim operation to pipeline lease creation, task state update, and TTL bump into a single Redis request. ([#408](https://github.com/osvaldoandrade/codeq/pull/408))
+  - Latency reduction: 3 RTTs → 1 RTT (50% reduction)
+  - Throughput gain: 3× improvement under network latency (5-10ms RTT)
+  - Production impact: Significant claim latency improvement, especially under worker-heavy loads
+  - Fully transparent to workers; no API or configuration changes
+  - Reference: `internal/repository/task_repository.go:711-732` (Claim function finalization)
 - **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
 - **Optimized MoveDueDelayed batching**: Eliminated redundant task JSON reads and batch all updates in single pipeline. Reduces O(3M) round-trips to O(M) for M due tasks, achieving 50-70% latency reduction for delayed→pending migrations. ([#96](https://github.com/osvaldoandrade/codeq/pull/96))
 
