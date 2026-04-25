@@ -170,7 +170,11 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 
 	// Batch remove expired/invalid subscriptions
 	if len(toRemove) > 0 {
-		_ = r.rdb.ZRem(ctx, key, toRemove...).Err()
+		members := make([]interface{}, len(toRemove))
+		for i, v := range toRemove {
+			members[i] = v
+		}
+		_ = r.rdb.ZRem(ctx, key, members...).Err()
 	}
 
 	return subs, nil
@@ -212,28 +216,78 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 		if err != nil && err != redis.Nil {
 			return removed, err
 		}
+		if len(ids) == 0 {
+			continue
+		}
+
+		// Batch fetch all subscription data in a single pipeline (1 RTT instead of N RTTs)
+		pipe := r.rdb.Pipeline()
 		for _, id := range ids {
-			sub, err := r.Get(ctx, id)
+			pipe.HGet(ctx, r.keySubsHash(), id)
+		}
+		results, err := pipe.Exec(ctx)
+		if err != nil && err != redis.Nil {
+			return removed, err
+		}
+
+		// Process results and batch deletions
+		delPipe := r.rdb.Pipeline()
+		for i, id := range ids {
+			if i >= len(results) {
+				break
+			}
+
+			strCmd, ok := results[i].(*redis.StringCmd)
+			if !ok {
+				// Type assertion failed - mark for deletion
+				delPipe.ZRem(ctx, key, id)
+				delPipe.HDel(ctx, r.keySubsHash(), id)
+				delPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				removed++
+				continue
+			}
+
+			js, err := strCmd.Result()
+			if err == redis.Nil || js == "" {
+				// Not found - mark for deletion
+				delPipe.ZRem(ctx, key, id)
+				delPipe.HDel(ctx, r.keySubsHash(), id)
+				delPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				removed++
+				continue
+			}
 			if err != nil {
-				_ = r.rdb.ZRem(ctx, key, id).Err()
-				_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
-				_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
+				continue
+			}
+
+			var sub domain.Subscription
+			if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
+				// Unmarshal failed - mark for deletion
+				delPipe.ZRem(ctx, key, id)
+				delPipe.HDel(ctx, r.keySubsHash(), id)
+				delPipe.Del(ctx, r.keySubNotifyThrottle(id))
 				removed++
 				continue
 			}
+
 			if sub.ExpiresAt.After(before) {
-				_ = r.rdb.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID}).Err()
+				// Not expired - update score
+				delPipe.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID})
 				continue
 			}
-			pipe := r.rdb.TxPipeline()
+
+			// Expired - mark for deletion
 			for _, ev := range sub.EventTypes {
-				pipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
+				delPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
 			}
-			pipe.HDel(ctx, r.keySubsHash(), sub.ID)
-			pipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
-			if _, err := pipe.Exec(ctx); err == nil {
-				removed++
-			}
+			delPipe.HDel(ctx, r.keySubsHash(), sub.ID)
+			delPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
+			removed++
+		}
+
+		// Execute all deletions and updates in a single batch
+		if len(ids) > 0 {
+			_, _ = delPipe.Exec(ctx)
 		}
 	}
 	return removed, nil
