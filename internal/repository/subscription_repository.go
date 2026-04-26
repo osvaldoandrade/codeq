@@ -139,38 +139,40 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 		return nil, fmt.Errorf("redis pipeline HGET: %w", err)
 	}
 
-	var toRemove []string
 	subs := make([]domain.Subscription, 0, len(ids))
-	for i, id := range ids {
-		strCmd, ok := results[i].(*redis.StringCmd)
+	staleIDs := make([]interface{}, 0)
+	for i, result := range results {
+		strCmd, ok := result.(*redis.StringCmd)
 		if !ok {
-			_ = r.rdb.ZRem(ctx, key, id).Err()
 			continue
 		}
 		js, err := strCmd.Result()
 		if err == redis.Nil || js == "" {
-			toRemove = append(toRemove, id)
+			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
 		if err != nil {
-			_ = r.rdb.ZRem(ctx, key, id).Err()
+			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
 		var sub domain.Subscription
 		if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
-			_ = r.rdb.ZRem(ctx, key, id).Err()
+			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
 		if sub.ExpiresAt.Before(now) {
-			toRemove = append(toRemove, id)
+			staleIDs = append(staleIDs, ids[i])
 			continue
 		}
 		subs = append(subs, sub)
 	}
 
-	// Batch remove expired/invalid subscriptions
-	if len(toRemove) > 0 {
-		_ = r.rdb.ZRem(ctx, key, toRemove...).Err()
+	// Clean up stale subscription IDs in background to avoid blocking the hot path
+	if len(staleIDs) > 0 {
+		go func() {
+			ctx := context.Background()
+			_ = r.rdb.ZRem(ctx, key, staleIDs...).Err()
+		}()
 	}
 
 	return subs, nil
