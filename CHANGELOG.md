@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Subscription CleanupExpired Pipelining Optimization**: Reduced N+1 Redis operations to batch pipelining
+  - Before: N individual HGet calls + N individual cleanup pipelines (2N RTTs)
+  - After: 1 batch HGet pipeline + 1 batch cleanup pipeline (2 RTTs total)
+  - Performance impact: 95%+ latency reduction for 100+ expired subscriptions (2000ms+ → 30ms at 10ms latency)
+  - Maintains same correctness guarantees with improved throughput
+  - Location: `internal/repository/subscription_repository.go:CleanupExpired`
+- **Fixed type conversion bug in Subscription ListActive**: Corrected `[]string` to `[]interface{}` conversion for Redis ZRem operation
+  - Ensures batch removal of invalid subscriptions works correctly
+
 - Bumped k6 image in `docker-compose.yml` from 0.49.0 to 0.55.0 to support nullish coalescing (`??`) syntax used in load test scripts
 
 ### Documentation
