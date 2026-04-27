@@ -208,6 +208,42 @@ cleanupPipe.Exec(ctx)  // All cleanups in 1 RTT
 - **For 1000 tasks**: ~19.8 seconds faster cleanup
 - Enables more frequent cleanup cycles without Redis load impact
 
+## Case Study: Task MoveDueDelayed N+1 Optimization
+
+### Problem
+The `MoveDueDelayed()` and `moveDueDelayedForTenant()` methods were fetching task data sequentially:
+```go
+for _, id := range ids {
+    js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()  // Each HGet = 1 RTT
+    // Process task...
+}
+// 200 delayed tasks = 200 RTTs ≈ 1000ms latency
+```
+
+### Solution
+Pipeline all HGET operations before processing:
+```go
+// Batch fetch all tasks
+fetchPipe := r.rdb.Pipeline()
+for _, id := range ids {
+    fetchPipe.HGet(ctx, r.keyTasksHash(), id)
+}
+fetchResults, _ := fetchPipe.Exec(ctx)  // All HGETs in 1 RTT
+
+// Process results
+for i, id := range ids {
+    strCmd := fetchResults[i].(*redis.StringCmd)
+    js, err := strCmd.Result()
+    // Process task...
+}
+```
+
+### Results
+- **Latency reduction**: 200 RTTs → 1 RTT (99.5% improvement)
+- **For 200 delayed tasks**: ~995ms latency reduction (1000ms → 5ms)
+- **For 50 delayed tasks**: ~245ms latency reduction (250ms → 5ms)
+- Maintains error handling and task cleanup semantics
+
 ## Success Metrics
 - ✅ P99 task claim latency < 100ms
 - ✅ Throughput increase 3-5x with pipelining

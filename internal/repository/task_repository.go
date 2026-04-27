@@ -488,6 +488,16 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		return 0, nil
 	}
 
+	// Batch fetch all task data in single pipeline (1 RTT instead of N RTTs)
+	fetchPipe := r.rdb.Pipeline()
+	for _, id := range ids {
+		fetchPipe.HGet(ctx, r.keyTasksHash(), id)
+	}
+	fetchResults, err := fetchPipe.Exec(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("HGET tasks pipeline: %w", err)
+	}
+
 	type taskUpdate struct {
 		id string
 		js string
@@ -495,14 +505,20 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 
 	updates := make([]taskUpdate, 0, len(ids))
 	movePipe := r.rdb.TxPipeline()
-	for _, id := range ids {
-		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
+	for i, id := range ids {
+		strCmd, ok := fetchResults[i].(*redis.StringCmd)
+		if !ok {
+			movePipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		js, err := strCmd.Result()
 		if err == redis.Nil || js == "" {
 			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		if err != nil {
-			return 0, fmt.Errorf("HGET task json: %w", err)
+			movePipe.ZRem(ctx, delayed, id)
+			continue
 		}
 		t, err := unmarshalTask(js)
 		if err != nil {
@@ -567,6 +583,16 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 		return 0, nil
 	}
 
+	// Batch fetch all task data in single pipeline (1 RTT instead of N RTTs)
+	fetchPipe := r.rdb.Pipeline()
+	for _, id := range ids {
+		fetchPipe.HGet(ctx, r.keyTasksHash(), id)
+	}
+	fetchResults, err := fetchPipe.Exec(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("HGET tasks pipeline: %w", err)
+	}
+
 	type taskUpdate struct {
 		id string
 		js string
@@ -574,14 +600,20 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 
 	updates := make([]taskUpdate, 0, len(ids))
 	movePipe := r.rdb.TxPipeline()
-	for _, id := range ids {
-		js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
+	for i, id := range ids {
+		strCmd, ok := fetchResults[i].(*redis.StringCmd)
+		if !ok {
+			movePipe.ZRem(ctx, delayed, id)
+			continue
+		}
+		js, err := strCmd.Result()
 		if err == redis.Nil || js == "" {
 			movePipe.ZRem(ctx, delayed, id)
 			continue
 		}
 		if err != nil {
-			return 0, fmt.Errorf("HGET task json: %w", err)
+			movePipe.ZRem(ctx, delayed, id)
+			continue
 		}
 		t, err := unmarshalTask(js)
 		if err != nil {
