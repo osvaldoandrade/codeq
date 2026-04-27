@@ -1,22 +1,28 @@
 # CodeQ Java SDK
 
-Official Java SDK for the [CodeQ](https://github.com/osvaldoandrade/codeq) reactive task scheduling system. Integrates seamlessly with Spring Boot, Quarkus, and Micronaut.
+Official Java client SDK for [codeQ](https://github.com/osvaldoandrade/codeq) — a distributed task queue.
 
 ## Features
 
-- **Full API coverage** — Task creation, claiming, results, webhooks, batch operations, and admin operations
-- **Enterprise frameworks** — Spring Boot, Quarkus, Micronaut integrations via `spring-boot-starter-codeq` and equivalent starters
-- **Strong typing** — Comprehensive Java models with builder patterns
-- **Automatic retry** — Exponential backoff on transient failures
-- **Connection pooling** — Powered by OkHttp with configurable client
-- **JWT authentication** — Producer and worker token support
-- **Comprehensive documentation** — Full Javadoc and integration guides
+- **Zero configuration** — sensible defaults with builder pattern for customization
+- **Full API coverage** — producer, worker, admin, and subscription operations
+- **Type-safe** — strongly typed request/response models with Java records
+- **Automatic retry** — configurable exponential back-off for transient failures (5xx)
+- **Connection pooling** — powered by OkHttp for efficient resource usage
+- **Thread-safe** — safe for concurrent use from multiple threads
+- **Comprehensive logging** — SLF4J integration for debugging and monitoring
+
+## Requirements
+
+- Java 17 or later
+- A running codeQ server
+- Maven or Gradle for dependency management
 
 ## Installation
 
 ### Maven
 
-Add to `pom.xml`:
+Add to your `pom.xml`:
 
 ```xml
 <dependency>
@@ -28,7 +34,7 @@ Add to `pom.xml`:
 
 ### Gradle
 
-Add to `build.gradle` or `build.gradle.kts`:
+Add to your `build.gradle`:
 
 ```gradle
 implementation 'io.codeq:codeq-sdk-java:1.0.0'
@@ -36,226 +42,280 @@ implementation 'io.codeq:codeq-sdk-java:1.0.0'
 
 ## Quick Start
 
-### Basic Setup
+### Producer — create tasks
 
 ```java
+package com.example;
+
 import io.codeq.sdk.CodeQClient;
 import io.codeq.sdk.Task;
 import java.util.Map;
 
-CodeQClient client = CodeQClient.builder()
-    .baseUrl("http://localhost:8080")
-    .producerToken("your-producer-jwt")
-    .workerToken("your-worker-jwt")
-    .build();
-```
+public class ProducerExample {
+    public static void main(String[] args) throws Exception {
+        CodeQClient client = CodeQClient.builder()
+            .baseUrl("http://localhost:8080")
+            .producerToken("your-producer-jwt")
+            .build();
 
-### Producer — Create tasks
-
-```java
-Map<String, Object> payload = Map.of(
-    "jobId", "j-123",
-    "parameters", Map.of("key", "value")
-);
-
-Task task = client.createTask(
-    "GENERATE_MASTER",
-    payload,
-    5  // priority
-);
-
-System.out.println("Created task: " + task.getId());
-```
-
-### Worker — Claim and process tasks
-
-```java
-import io.codeq.sdk.CodeQException;
-import java.util.List;
-
-try {
-    Task claimed = client.claimTask(
-        List.of("GENERATE_MASTER"),
-        120,  // leaseSeconds
-        10    // waitSeconds (long-poll)
-    );
-    
-    if (claimed != null) {
-        // Process the task
-        Map<String, Object> result = processTask(claimed.getPayload());
-        
-        // Submit result
-        client.submitResult(
-            claimed.getId(),
-            "COMPLETED",
-            result,
-            null  // error (null if successful)
+        Task task = client.createTask(
+            "PROCESS_IMAGE",
+            Map.of("url", "https://example.com/image.png"),
+            5  // priority
         );
+
+        System.out.printf("Created task %s (status: %s)%n", task.getId(), task.getStatus());
     }
-} catch (CodeQException e) {
-    System.err.println("Failed to claim task: " + e.getMessage());
 }
 ```
 
-### Task lifecycle
+### Worker — claim and complete tasks
 
 ```java
-// Extend lease if processing takes longer
-client.heartbeat(taskId, 120);  // Extend by 120 seconds
+package com.example;
 
-// If processing fails, NACK to retry after delay
-client.nack(taskId, 30, "Database connection timeout");
+import io.codeq.sdk.CodeQClient;
+import io.codeq.sdk.Task;
+import java.util.List;
+import java.util.Map;
 
-// If you want to give up, abandon the task
-client.abandon(taskId);
-```
+public class WorkerExample {
+    public static void main(String[] args) throws Exception {
+        CodeQClient client = CodeQClient.builder()
+            .baseUrl("http://localhost:8080")
+            .workerToken("your-worker-jwt")
+            .build();
 
-## Configuration
+        Task task = client.claimTask(
+            List.of("PROCESS_IMAGE"),  // commands to claim
+            120,                         // lease duration in seconds
+            30                           // wait time in seconds
+        );
 
-### Builder Options
+        if (task == null) {
+            System.out.println("No tasks available");
+            return;
+        }
 
-```java
-CodeQClient client = CodeQClient.builder()
-    .baseUrl("https://codeq.example.com")
-    .producerToken("your-producer-jwt")
-    .workerToken("your-worker-jwt")
-    .httpClient(customOkHttpClient)  // Optional custom client
-    .build();
-```
+        System.out.printf("Claimed task %s%n", task.getId());
 
-### Using with Spring Boot
+        // Process the task …
+        Map<String, Object> result = Map.of("output", "processed");
 
-For Spring Boot integration, add the starter:
-
-```xml
-<dependency>
-    <groupId>io.codeq</groupId>
-    <artifactId>codeq-spring-boot-starter</artifactId>
-    <version>1.0.0</version>
-</dependency>
-```
-
-Configure in `application.yml` or `application.properties`:
-
-```yaml
-codeq:
-  base-url: http://codeq:8080
-  producer-token: ${CODEQ_PRODUCER_TOKEN}
-  worker-token: ${CODEQ_WORKER_TOKEN}
-```
-
-Then inject:
-
-```java
-@Autowired
-private CodeQClient codeqClient;
+        client.submitResult(task.getId(), result);
+        System.out.printf("Result submitted for %s%n", task.getId());
+    }
+}
 ```
 
 ## API Reference
 
-### Creating Tasks
+### Client Configuration
 
 ```java
-// Simple creation
-Task task = client.createTask("COMMAND", payload, priority);
-
-// With all options
-Task task = client.createTask(
-    "COMMAND",
-    payload,
-    priority,
-    "https://myapp.com/webhook",  // webhook URL
-    5,                             // maxAttempts
-    10,                            // delaySeconds
-    "idempotency-key-123"          // idempotency key
-);
+CodeQClient client = CodeQClient.builder()
+    .baseUrl(String baseUrl)
+    .producerToken(String token)           // optional
+    .workerToken(String token)              // optional
+    .adminToken(String token)               // optional
+    .httpClient(OkHttpClient client)        // optional
+    .maxRetries(int retries)                // optional, default: 3
+    .retryBaseDelayMs(long delayMs)         // optional, default: 500ms
+    .requestTimeoutSeconds(long seconds)    // optional, default: 30s
+    .build();
 ```
 
-### Claiming Tasks
+### Producer Operations
 
-```java
-Task claimed = client.claimTask(
-    List.of("COMMAND1", "COMMAND2"),
-    120,  // leaseSeconds (how long before lease expires)
-    30    // waitSeconds (long-poll timeout)
-);
-```
+| Method | Description |
+|--------|-------------|
+| `createTask(command, payload, priority)` | Create a single task |
+| `createTask(command, payload, priority, webhook, maxAttempts, delaySeconds, idempotencyKey)` | Create task with full options |
+| `createTaskBatch(List<CreateTaskRequest>)` | Create up to 100 tasks in one request |
 
-### Submitting Results
+### Worker Operations
 
-```java
-// Successful completion
-client.submitResult(
-    taskId,
-    "COMPLETED",
-    Map.of("status", "success", "data", resultData),
-    null
-);
+| Method | Description |
+|--------|-------------|
+| `claimTask(commands, leaseSeconds, waitSeconds)` | Claim a task (returns `null` when none available) |
+| `claimTaskBatch(commands, count, leaseSeconds)` | Claim up to 10 tasks |
+| `submitResult(taskId, result)` | Submit task result |
+| `submitResult(taskId, status, result)` | Submit result with explicit status |
+| `submitResultBatch(List<SubmitResultRequest>)` | Submit up to 100 results |
+| `heartbeat(taskId, extendSeconds)` | Extend task lease |
+| `abandon(taskId)` | Return task to queue |
+| `nack(taskId, delaySeconds, reason)` | Negative ack with retry delay |
 
-// Failed completion
-client.submitResult(
-    taskId,
-    "FAILED",
-    null,
-    "Processing error: Invalid input"
-);
-```
+### Subscription Operations
 
-### Heartbeat and Control
+| Method | Description |
+|--------|-------------|
+| `createSubscription(callbackUrl, eventTypes, ttlSeconds)` | Register a webhook subscription |
+| `createSubscription(callbackUrl, eventTypes, ttlSeconds, deliveryMode, groupId)` | Create subscription with delivery mode |
+| `renewSubscription(subscriptionId, ttlSeconds)` | Renew subscription lifetime |
 
-```java
-// Extend lease if needed
-client.heartbeat(taskId, 120);
+### Query Operations
 
-// NACK to retry after delay
-client.nack(taskId, 30, "Transient failure");
+| Method | Description |
+|--------|-------------|
+| `getTask(taskId)` | Get task details |
+| `getResult(taskId)` | Get task result |
+| `waitForResult(taskId, timeoutSeconds)` | Poll until result is available |
 
-// Abandon task permanently
-client.abandon(taskId);
-```
+### Admin Operations
+
+| Method | Description |
+|--------|-------------|
+| `listQueues()` | List all queue statistics |
+| `getQueueStats(command)` | Get stats for a single queue |
+| `cleanupExpired(limit)` | Remove expired tasks |
 
 ## Error Handling
 
-All methods throw `CodeQException` on failure:
+The SDK defines error types for different failure scenarios:
+
+```java
+import io.codeq.sdk.CodeQException;
+import io.codeq.sdk.CodeQException.*;
+
+try {
+    Task task = client.createTask("PROCESS", Map.of("id", "123"), 5);
+} catch (CodeQException e) {
+    // Handle generic SDK error
+    System.err.println("SDK error: " + e.getMessage());
+} catch (Exception e) {
+    System.err.println("Unexpected error: " + e.getMessage());
+}
+```
+
+Common exceptions:
+
+- `CodeQException` — Base exception wrapping root cause
+- `CodeQException.ApiError` — HTTP 4xx/5xx response from the API
+- `CodeQException.AuthError` — HTTP 401 or 403
+- `CodeQException.TimeoutError` — Request timeout or polling timeout
+
+Use try-catch blocks with specific exception types:
 
 ```java
 try {
-    Task task = client.createTask("COMMAND", payload, 5);
+    Task task = client.createTask("PROCESS", payload, priority);
+} catch (CodeQException.AuthError e) {
+    System.err.println("Authentication failed: " + e.getMessage());
+} catch (CodeQException.ApiError e) {
+    System.err.println("API error: " + e.getStatusCode());
 } catch (CodeQException e) {
-    System.err.println("Error: " + e.getMessage());
-    e.printStackTrace();
+    System.err.println("Other SDK error: " + e.getMessage());
 }
+```
+
+## Configuration via Environment Variables
+
+A common pattern is to configure the client from environment variables:
+
+```java
+CodeQClient client = CodeQClient.builder()
+    .baseUrl(System.getenv("CODEQ_BASE_URL"))
+    .producerToken(System.getenv("CODEQ_PRODUCER_TOKEN"))
+    .workerToken(System.getenv("CODEQ_WORKER_TOKEN"))
+    .build();
 ```
 
 ## Retry Behavior
 
-The SDK automatically retries transient failures (5xx errors) with exponential backoff. For persistent failures, a `CodeQException` is thrown.
+By default, the client retries up to 3 times with exponential back-off
+(500 ms, 1 s, 2 s) on 5xx server errors and network failures. Client errors
+(4xx) are never retried.
+
+```java
+// Disable retries
+CodeQClient client = CodeQClient.builder()
+    .baseUrl(url)
+    .maxRetries(0)
+    .build();
+
+// Custom retry configuration
+CodeQClient client = CodeQClient.builder()
+    .baseUrl(url)
+    .maxRetries(5)
+    .retryBaseDelayMs(1000)
+    .build();
+```
+
+## Testing
+
+```bash
+cd sdks/java/core
+mvn test
+```
 
 ## Integration Guides
 
-For framework-specific examples and best practices, see:
+For framework-specific integration patterns, see the integration guides:
 
-- **Spring Boot**: [docs/integrations/java-integration.md](../../docs/integrations/java-integration.md#spring-boot)
-- **Quarkus**: [docs/integrations/java-integration.md](../../docs/integrations/java-integration.md#quarkus)
-- **Micronaut**: [docs/integrations/java-integration.md](../../docs/integrations/java-integration.md#micronaut)
+- **Spring Boot** — `docs/integrations/java-integration.md#spring-boot-integration`
+- **Quarkus** — `docs/integrations/java-integration.md#quarkus-integration`
+- **Micronaut** — `docs/integrations/java-integration.md#micronaut-integration`
 
-## Requirements
+## Common Patterns
 
-- Java 17 or later
-- Maven 3.6+ or Gradle 6.0+
-- A running CodeQ server
+### Long-polling for tasks
 
-## Dependencies
+```java
+while (true) {
+    Task task = client.claimTask(
+        List.of("PROCESS_IMAGE", "GENERATE_REPORT"),
+        120,    // lease duration
+        30      // wait timeout (long-poll)
+    );
+    
+    if (task == null) {
+        continue;  // No tasks available
+    }
+    
+    try {
+        processTask(task);
+        client.submitResult(task.getId(), Map.of("status", "success"));
+    } catch (Exception e) {
+        client.nack(task.getId(), 60, e.getMessage());
+    }
+}
+```
 
-- **OkHttp** 4.12.0 — HTTP client
-- **Jackson** 2.16.1 — JSON processing
-- **JJWT** 0.12.5 — JWT support
-- **SLF4J** 2.0.11 — Logging API
+### Batch operations
 
-## Examples
+```java
+// Create multiple tasks efficiently
+List<Map<String, Object>> tasks = List.of(
+    Map.of("command", "RENDER", "payload", Map.of("frame", 1)),
+    Map.of("command", "RENDER", "payload", Map.of("frame", 2)),
+    Map.of("command", "RENDER", "payload", Map.of("frame", 3))
+);
 
-Working examples with Spring Boot, Quarkus, and Micronaut are available in the [examples/](../../examples/) directory.
+List<Task> created = client.createTaskBatch(tasks);
+for (Task task : created) {
+    System.out.printf("Created task %s%n", task.getId());
+}
+```
+
+### Heartbeat for long-running tasks
+
+```java
+Task task = client.claimTask(List.of("LONG_RUNNING_JOB"), 120, 30);
+
+// Do work in chunks
+for (int i = 0; i < chunks.size(); i++) {
+    processChunk(chunks.get(i));
+    
+    // Extend lease before it expires
+    if (i % 10 == 0) {
+        client.heartbeat(task.getId(), 120);
+    }
+}
+
+client.submitResult(task.getId(), Map.of("status", "completed"));
+```
 
 ## License
 
-MIT License. See [LICENSE](../../LICENSE) file for details.
+This SDK is part of the [codeQ](https://github.com/osvaldoandrade/codeq) project and is released under the same license.
