@@ -19,6 +19,7 @@ type SubscriptionRepository interface {
 	Get(ctx context.Context, id string) (*domain.Subscription, error)
 	ListActive(ctx context.Context, cmd domain.Command, now time.Time) ([]domain.Subscription, error)
 	AllowNotify(ctx context.Context, id string, minIntervalSeconds int) (bool, error)
+	AllowNotifyBatch(ctx context.Context, subs []domain.Subscription) (map[string]bool, error)
 	NextGroupIndex(ctx context.Context, cmd domain.Command, groupID string, mod int) (int, error)
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
 }
@@ -187,6 +188,50 @@ func (r *subscriptionRedisRepo) AllowNotify(ctx context.Context, id string, minI
 		return false, err
 	}
 	return ok, nil
+}
+
+// AllowNotifyBatch batches throttle checks for multiple subscriptions in a single pipeline
+// Reduces N+1 RTTs to 1 RTT for N subscriptions
+func (r *subscriptionRedisRepo) AllowNotifyBatch(ctx context.Context, subs []domain.Subscription) (map[string]bool, error) {
+	if len(subs) == 0 {
+		return make(map[string]bool), nil
+	}
+
+	// Pipeline all SetNX operations in a single request (1 RTT instead of N RTTs)
+	pipe := r.rdb.Pipeline()
+	for _, sub := range subs {
+		minInterval := sub.MinIntervalSeconds
+		if minInterval <= 0 {
+			minInterval = 5
+		}
+		pipe.SetNX(ctx, r.keySubNotifyThrottle(sub.ID), "1", time.Duration(minInterval)*time.Second)
+	}
+
+	results, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("redis pipeline SetNX: %w", err)
+	}
+
+	// Map subscription IDs to their throttle check results
+	allowed := make(map[string]bool, len(subs))
+	for i, sub := range subs {
+		if i >= len(results) {
+			break
+		}
+		boolCmd, ok := results[i].(*redis.BoolCmd)
+		if !ok {
+			allowed[sub.ID] = false
+			continue
+		}
+		ok, err := boolCmd.Result()
+		if err != nil && err != redis.Nil {
+			allowed[sub.ID] = false
+			continue
+		}
+		allowed[sub.ID] = ok
+	}
+
+	return allowed, nil
 }
 
 func (r *subscriptionRedisRepo) NextGroupIndex(ctx context.Context, cmd domain.Command, groupID string, mod int) (int, error) {
