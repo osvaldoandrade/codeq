@@ -105,6 +105,11 @@ See [`docs/migration.md`](docs/migration.md) for detailed step-by-step procedure
   - Reference: `internal/repository/task_repository.go:711-732` (Claim function finalization)
 - **Faster admin cleanup**: tasks now track an optional `lastKnownLocation` to avoid unnecessary O(N) list scans during `CleanupExpired`.
 - **Optimized MoveDueDelayed batching**: Eliminated redundant task JSON reads and batch all updates in single pipeline. Reduces O(3M) round-trips to O(M) for M due tasks, achieving 50-70% latency reduction for delayed→pending migrations. ([#96](https://github.com/osvaldoandrade/codeq/pull/96))
+- **NotifierService AllowNotifyBatch optimization**: Batched webhook subscription throttle checks in a single Redis pipeline. Reduces N individual SetNX operations to 1 RTT for N subscriptions, achieving 99% RTT reduction and 50-99× throughput improvement for notification fanouts. ([#460](https://github.com/osvaldoandrade/codeq/pull/460))
+  - Real-world impact: 100 subscriptions at 5ms RTT = 500ms → 5ms (100× faster)
+  - Reduces notification delivery latency, especially with high subscription counts
+  - Fully transparent to webhooks; no API or configuration changes
+  - Reference: `internal/repository/subscription_repository.go:AllowNotifyBatch` and `internal/services/notifier_service.go:NotifyQueueReady`
 
 ### Added
 

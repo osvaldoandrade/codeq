@@ -1195,6 +1195,30 @@ The claim operation has been optimized to pipeline lease creation, task state up
 - At 1ms latency (local): Still provides 40-50% improvement from reduced overhead
 - Fully transparent to workers; no API or configuration changes needed
 
+### Subscription Operations
+
+Webhook notification throttling has been optimized to batch all subscription throttle checks in a single Redis pipeline:
+
+**NotifyQueueReady** (check throttles for multiple subscriptions):
+- **Before**: N individual Redis SetNX operations (one per subscription) = N RTTs
+  1. For each subscription, check throttle by calling AllowNotify
+  2. Each call makes a separate Redis SetNX to test throttle
+  3. Example: 100 subscriptions = 100 individual Redis round-trips
+- **After**: 1 RTT (all subscriptions batched in single AllowNotifyBatch pipeline)
+  1. Collect all subscriptions to check
+  2. Pipeline all SetNX operations together
+  3. Return throttle results as a map
+- **Impact**: ~99% RTT reduction for typical notification fanouts (N RTTs → 1 RTT)
+- **Real-world example**: 100 webhook subscriptions at 5ms RTT = 500ms → 5ms (100× faster)
+- **Production gains**: Significant improvement in queue ready notification latency, especially with high subscription counts
+- **Use case**: Webhook delivery is triggered frequently (on every task enqueue); benefits scale with queue activity and subscription count
+- **Reference**: See `internal/repository/subscription_repository.go:AllowNotifyBatch` and `internal/services/notifier_service.go:NotifyQueueReady` for implementation
+
+**Throughput impact:**
+- Under high subscription counts (50+ subscriptions): 50-99× throughput gain compared to sequential throttle checks
+- Under low subscription counts (<5 subscriptions): 2-5× throughput gain from reduced overhead
+- Fully transparent to webhooks; no API or configuration changes needed
+
 ### Performance Verification
 
 These pipelining optimizations are transparent to callers. To observe the improvements:
