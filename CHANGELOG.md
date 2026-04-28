@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Performance impact: 95%+ latency reduction for 100+ expired subscriptions (2000ms+ → 30ms at 10ms latency)
   - Maintains same correctness guarantees with improved throughput
   - Location: `internal/repository/subscription_repository.go:CleanupExpired`
+- **Task CleanupExpired Pipelining Optimization**: Reduced N+1 Redis operations to batch pipelining with Bloom filter deduplication
+  - Before: 2N+1 RTTs (scan expired tasks, N individual HGET reads, N individual cleanup operations)
+  - After: 3 RTTs (single ZRANGE scan, batched HGET pipeline, batched cleanup pipeline)
+  - Performance impact: 98%+ latency reduction for 100+ expired tasks (1000ms+ → 15ms at 5ms latency)
+  - Location-aware cleanup avoids expensive O(N) list scans using `LastKnownLocation` field
+  - Cleanup Bloom filter prevents redundant work across concurrent cleanup cycles
+  - Location: `internal/repository/task_repository.go:CleanupExpired`
 - **Fixed type conversion bug in Subscription ListActive**: Corrected `[]string` to `[]interface{}` conversion for Redis ZRem operation
   - Ensures batch removal of invalid subscriptions works correctly
 
