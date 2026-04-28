@@ -59,6 +59,14 @@ func (m *mockSubscriptionRepo) AllowNotify(ctx context.Context, id string, minIn
 	return true, nil
 }
 
+func (m *mockSubscriptionRepo) AllowNotifyBatch(ctx context.Context, subs []domain.Subscription) (map[string]bool, error) {
+	result := make(map[string]bool, len(subs))
+	for _, sub := range subs {
+		result[sub.ID] = true
+	}
+	return result, nil
+}
+
 func (m *mockSubscriptionRepo) NextGroupIndex(ctx context.Context, cmd domain.Command, groupID string, mod int) (int, error) {
 	return 0, nil
 }
