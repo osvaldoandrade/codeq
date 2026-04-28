@@ -201,6 +201,56 @@ func TestSubscriptionAllowNotify(t *testing.T) {
 	}
 }
 
+func TestSubscriptionAllowNotifyBatch(t *testing.T) {
+	ctx, _, _, repo := setupSubscriptionRepo(t)
+
+	// Create multiple subscriptions
+	subs := make([]domain.Subscription, 3)
+	for i := 0; i < 3; i++ {
+		sub := domain.Subscription{
+			CallbackURL:        "https://example.com/callback" + string(rune(i)),
+			EventTypes:         []domain.Command{domain.CmdGenerateMaster},
+			DeliveryMode:       "fanout",
+			MinIntervalSeconds: 30,
+		}
+		created, _ := repo.Create(ctx, sub, 3600)
+		subs[i] = *created
+	}
+
+	// Batch check - all should be allowed on first call
+	allowed, err := repo.AllowNotifyBatch(ctx, subs)
+	if err != nil {
+		t.Fatalf("AllowNotifyBatch() error = %v", err)
+	}
+
+	for _, sub := range subs {
+		if !allowed[sub.ID] {
+			t.Errorf("Expected subscription %s to be allowed on first batch check", sub.ID)
+		}
+	}
+
+	// Second batch check - all should be throttled
+	allowed, err = repo.AllowNotifyBatch(ctx, subs)
+	if err != nil {
+		t.Fatalf("AllowNotifyBatch() error = %v", err)
+	}
+
+	for _, sub := range subs {
+		if allowed[sub.ID] {
+			t.Errorf("Expected subscription %s to be throttled on second batch check", sub.ID)
+		}
+	}
+
+	// Empty batch should return no error
+	allowed, err = repo.AllowNotifyBatch(ctx, []domain.Subscription{})
+	if err != nil {
+		t.Fatalf("AllowNotifyBatch() with empty slice error = %v", err)
+	}
+	if len(allowed) != 0 {
+		t.Errorf("Expected empty map for empty subscription slice, got %v", allowed)
+	}
+}
+
 func TestSubscriptionNextGroupIndex(t *testing.T) {
 	ctx, _, _, repo := setupSubscriptionRepo(t)
 

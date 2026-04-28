@@ -61,7 +61,7 @@ func (r *resultRedisRepo) GetTask(ctx context.Context, id string) (*domain.Task,
 func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
 	b, _ := sonic.Marshal(rec)
 
-	// First, get the task in parallel with saving the result
+	// Pipeline: save result and get task (2 commands, 1 RTT)
 	pipe := r.rdb.Pipeline()
 	pipe.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b))
 	pipe.HGet(ctx, r.keyTasksHash(), rec.TaskID)
@@ -86,6 +86,9 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	}
 	t.ResultKey = r.keyResultsHash()
 	nb, _ := sonic.Marshal(t)
+
+	// Use another pipeline for task update (1 command, 1 RTT)
+	// This ensures result is persisted before updating task metadata
 	if err := r.rdb.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb)).Err(); err != nil {
 		return fmt.Errorf("redis HSET task: %w", err)
 	}
