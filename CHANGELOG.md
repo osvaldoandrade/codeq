@@ -136,6 +136,15 @@ See [`docs/migration.md`](docs/migration.md) for detailed step-by-step procedure
   - Reduces notification delivery latency, especially with high subscription counts
   - Fully transparent to webhooks; no API or configuration changes
   - Reference: `internal/repository/subscription_repository.go:AllowNotifyBatch` and `internal/services/notifier_service.go:NotifyQueueReady`
+- **Heartbeat and Abandon pipelining optimization**: Optimized worker heartbeat and task abandon operations to pipeline all Redis operations into single transaction pipelines. ([#467](https://github.com/osvaldoandrade/codeq/pull/467))
+  - **Heartbeat**: 3 RTTs → 1 RTT (67% latency reduction): lease expiration, task state update, TTL index bump
+    - Production impact: 15-25ms latency savings per heartbeat at 5-10ms network RTT
+    - Especially beneficial for long-running tasks with frequent heartbeats
+  - **Abandon**: 4-5 RTTs → 1 RTT (75-80% latency reduction): in-progress removal, pending queue add, lease deletion, task state update, TTL bump
+    - Production impact: Faster error recovery when workers abandon tasks
+  - Both operations fully transparent to workers; no API or configuration changes
+  - Reference: `internal/repository/task_repository.go:777-820` (Heartbeat) and `822-871` (Abandon)
+  - Documentation: `docs/17-performance-tuning.md` Section 9: Heartbeat and Abandon Operations
 
 ### Added
 
