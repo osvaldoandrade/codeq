@@ -64,3 +64,629 @@ github.com/gin-gonic/gin/render
 github.com/gin-gonic/gin/binding
 github.com/gin-gonic/gin
 github.com/osvaldoandrade/codeq/internal/middleware
+=== Build Steps Log ===
+Go version: go version go1.23.0 linux/amd64
+Go GOOS/GOARCH: linux/amd64
+Working directory: /home/runner/work/codeq/codeq
+
+=== Downloading Dependencies ===
+all modules verified
+
+=== Building Server Binary ===
+github.com/gin-gonic/gin/internal/bytesconv
+golang.org/x/net/html/atom
+github.com/go-playground/locales/currency
+encoding/xml
+github.com/gin-gonic/gin/internal/json
+golang.org/x/net/html
+github.com/gin-contrib/sse
+hash/adler32
+compress/zlib
+debug/dwarf
+internal/saferio
+encoding/csv
+github.com/gabriel-vasile/mimetype/internal/json
+github.com/go-playground/locales
+github.com/go-playground/universal-translator
+github.com/leodido/go-urn/scim/schema
+golang.org/x/sys/cpu
+github.com/leodido/go-urn
+golang.org/x/crypto/sha3
+github.com/gabriel-vasile/mimetype/internal/charset
+golang.org/x/text/internal/tag
+github.com/pelletier/go-toml/v2/internal/characters
+golang.org/x/text/internal/language
+debug/macho
+github.com/pelletier/go-toml/v2/internal/danger
+github.com/pelletier/go-toml/v2/unstable
+encoding/gob
+github.com/gabriel-vasile/mimetype/internal/magic
+github.com/pelletier/go-toml/v2/internal/tracker
+github.com/pelletier/go-toml/v2
+golang.org/x/text/internal/language/compact
+github.com/gabriel-vasile/mimetype
+golang.org/x/text/language
+github.com/mattn/go-isatty
+golang.org/x/net/http2/h2c
+github.com/osvaldoandrade/codeq/pkg/domain
+net/rpc
+github.com/go-playground/validator/v10
+github.com/osvaldoandrade/codeq/pkg/auth
+github.com/osvaldoandrade/codeq/internal/metrics
+github.com/osvaldoandrade/codeq/pkg/config
+github.com/osvaldoandrade/codeq/internal/backoff
+github.com/osvaldoandrade/codeq/internal/shard
+github.com/ugorji/go/codec
+github.com/prometheus/client_golang/prometheus/promhttp
+github.com/osvaldoandrade/codeq/internal/repository
+github.com/golang-jwt/jwt/v5
+github.com/osvaldoandrade/codeq/internal/services
+github.com/osvaldoandrade/codeq/pkg/auth/static
+github.com/osvaldoandrade/codeq/pkg/persistence
+github.com/osvaldoandrade/codeq/pkg/persistence/memory
+github.com/osvaldoandrade/codeq/pkg/persistence/redis
+github.com/osvaldoandrade/codeq/pkg/auth/jwks
+github.com/gin-gonic/gin/binding
+github.com/gin-gonic/gin/render
+github.com/gin-gonic/gin
+github.com/osvaldoandrade/codeq/internal/middleware
+github.com/osvaldoandrade/codeq/internal/controllers
+github.com/osvaldoandrade/codeq/pkg/app
+github.com/osvaldoandrade/codeq/cmd/server
+Server binary size: 33M
+Server binary checksum: 57e78f794b48fd533e28fbd635dc0fb5e3c7d04bb8c905851dd8c6a93ce18876
+
+=== Building CLI Binary ===
+github.com/rivo/uniseg
+github.com/mattn/go-colorable
+golang.org/x/term
+github.com/fatih/color
+github.com/mitchellh/colorstring
+github.com/spf13/pflag
+github.com/briandowns/spinner
+github.com/schollz/progressbar/v3
+github.com/spf13/cobra
+github.com/osvaldoandrade/codeq/cmd/codeq
+CLI binary size: 13M
+CLI binary checksum: fdfe6f5043296239557674eea8058e9563f5e053bc45985324441200edb15f75
+
+=== Running Unit Tests ===
+=== RUN   TestComputeFixed
+=== RUN   TestComputeFixed/base_5_max_10
+=== RUN   TestComputeFixed/base_5_max_10_many_attempts
+=== RUN   TestComputeFixed/base_exceeds_max
+=== RUN   TestComputeFixed/zero_base_defaults_to_1
+=== RUN   TestComputeFixed/negative_base_defaults_to_1
+=== RUN   TestComputeFixed/zero_max_equals_base
+=== RUN   TestComputeFixed/negative_max_equals_base
+--- PASS: TestComputeFixed (0.00s)
+    --- PASS: TestComputeFixed/base_5_max_10 (0.00s)
+    --- PASS: TestComputeFixed/base_5_max_10_many_attempts (0.00s)
+    --- PASS: TestComputeFixed/base_exceeds_max (0.00s)
+    --- PASS: TestComputeFixed/zero_base_defaults_to_1 (0.00s)
+    --- PASS: TestComputeFixed/negative_base_defaults_to_1 (0.00s)
+    --- PASS: TestComputeFixed/zero_max_equals_base (0.00s)
+    --- PASS: TestComputeFixed/negative_max_equals_base (0.00s)
+=== RUN   TestComputeLinear
+=== RUN   TestComputeLinear/zero_attempts
+=== RUN   TestComputeLinear/one_attempt
+=== RUN   TestComputeLinear/two_attempts
+=== RUN   TestComputeLinear/three_attempts
+=== RUN   TestComputeLinear/capped_at_max
+=== RUN   TestComputeLinear/negative_attempts_treated_as_zero
+--- PASS: TestComputeLinear (0.00s)
+    --- PASS: TestComputeLinear/zero_attempts (0.00s)
+    --- PASS: TestComputeLinear/one_attempt (0.00s)
+    --- PASS: TestComputeLinear/two_attempts (0.00s)
+    --- PASS: TestComputeLinear/three_attempts (0.00s)
+    --- PASS: TestComputeLinear/capped_at_max (0.00s)
+    --- PASS: TestComputeLinear/negative_attempts_treated_as_zero (0.00s)
+=== RUN   TestComputeExponential
+=== RUN   TestComputeExponential/zero_attempts
+=== RUN   TestComputeExponential/one_attempt
+=== RUN   TestComputeExponential/two_attempts
+=== RUN   TestComputeExponential/three_attempts
+=== RUN   TestComputeExponential/capped_at_max
+=== RUN   TestComputeExponential/negative_attempts_treated_as_zero
+--- PASS: TestComputeExponential (0.00s)
+    --- PASS: TestComputeExponential/zero_attempts (0.00s)
+    --- PASS: TestComputeExponential/one_attempt (0.00s)
+    --- PASS: TestComputeExponential/two_attempts (0.00s)
+    --- PASS: TestComputeExponential/three_attempts (0.00s)
+    --- PASS: TestComputeExponential/capped_at_max (0.00s)
+    --- PASS: TestComputeExponential/negative_attempts_treated_as_zero (0.00s)
+=== RUN   TestComputeExpEqualJitter
+=== RUN   TestComputeExpEqualJitter/zero_attempts
+=== RUN   TestComputeExpEqualJitter/one_attempt
+=== RUN   TestComputeExpEqualJitter/two_attempts
+=== RUN   TestComputeExpEqualJitter/capped_at_max
+--- PASS: TestComputeExpEqualJitter (0.00s)
+    --- PASS: TestComputeExpEqualJitter/zero_attempts (0.00s)
+    --- PASS: TestComputeExpEqualJitter/one_attempt (0.00s)
+    --- PASS: TestComputeExpEqualJitter/two_attempts (0.00s)
+    --- PASS: TestComputeExpEqualJitter/capped_at_max (0.00s)
+=== RUN   TestComputeExpFullJitter
+=== RUN   TestComputeExpFullJitter/zero_attempts
+=== RUN   TestComputeExpFullJitter/one_attempt
+=== RUN   TestComputeExpFullJitter/two_attempts
+=== RUN   TestComputeExpFullJitter/capped_at_max
+--- PASS: TestComputeExpFullJitter (0.00s)
+    --- PASS: TestComputeExpFullJitter/zero_attempts (0.00s)
+    --- PASS: TestComputeExpFullJitter/one_attempt (0.00s)
+    --- PASS: TestComputeExpFullJitter/two_attempts (0.00s)
+    --- PASS: TestComputeExpFullJitter/capped_at_max (0.00s)
+=== RUN   TestComputeDefaultPolicy
+--- PASS: TestComputeDefaultPolicy (0.00s)
+=== RUN   TestComputeNilRng
+--- PASS: TestComputeNilRng (0.00s)
+=== RUN   TestComputeJitterVariation
+--- PASS: TestComputeJitterVariation (0.00s)
+=== RUN   TestMin
+--- PASS: TestMin (0.00s)
+=== RUN   TestMax
+--- PASS: TestMax (0.00s)
+=== RUN   TestComputeZeroMaxDelay
+--- PASS: TestComputeZeroMaxDelay (0.00s)
+PASS
+coverage: 94.7% of statements
+ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of statements
+=== RUN   TestBloom_FalsePositiveRate
+    bloom_bench_test.go:92: observed FP rate: 0.9860% (986 / 100000)
+--- PASS: TestBloom_FalsePositiveRate (0.06s)
+=== RUN   TestBloom_MemorySizeConsistency
+=== RUN   TestBloom_MemorySizeConsistency/n=100000_fp=1e-02
+    bloom_bench_test.go:126: n=100000 fpRate=1e-02 → mBits=958506 k=7 words=14977 memBytes=119816
+=== RUN   TestBloom_MemorySizeConsistency/n=1000000_fp=1e-02
+    bloom_bench_test.go:126: n=1000000 fpRate=1e-02 → mBits=9585059 k=7 words=149767 memBytes=1198136
+=== RUN   TestBloom_MemorySizeConsistency/n=2000000_fp=1e-12
+    bloom_bench_test.go:126: n=2000000 fpRate=1e-12 → mBits=115020701 k=40 words=1797199 memBytes=14377592
+--- PASS: TestBloom_MemorySizeConsistency (0.01s)
+    --- PASS: TestBloom_MemorySizeConsistency/n=100000_fp=1e-02 (0.00s)
+    --- PASS: TestBloom_MemorySizeConsistency/n=1000000_fp=1e-02 (0.00s)
+    --- PASS: TestBloom_MemorySizeConsistency/n=2000000_fp=1e-12 (0.01s)
+=== RUN   TestDLQMigrationOptionA_DrainAndCutover
+--- PASS: TestDLQMigrationOptionA_DrainAndCutover (0.01s)
+=== RUN   TestDLQMigrationOptionB_InPlaceConversion
+--- PASS: TestDLQMigrationOptionB_InPlaceConversion (0.01s)
+=== RUN   TestInProgressMigrationOptionB_InPlaceConversion
+--- PASS: TestInProgressMigrationOptionB_InPlaceConversion (0.00s)
+=== RUN   TestDLQMigrationEmptyQueue
+--- PASS: TestDLQMigrationEmptyQueue (0.01s)
+=== RUN   TestDLQMigrationLargeQueue
+--- PASS: TestDLQMigrationLargeQueue (0.06s)
+=== RUN   TestDLQMigrationTaskIntegrity
+--- PASS: TestDLQMigrationTaskIntegrity (0.01s)
+=== RUN   TestDLQMigrationRollback
+--- PASS: TestDLQMigrationRollback (0.00s)
+=== RUN   TestDLQMigrationConcurrentAccess
+--- PASS: TestDLQMigrationConcurrentAccess (0.00s)
+=== RUN   TestDLQMigrationDuplicateProtection
+--- PASS: TestDLQMigrationDuplicateProtection (0.00s)
+=== RUN   TestDLQMigrationVerificationChecklist
+--- PASS: TestDLQMigrationVerificationChecklist (0.01s)
+=== RUN   TestDecodeBase64
+=== RUN   TestDecodeBase64/valid_base64
+=== RUN   TestDecodeBase64/empty_string
+=== RUN   TestDecodeBase64/invalid_base64
+--- PASS: TestDecodeBase64 (0.00s)
+    --- PASS: TestDecodeBase64/valid_base64 (0.00s)
+    --- PASS: TestDecodeBase64/empty_string (0.00s)
+    --- PASS: TestDecodeBase64/invalid_base64 (0.00s)
+=== RUN   TestResultRepositoryGetTask
+--- PASS: TestResultRepositoryGetTask (0.01s)
+=== RUN   TestResultRepositoryGetTaskNotFound
+--- PASS: TestResultRepositoryGetTaskNotFound (0.00s)
+=== RUN   TestResultRepositorySaveAndGetResult
+--- PASS: TestResultRepositorySaveAndGetResult (0.01s)
+=== RUN   TestResultRepositoryGetResultNotFound
+--- PASS: TestResultRepositoryGetResultNotFound (0.01s)
+=== RUN   TestResultRepositoryUpdateTaskOnComplete
+--- PASS: TestResultRepositoryUpdateTaskOnComplete (0.01s)
+=== RUN   TestResultRepositoryUpdateTaskOnCompleteFailed
+--- PASS: TestResultRepositoryUpdateTaskOnCompleteFailed (0.02s)
+=== RUN   TestResultRepositoryRemoveFromInprogAndClearLease
+--- PASS: TestResultRepositoryRemoveFromInprogAndClearLease (0.01s)
+=== RUN   TestDecodeBase64ValidData
+--- PASS: TestDecodeBase64ValidData (0.00s)
+=== RUN   TestShardedTaskRepository_EnqueueRoutesToCorrectShard
+--- PASS: TestShardedTaskRepository_EnqueueRoutesToCorrectShard (0.01s)
+=== RUN   TestShardedTaskRepository_ClaimFromCorrectShard
+--- PASS: TestShardedTaskRepository_ClaimFromCorrectShard (0.01s)
+=== RUN   TestShardedTaskRepository_GetFansOutToAllShards
+--- PASS: TestShardedTaskRepository_GetFansOutToAllShards (0.01s)
+=== RUN   TestShardedTaskRepository_GetNotFoundReturnsError
+--- PASS: TestShardedTaskRepository_GetNotFoundReturnsError (0.00s)
+=== RUN   TestShardedTaskRepository_BackwardCompatibleWithSingleShard
+--- PASS: TestShardedTaskRepository_BackwardCompatibleWithSingleShard (0.01s)
+=== RUN   TestShardedTaskRepository_QueueStatsAggregatesAcrossShards
+--- PASS: TestShardedTaskRepository_QueueStatsAggregatesAcrossShards (0.01s)
+=== RUN   TestShardedTaskRepository_TenantRoutesToDedicatedShard
+--- PASS: TestShardedTaskRepository_TenantRoutesToDedicatedShard (0.01s)
+=== RUN   TestShardedTaskRepository_HeartbeatFansOutToAllShards
+--- PASS: TestShardedTaskRepository_HeartbeatFansOutToAllShards (0.01s)
+=== RUN   TestShardedTaskRepository_HeartbeatNotFoundReturnsError
+--- PASS: TestShardedTaskRepository_HeartbeatNotFoundReturnsError (0.00s)
+=== RUN   TestShardedTaskRepository_AbandonFansOutToAllShards
+--- PASS: TestShardedTaskRepository_AbandonFansOutToAllShards (0.01s)
+=== RUN   TestShardedTaskRepository_NackFansOutToAllShards
+--- PASS: TestShardedTaskRepository_NackFansOutToAllShards (0.01s)
+=== RUN   TestShardedTaskRepository_NackToDLQAcrossShards
+--- PASS: TestShardedTaskRepository_NackToDLQAcrossShards (0.01s)
+=== RUN   TestShardedTaskRepository_AdminQueuesAggregatesAcrossShards
+--- PASS: TestShardedTaskRepository_AdminQueuesAggregatesAcrossShards (0.01s)
+=== RUN   TestShardedTaskRepository_PendingLengthAggregatesAcrossShards
+--- PASS: TestShardedTaskRepository_PendingLengthAggregatesAcrossShards (0.01s)
+=== RUN   TestShardedTaskRepository_CleanupExpiredAcrossShards
+--- PASS: TestShardedTaskRepository_CleanupExpiredAcrossShards (0.01s)
+=== RUN   TestShardedTaskRepository_MoveDueDelayedOnCorrectShard
+--- PASS: TestShardedTaskRepository_MoveDueDelayedOnCorrectShard (0.01s)
+=== RUN   TestSubscriptionCreate
+--- PASS: TestSubscriptionCreate (0.00s)
+=== RUN   TestSubscriptionHeartbeat
+--- PASS: TestSubscriptionHeartbeat (0.00s)
+=== RUN   TestSubscriptionHeartbeatNotFound
+--- PASS: TestSubscriptionHeartbeatNotFound (0.00s)
+=== RUN   TestSubscriptionGet
+--- PASS: TestSubscriptionGet (0.00s)
+=== RUN   TestSubscriptionGetNotFound
+--- PASS: TestSubscriptionGetNotFound (0.00s)
+=== RUN   TestSubscriptionListActive
+--- PASS: TestSubscriptionListActive (0.00s)
+=== RUN   TestSubscriptionListActiveNoMatches
+--- PASS: TestSubscriptionListActiveNoMatches (0.00s)
+=== RUN   TestSubscriptionAllowNotify
+--- PASS: TestSubscriptionAllowNotify (0.00s)
+=== RUN   TestSubscriptionAllowNotifyBatch
+--- PASS: TestSubscriptionAllowNotifyBatch (0.00s)
+=== RUN   TestSubscriptionNextGroupIndex
+--- PASS: TestSubscriptionNextGroupIndex (0.00s)
+=== RUN   TestSubscriptionCleanupExpired
+--- PASS: TestSubscriptionCleanupExpired (2.00s)
+=== RUN   TestSubscriptionCreateWithGroupMode
+--- PASS: TestSubscriptionCreateWithGroupMode (0.00s)
+=== RUN   TestSubscriptionCreateWithHashMode
+--- PASS: TestSubscriptionCreateWithHashMode (0.00s)
+=== RUN   TestEnqueueIdempotent
+--- PASS: TestEnqueueIdempotent (0.01s)
+=== RUN   TestEnqueueIdempotentBloomSkipsNegativeGet
+--- PASS: TestEnqueueIdempotentBloomSkipsNegativeGet (0.00s)
+=== RUN   TestPriorityClaim
+--- PASS: TestPriorityClaim (0.01s)
+=== RUN   TestClaimGhostBloomSkipsHGet
+--- PASS: TestClaimGhostBloomSkipsHGet (0.01s)
+=== RUN   TestClaimRepairRequeuesExpiredLease
+--- PASS: TestClaimRepairRequeuesExpiredLease (0.01s)
+=== RUN   TestNackDelayedAndDLQ
+--- PASS: TestNackDelayedAndDLQ (0.01s)
+=== RUN   TestCleanupExpired
+--- PASS: TestCleanupExpired (0.01s)
+=== RUN   TestCleanupExpiredBloomSkipsAlreadyRemovedIDs
+--- PASS: TestCleanupExpiredBloomSkipsAlreadyRemovedIDs (0.01s)
+=== RUN   TestEnqueueScheduledGoesToDelayed
+--- PASS: TestEnqueueScheduledGoesToDelayed (0.01s)
+=== RUN   TestHeartbeat
+--- PASS: TestHeartbeat (0.01s)
+=== RUN   TestAbandon
+--- PASS: TestAbandon (0.01s)
+=== RUN   TestAdminQueues
+--- PASS: TestAdminQueues (0.01s)
+=== RUN   TestQueueStats
+--- PASS: TestQueueStats (0.01s)
+=== RUN   TestPendingLength
+--- PASS: TestPendingLength (0.01s)
+=== RUN   TestShardSupplierRoutesQueueKeys
+--- PASS: TestShardSupplierRoutesQueueKeys (0.01s)
+=== RUN   TestDefaultShardSupplierPreservesLegacyKeys
+--- PASS: TestDefaultShardSupplierPreservesLegacyKeys (0.00s)
+=== RUN   TestShardSupplierWithTenantRouting
+--- PASS: TestShardSupplierWithTenantRouting (0.00s)
+=== RUN   TestTenantIsolation
+--- PASS: TestTenantIsolation (0.01s)
+=== RUN   TestBackwardCompatibilityWithEmptyTenant
+--- PASS: TestBackwardCompatibilityWithEmptyTenant (0.01s)
+=== RUN   TestTenantIsolationInDelayedQueue
+--- PASS: TestTenantIsolationInDelayedQueue (0.00s)
+PASS
+coverage: 72.0% of statements
+ok  	github.com/osvaldoandrade/codeq/internal/repository	2.554s	coverage: 72.0% of statements
+=== RUN   TestNewNotifierServiceDefaults
+=== RUN   TestNewNotifierServiceDefaults/zero_minNotify
+=== RUN   TestNewNotifierServiceDefaults/negative_minNotify
+=== RUN   TestNewNotifierServiceDefaults/positive_minNotify
+--- PASS: TestNewNotifierServiceDefaults (0.00s)
+    --- PASS: TestNewNotifierServiceDefaults/zero_minNotify (0.00s)
+    --- PASS: TestNewNotifierServiceDefaults/negative_minNotify (0.00s)
+    --- PASS: TestNewNotifierServiceDefaults/positive_minNotify (0.00s)
+=== RUN   TestNotifierServiceNotifyQueueReadyNoSubscriptions
+--- PASS: TestNotifierServiceNotifyQueueReadyNoSubscriptions (0.00s)
+=== RUN   TestNotifierServiceNotifyQueueReadyWithSubscription
+--- PASS: TestNotifierServiceNotifyQueueReadyWithSubscription (0.16s)
+=== RUN   TestNewResultCallbackServiceDefaults
+=== RUN   TestNewResultCallbackServiceDefaults/zero_maxAttempts
+=== RUN   TestNewResultCallbackServiceDefaults/negative_maxAttempts
+=== RUN   TestNewResultCallbackServiceDefaults/zero_baseDelay
+=== RUN   TestNewResultCallbackServiceDefaults/zero_maxDelay
+--- PASS: TestNewResultCallbackServiceDefaults (0.00s)
+    --- PASS: TestNewResultCallbackServiceDefaults/zero_maxAttempts (0.00s)
+    --- PASS: TestNewResultCallbackServiceDefaults/negative_maxAttempts (0.00s)
+    --- PASS: TestNewResultCallbackServiceDefaults/zero_baseDelay (0.00s)
+    --- PASS: TestNewResultCallbackServiceDefaults/zero_maxDelay (0.00s)
+=== RUN   TestResultCallbackServiceSendNoWebhook
+--- PASS: TestResultCallbackServiceSendNoWebhook (0.00s)
+=== RUN   TestResultCallbackServiceSendWithWebhook
+--- PASS: TestResultCallbackServiceSendWithWebhook (0.10s)
+=== RUN   TestResultCallbackServiceBackoffDelay
+=== RUN   TestResultCallbackServiceBackoffDelay/attempt_1
+=== RUN   TestResultCallbackServiceBackoffDelay/attempt_2
+=== RUN   TestResultCallbackServiceBackoffDelay/attempt_3
+=== RUN   TestResultCallbackServiceBackoffDelay/attempt_4
+=== RUN   TestResultCallbackServiceBackoffDelay/attempt_5
+--- PASS: TestResultCallbackServiceBackoffDelay (0.00s)
+    --- PASS: TestResultCallbackServiceBackoffDelay/attempt_1 (0.00s)
+    --- PASS: TestResultCallbackServiceBackoffDelay/attempt_2 (0.00s)
+    --- PASS: TestResultCallbackServiceBackoffDelay/attempt_3 (0.00s)
+    --- PASS: TestResultCallbackServiceBackoffDelay/attempt_4 (0.00s)
+    --- PASS: TestResultCallbackServiceBackoffDelay/attempt_5 (0.00s)
+=== RUN   TestNewResultsService
+--- PASS: TestNewResultsService (0.00s)
+=== RUN   TestResultsServiceGetTaskNotFound
+--- PASS: TestResultsServiceGetTaskNotFound (0.00s)
+=== RUN   TestResultsServiceGetResultNotFound
+--- PASS: TestResultsServiceGetResultNotFound (0.01s)
+=== RUN   TestCreateTaskSuccess
+--- PASS: TestCreateTaskSuccess (0.00s)
+=== RUN   TestCreateTaskEmptyCommand
+--- PASS: TestCreateTaskEmptyCommand (0.00s)
+=== RUN   TestCreateTaskInvalidWebhook
+=== RUN   TestCreateTaskInvalidWebhook/invalid_url
+=== RUN   TestCreateTaskInvalidWebhook/ftp_scheme
+=== RUN   TestCreateTaskInvalidWebhook/no_host
+--- PASS: TestCreateTaskInvalidWebhook (0.00s)
+    --- PASS: TestCreateTaskInvalidWebhook/invalid_url (0.00s)
+    --- PASS: TestCreateTaskInvalidWebhook/ftp_scheme (0.00s)
+    --- PASS: TestCreateTaskInvalidWebhook/no_host (0.00s)
+=== RUN   TestCreateTaskDefaultMaxAttempts
+--- PASS: TestCreateTaskDefaultMaxAttempts (0.00s)
+=== RUN   TestCreateTaskWithDelay
+--- PASS: TestCreateTaskWithDelay (0.00s)
+=== RUN   TestCreateTaskWithRunAt
+--- PASS: TestCreateTaskWithRunAt (0.00s)
+=== RUN   TestCreateTaskIdempotent
+--- PASS: TestCreateTaskIdempotent (0.00s)
+=== RUN   TestClaimTaskSuccess
+--- PASS: TestClaimTaskSuccess (0.01s)
+=== RUN   TestClaimTaskEmptyWorkerID
+--- PASS: TestClaimTaskEmptyWorkerID (0.00s)
+=== RUN   TestClaimTaskDefaultCommands
+--- PASS: TestClaimTaskDefaultCommands (0.01s)
+=== RUN   TestClaimTaskWithWait
+--- PASS: TestClaimTaskWithWait (1.01s)
+=== RUN   TestHeartbeatSuccess
+--- PASS: TestHeartbeatSuccess (0.01s)
+=== RUN   TestHeartbeatDefaultExtend
+--- PASS: TestHeartbeatDefaultExtend (0.00s)
+=== RUN   TestAbandonTask
+--- PASS: TestAbandonTask (0.00s)
+=== RUN   TestNackTaskSuccess
+--- PASS: TestNackTaskSuccess (0.00s)
+=== RUN   TestNackTaskEmptyWorkerID
+--- PASS: TestNackTaskEmptyWorkerID (0.00s)
+=== RUN   TestNackTaskNotFound
+--- PASS: TestNackTaskNotFound (0.00s)
+=== RUN   TestNackTaskWithExplicitDelay
+--- PASS: TestNackTaskWithExplicitDelay (0.01s)
+=== RUN   TestNackTaskDelayExceedsMax
+--- PASS: TestNackTaskDelayExceedsMax (0.01s)
+=== RUN   TestGetTask
+--- PASS: TestGetTask (0.01s)
+=== RUN   TestAdminQueues
+--- PASS: TestAdminQueues (0.01s)
+=== RUN   TestQueueStats
+--- PASS: TestQueueStats (0.01s)
+=== RUN   TestCleanupExpired
+--- PASS: TestCleanupExpired (0.00s)
+=== RUN   TestCleanupExpiredDefaultLimit
+--- PASS: TestCleanupExpiredDefaultLimit (0.00s)
+=== RUN   TestCleanupExpiredZeroBefore
+--- PASS: TestCleanupExpiredZeroBefore (0.00s)
+=== RUN   TestNewSchedulerServiceDefaults
+=== RUN   TestNewSchedulerServiceDefaults/zero_maxAttempts
+=== RUN   TestNewSchedulerServiceDefaults/negative_maxAttempts
+=== RUN   TestNewSchedulerServiceDefaults/zero_backoff_base
+=== RUN   TestNewSchedulerServiceDefaults/zero_backoff_max
+=== RUN   TestNewSchedulerServiceDefaults/empty_policy
+--- PASS: TestNewSchedulerServiceDefaults (0.00s)
+    --- PASS: TestNewSchedulerServiceDefaults/zero_maxAttempts (0.00s)
+    --- PASS: TestNewSchedulerServiceDefaults/negative_maxAttempts (0.00s)
+    --- PASS: TestNewSchedulerServiceDefaults/zero_backoff_base (0.00s)
+    --- PASS: TestNewSchedulerServiceDefaults/zero_backoff_max (0.00s)
+    --- PASS: TestNewSchedulerServiceDefaults/empty_policy (0.00s)
+=== RUN   TestSubscriptionServiceCreateSuccess
+--- PASS: TestSubscriptionServiceCreateSuccess (0.00s)
+=== RUN   TestSubscriptionServiceCreateEmptyURL
+--- PASS: TestSubscriptionServiceCreateEmptyURL (0.00s)
+=== RUN   TestSubscriptionServiceCreateInvalidURL
+=== RUN   TestSubscriptionServiceCreateInvalidURL/invalid_url
+=== RUN   TestSubscriptionServiceCreateInvalidURL/ftp_scheme
+=== RUN   TestSubscriptionServiceCreateInvalidURL/no_host
+--- PASS: TestSubscriptionServiceCreateInvalidURL (0.00s)
+    --- PASS: TestSubscriptionServiceCreateInvalidURL/invalid_url (0.00s)
+    --- PASS: TestSubscriptionServiceCreateInvalidURL/ftp_scheme (0.00s)
+    --- PASS: TestSubscriptionServiceCreateInvalidURL/no_host (0.00s)
+=== RUN   TestSubscriptionServiceCreateDefaultEventTypes
+--- PASS: TestSubscriptionServiceCreateDefaultEventTypes (0.00s)
+=== RUN   TestSubscriptionServiceCreateDefaultDeliveryMode
+--- PASS: TestSubscriptionServiceCreateDefaultDeliveryMode (0.00s)
+=== RUN   TestSubscriptionServiceCreateInvalidDeliveryMode
+--- PASS: TestSubscriptionServiceCreateInvalidDeliveryMode (0.00s)
+=== RUN   TestSubscriptionServiceCreateGroupModeWithoutGroupID
+--- PASS: TestSubscriptionServiceCreateGroupModeWithoutGroupID (0.00s)
+=== RUN   TestSubscriptionServiceCreateGroupModeWithGroupID
+--- PASS: TestSubscriptionServiceCreateGroupModeWithGroupID (0.00s)
+=== RUN   TestSubscriptionServiceCreateHashMode
+--- PASS: TestSubscriptionServiceCreateHashMode (0.00s)
+=== RUN   TestSubscriptionServiceHeartbeat
+--- PASS: TestSubscriptionServiceHeartbeat (0.00s)
+=== RUN   TestSubscriptionServiceHeartbeatNotFound
+--- PASS: TestSubscriptionServiceHeartbeatNotFound (0.00s)
+PASS
+coverage: 60.0% of statements
+ok  	github.com/osvaldoandrade/codeq/internal/services	1.411s	coverage: 60.0% of statements
+=== RUN   TestCommandMarshalBinary
+=== RUN   TestCommandMarshalBinary/generate_master
+=== RUN   TestCommandMarshalBinary/generate_creative
+=== RUN   TestCommandMarshalBinary/custom_command
+--- PASS: TestCommandMarshalBinary (0.00s)
+    --- PASS: TestCommandMarshalBinary/generate_master (0.00s)
+    --- PASS: TestCommandMarshalBinary/generate_creative (0.00s)
+    --- PASS: TestCommandMarshalBinary/custom_command (0.00s)
+=== RUN   TestCommandMarshalText
+=== RUN   TestCommandMarshalText/generate_master
+=== RUN   TestCommandMarshalText/generate_creative
+=== RUN   TestCommandMarshalText/custom_command
+--- PASS: TestCommandMarshalText (0.00s)
+    --- PASS: TestCommandMarshalText/generate_master (0.00s)
+    --- PASS: TestCommandMarshalText/generate_creative (0.00s)
+    --- PASS: TestCommandMarshalText/custom_command (0.00s)
+=== RUN   TestTaskStatusMarshalBinary
+=== RUN   TestTaskStatusMarshalBinary/pending
+=== RUN   TestTaskStatusMarshalBinary/in_progress
+=== RUN   TestTaskStatusMarshalBinary/completed
+=== RUN   TestTaskStatusMarshalBinary/failed
+--- PASS: TestTaskStatusMarshalBinary (0.00s)
+    --- PASS: TestTaskStatusMarshalBinary/pending (0.00s)
+    --- PASS: TestTaskStatusMarshalBinary/in_progress (0.00s)
+    --- PASS: TestTaskStatusMarshalBinary/completed (0.00s)
+    --- PASS: TestTaskStatusMarshalBinary/failed (0.00s)
+=== RUN   TestTaskStatusMarshalText
+=== RUN   TestTaskStatusMarshalText/pending
+=== RUN   TestTaskStatusMarshalText/in_progress
+=== RUN   TestTaskStatusMarshalText/completed
+=== RUN   TestTaskStatusMarshalText/failed
+--- PASS: TestTaskStatusMarshalText (0.00s)
+    --- PASS: TestTaskStatusMarshalText/pending (0.00s)
+    --- PASS: TestTaskStatusMarshalText/in_progress (0.00s)
+    --- PASS: TestTaskStatusMarshalText/completed (0.00s)
+    --- PASS: TestTaskStatusMarshalText/failed (0.00s)
+=== RUN   TestTaskFields
+--- PASS: TestTaskFields (0.00s)
+=== RUN   TestResultRecordFields
+--- PASS: TestResultRecordFields (0.00s)
+=== RUN   TestSubscriptionFields
+--- PASS: TestSubscriptionFields (0.00s)
+=== RUN   TestQueueStatsFields
+--- PASS: TestQueueStatsFields (0.00s)
+=== RUN   TestArtifactInFields
+--- PASS: TestArtifactInFields (0.00s)
+=== RUN   TestArtifactOutFields
+--- PASS: TestArtifactOutFields (0.00s)
+=== RUN   TestSubmitResultRequestFields
+--- PASS: TestSubmitResultRequestFields (0.00s)
+PASS
+coverage: 100.0% of statements
+ok  	github.com/osvaldoandrade/codeq/pkg/domain	0.006s	coverage: 100.0% of statements
+=== RUN   TestLoadConfigOptional_EmptyPath
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:9999 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_EmptyPath (0.00s)
+=== RUN   TestLoadConfigOptional_WhitespacePath
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_WhitespacePath (0.00s)
+=== RUN   TestLoadConfigOptional_FileNotExist
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_FileNotExist (0.00s)
+=== RUN   TestLoadConfigOptional_InvalidYAML
+--- PASS: TestLoadConfigOptional_InvalidYAML (0.00s)
+=== RUN   TestLoadConfigOptional_ValidConfig
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://identity:8080 TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_ValidConfig (0.00s)
+=== RUN   TestLoadConfigOptional_EnvOverrides
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:9090 Redis:env-redis:6380 Identity:http://env-identity:9090 TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_EnvOverrides (0.00s)
+=== RUN   TestLoadConfigOptional_EnvOverridesEmptyFile
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Scheduler Config: {Port:7070 Redis:redis.local:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_EnvOverridesEmptyFile (0.00s)
+=== RUN   TestLoadConfigOptional_ShardingConfig
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_ShardingConfig (0.00s)
+=== RUN   TestLoadConfigOptional_ShardingDisabledByDefault
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_ShardingDisabledByDefault (0.00s)
+=== RUN   TestLoadConfigOptional_ShardingBackends
+2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
+2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
+2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+--- PASS: TestLoadConfigOptional_ShardingBackends (0.00s)
+=== RUN   TestValidate_ShardingBackendsMissingDefault
+--- PASS: TestValidate_ShardingBackendsMissingDefault (0.00s)
+=== RUN   TestValidate_ShardingBackendsMissingCommandShard
+--- PASS: TestValidate_ShardingBackendsMissingCommandShard (0.00s)
+=== RUN   TestValidate_ShardingBackendsMissingTenantShard
+--- PASS: TestValidate_ShardingBackendsMissingTenantShard (0.00s)
+=== RUN   TestValidate_ShardingBackendsEmptyAddress
+--- PASS: TestValidate_ShardingBackendsEmptyAddress (0.00s)
+=== RUN   TestValidate_ShardingBackendsValidConfig
+--- PASS: TestValidate_ShardingBackendsValidConfig (0.00s)
+PASS
+coverage: 68.8% of statements
+ok  	github.com/osvaldoandrade/codeq/pkg/config	0.009s	coverage: 68.8% of statements
+Test coverage report:
+github.com/osvaldoandrade/codeq/pkg/domain/task.go:65:					MarshalBinary			100.0%
+github.com/osvaldoandrade/codeq/pkg/domain/task.go:66:					MarshalText			100.0%
+github.com/osvaldoandrade/codeq/pkg/domain/task.go:68:					MarshalBinary			100.0%
+github.com/osvaldoandrade/codeq/pkg/domain/task.go:69:					MarshalText			100.0%
+total:											(statements)			69.5%
+
+=== Running Go Benchmarks ===
+goos: linux
+goarch: amd64
+pkg: github.com/osvaldoandrade/codeq/internal/bench
+cpu: AMD EPYC 7763 64-Core Processor                
+BenchmarkGCPressure_SustainedEnqueue-4     	   10000	    302348 ns/op	        23.00 gc_cycles	         2.083 gc_pause_ms	   95326 B/op	     320 allocs/op
+BenchmarkGCPressure_ClaimSubmitCycle-4     	    1148	   3210757 ns/op	        57.00 gc_cycles	         2.213 gc_pause_ms	 1945007 B/op	    8140 allocs/op
+BenchmarkHTTP_CreateClaimComplete-4        	    1052	   3314591 ns/op	 1959336 B/op	    8319 allocs/op
+BenchmarkScheduler_CreateClaimComplete-4   	    1089	   3190172 ns/op	 1931190 B/op	    8140 allocs/op
+BenchmarkSonic_MarshalTask_Small-4         	 3728169	       966.3 ns/op	     869 B/op	       7 allocs/op
+BenchmarkSonic_MarshalTask_Medium-4        	 2780168	      1312 ns/op	    1889 B/op	       7 allocs/op
+BenchmarkSonic_MarshalTask_Large-4         	 1000000	      3132 ns/op	   10193 B/op	       7 allocs/op
+BenchmarkStdJSON_MarshalTask_Small-4       	 2079390	      1735 ns/op	     824 B/op	       6 allocs/op
+BenchmarkStdJSON_MarshalTask_Medium-4      	 1207645	      2983 ns/op	    1817 B/op	       6 allocs/op
+BenchmarkStdJSON_MarshalTask_Large-4       	  291658	     12203 ns/op	    9887 B/op	       6 allocs/op
+BenchmarkSonic_UnmarshalTask_Small-4       	 3453794	      1034 ns/op	     828 B/op	       4 allocs/op
+BenchmarkSonic_UnmarshalTask_Medium-4      	 2369000	      1511 ns/op	    2914 B/op	       4 allocs/op
+BenchmarkSonic_UnmarshalTask_Large-4       	  742179	      4577 ns/op	   19450 B/op	       4 allocs/op
+BenchmarkStdJSON_UnmarshalTask_Small-4     	  764592	      4611 ns/op	     800 B/op	      13 allocs/op
+BenchmarkStdJSON_UnmarshalTask_Medium-4    	  325590	     10910 ns/op	    2928 B/op	      13 allocs/op
+BenchmarkStdJSON_UnmarshalTask_Large-4     	   60704	     57599 ns/op	   19568 B/op	      13 allocs/op
+PASS
+ok  	github.com/osvaldoandrade/codeq/internal/bench	68.428s
+
+=== Code Formatting Check ===
+⚠️  Unformatted files:
+internal/repository/subscription_bench_test.go
+internal/repository/task_repository.go
+
+=== Go Vet Check ===
+
+=== Build Performance Baseline ===
+Clean build time (server):
+Rebuild time (server):
+
+=== Build Steps Completed ===
+Artifacts created:
+  codeq (13M)
+  coverage.out (97K)
+  server (33M)
+Log file: build-steps.log

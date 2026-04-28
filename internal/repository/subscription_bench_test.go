@@ -101,79 +101,79 @@ func BenchmarkSubscription_ListActive_Scaled(b *testing.B) {
 // BenchmarkSubscription_AllowNotifyBatch tests the batched notification throttle check
 // Demonstrates the performance improvement of pipelining SetNX operations
 func BenchmarkSubscription_AllowNotifyBatch(b *testing.B) {
-mr, err := miniredis.Run()
-if err != nil {
-b.Fatalf("miniredis start: %v", err)
-}
-defer mr.Close()
+	mr, err := miniredis.Run()
+	if err != nil {
+		b.Fatalf("miniredis start: %v", err)
+	}
+	defer mr.Close()
 
-client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-defer client.Close()
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer client.Close()
 
-repo := NewSubscriptionRepository(client, time.UTC)
-ctx := context.Background()
+	repo := NewSubscriptionRepository(client, time.UTC)
+	ctx := context.Background()
 
-// Setup: Create subscriptions to check in batch
-numSubs := 100
-subs := make([]domain.Subscription, numSubs)
-for i := 0; i < numSubs; i++ {
-subs[i] = domain.Subscription{
-ID:                 fmt.Sprintf("sub-throttle-%d", i),
-CallbackURL:        "http://example.com/webhook",
-MinIntervalSeconds: 30,
-}
-_, err := repo.Create(ctx, subs[i], 300)
-if err != nil {
-b.Fatalf("Create subscription: %v", err)
-}
-}
+	// Setup: Create subscriptions to check in batch
+	numSubs := 100
+	subs := make([]domain.Subscription, numSubs)
+	for i := 0; i < numSubs; i++ {
+		subs[i] = domain.Subscription{
+			ID:                 fmt.Sprintf("sub-throttle-%d", i),
+			CallbackURL:        "http://example.com/webhook",
+			MinIntervalSeconds: 30,
+		}
+		_, err := repo.Create(ctx, subs[i], 300)
+		if err != nil {
+			b.Fatalf("Create subscription: %v", err)
+		}
+	}
 
-b.ReportAllocs()
-b.ResetTimer()
-for i := 0; i < b.N; i++ {
-_, err := repo.AllowNotifyBatch(ctx, subs)
-if err != nil {
-b.Fatalf("AllowNotifyBatch: %v", err)
-}
-}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := repo.AllowNotifyBatch(ctx, subs)
+		if err != nil {
+			b.Fatalf("AllowNotifyBatch: %v", err)
+		}
+	}
 }
 
 // BenchmarkSubscription_AllowNotifyBatch_Scaled tests with larger subscription counts
 // to better demonstrate the pipelining benefit (more noticeable with N+1 problems)
 func BenchmarkSubscription_AllowNotifyBatch_Scaled(b *testing.B) {
-mr, err := miniredis.Run()
-if err != nil {
-b.Fatalf("miniredis start: %v", err)
-}
-defer mr.Close()
+	mr, err := miniredis.Run()
+	if err != nil {
+		b.Fatalf("miniredis start: %v", err)
+	}
+	defer mr.Close()
 
-client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-defer client.Close()
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer client.Close()
 
-repo := NewSubscriptionRepository(client, time.UTC)
-ctx := context.Background()
+	repo := NewSubscriptionRepository(client, time.UTC)
+	ctx := context.Background()
 
-// Setup: Create many subscriptions for batch throttle check
-numSubs := 500
-subs := make([]domain.Subscription, numSubs)
-for i := 0; i < numSubs; i++ {
-subs[i] = domain.Subscription{
-ID:                 fmt.Sprintf("sub-throttle-large-%d", i),
-CallbackURL:        "http://example.com/webhook",
-MinIntervalSeconds: 30,
-}
-_, err := repo.Create(ctx, subs[i], 300)
-if err != nil {
-b.Fatalf("Create subscription: %v", err)
-}
-}
+	// Setup: Create many subscriptions for batch throttle check
+	numSubs := 500
+	subs := make([]domain.Subscription, numSubs)
+	for i := 0; i < numSubs; i++ {
+		subs[i] = domain.Subscription{
+			ID:                 fmt.Sprintf("sub-throttle-large-%d", i),
+			CallbackURL:        "http://example.com/webhook",
+			MinIntervalSeconds: 30,
+		}
+		_, err := repo.Create(ctx, subs[i], 300)
+		if err != nil {
+			b.Fatalf("Create subscription: %v", err)
+		}
+	}
 
-b.ReportAllocs()
-b.ResetTimer()
-for i := 0; i < b.N; i++ {
-_, err := repo.AllowNotifyBatch(ctx, subs)
-if err != nil {
-b.Fatalf("AllowNotifyBatch: %v", err)
-}
-}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := repo.AllowNotifyBatch(ctx, subs)
+		if err != nil {
+			b.Fatalf("AllowNotifyBatch: %v", err)
+		}
+	}
 }

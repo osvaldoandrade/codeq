@@ -802,23 +802,19 @@ func (r *taskRedisRepo) Heartbeat(ctx context.Context, taskID string, workerID s
 	)
 	defer span.End()
 
-	if err := r.rdb.Expire(taskCtx, r.keyLease(taskID), time.Duration(extendSeconds)*time.Second).Err(); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("lease expire: %w", err)
-	}
 	t.LeaseUntil = r.now().Add(time.Duration(extendSeconds) * time.Second).UTC().Format(time.RFC3339)
 	t.UpdatedAt = r.now()
 	t.LastKnownLocation = domain.LocationInProgress
 
-	if err := r.rdb.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.Expire(taskCtx, r.keyLease(taskID), time.Duration(extendSeconds)*time.Second)
+	pipe.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t))
+	pipe.ZAdd(taskCtx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
+	if _, err := pipe.Exec(taskCtx); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("HSET task: %w", err)
+		return err
 	}
-
-	// Bump retenção lógica
-	r.bumpTTL(taskCtx, t.ID)
 
 	return nil
 }
@@ -853,32 +849,23 @@ func (r *taskRedisRepo) Abandon(ctx context.Context, taskID string, workerID str
 	)
 	defer span.End()
 
-	if err := r.rdb.SRem(taskCtx, inprog, taskID).Err(); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("SREM inprog: %w", err)
-	}
-	if err := r.rdb.LPush(taskCtx, pending, taskID).Err(); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("LPUSH pending: %w", err)
-	}
-	_ = r.rdb.Del(taskCtx, r.keyLease(taskID)).Err()
-
 	t.Status = domain.StatusPending
 	t.LastKnownLocation = domain.LocationPending
 	t.WorkerID = ""
 	t.LeaseUntil = ""
 	t.UpdatedAt = r.now()
 
-	if err := r.rdb.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t)).Err(); err != nil {
+	pipe := r.rdb.TxPipeline()
+	pipe.SRem(taskCtx, inprog, taskID)
+	pipe.LPush(taskCtx, pending, taskID)
+	pipe.Del(taskCtx, r.keyLease(taskID))
+	pipe.HSet(taskCtx, r.keyTasksHash(), t.ID, marshal(t))
+	pipe.ZAdd(taskCtx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(taskRetention).UTC().Unix()), Member: t.ID})
+	if _, err := pipe.Exec(taskCtx); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return fmt.Errorf("HSET task: %w", err)
+		return err
 	}
-
-	// Bump retenção lógica
-	r.bumpTTL(taskCtx, t.ID)
 
 	return nil
 }
@@ -1210,46 +1197,46 @@ func (r *taskRedisRepo) CleanupExpired(ctx context.Context, limit int, before ti
 
 	// Process results and prepare batch cleanup pipeline
 	type taskCleanupInfo struct {
-		id        string
-		cmd       *domain.Command
-		prio      *int
-		tenantID  *string
-		location  *domain.TaskLocation
+		id       string
+		cmd      *domain.Command
+		prio     *int
+		tenantID *string
+		location *domain.TaskLocation
 	}
-	
+
 	tasks := make([]taskCleanupInfo, 0, len(ids))
 	resultIdx := 0
-	
+
 	for _, id := range ids {
 		if r.cleanupBloom != nil && r.cleanupBloom.MaybeHas(id) {
 			continue
 		}
-		
+
 		if resultIdx >= len(results) {
 			break
 		}
-		
+
 		strCmd, ok := results[resultIdx].(*redis.StringCmd)
 		resultIdx++
 		if !ok {
 			continue
 		}
-		
+
 		js, err := strCmd.Result()
 		if err != nil || js == "" {
 			continue
 		}
-		
+
 		t, err := unmarshalTask(js)
 		if err != nil {
 			continue
 		}
-		
+
 		cmd := t.Command
 		prio := normalizePriority(t.Priority)
 		tenantID := t.TenantID
 		loc := t.LastKnownLocation
-		
+
 		tasks = append(tasks, taskCleanupInfo{
 			id:       id,
 			cmd:      &cmd,
@@ -1277,13 +1264,13 @@ func (r *taskRedisRepo) CleanupExpired(ctx context.Context, limit int, before ti
 				tenantID = *taskInfo.tenantID
 			}
 			sid := r.currentShard(ctx, *taskInfo.cmd, tenantID)
-			
+
 			// Avoid O(N) list scans when we know the task is not in pending
 			shouldCheckPending := true
 			if taskInfo.location != nil && *taskInfo.location != "" && *taskInfo.location != domain.LocationPending {
 				shouldCheckPending = false
 			}
-			
+
 			if shouldCheckPending {
 				cleanupPipe.LRem(ctx, r.keyQueuePending(*taskInfo.cmd, *taskInfo.prio, tenantID, sid), 0, taskInfo.id)
 			}
