@@ -1249,6 +1249,38 @@ Webhook subscription listing has been optimized to batch all subscription data f
 - At 1ms latency (local): Still provides 25× improvement from reduced pipeline overhead
 - For systems with 100+ subscriptions per command: 99%+ latency reduction is typical
 
+### Subscription CleanupExpired Operations
+
+Background cleanup of expired subscriptions has been optimized to eliminate N+1 query patterns:
+
+**Subscription CleanupExpired** (administrative cleanup of expired webhook subscriptions):
+- **Before**: N+1 RTTs
+  1. ZRANGEBYSCORE to find subscriptions expired before a timestamp (1 RTT)
+  2. N individual HGET calls to fetch full subscription metadata (one per subscription)
+  3. N individual delete pipeline operations for cleanup (one per subscription)
+- **After**: 3 RTTs (batched operations)
+  1. ZRANGEBYSCORE to find subscriptions expired before timestamp (1 RTT)
+  2. All HGET calls in single pipelined batch to fetch metadata (1 RTT)
+  3. All cleanup operations in single pipelined batch for deletion (1 RTT)
+- **Impact**: ~95%+ RTT reduction for typical cleanup runs with 100+ expired subscriptions
+  - 100 subscriptions: 101 RTTs → 3 RTTs (97% reduction)
+  - 1,000 subscriptions: 1,001 RTTs → 3 RTTs (99.7% reduction)
+- **Expected latency gain**: 500-5,000ms improvement for administrative cleanup operations
+- **Use case**: Scheduled cleanup tasks that run periodically to remove expired subscriptions
+- **Reference**: See `internal/repository/subscription_repository.go:205-294` (CleanupExpired function) for implementation
+
+**Real-world example:**
+- System with 100 expired subscriptions to clean up
+- Network latency: 10ms per RTT
+- Before: 101 RTTs × 10ms = 1,010ms cleanup time
+- After: 3 RTTs × 10ms = 30ms cleanup time
+- **Net gain: 980ms (97% reduction)**
+
+**Monitoring:**
+- Observe cleanup duration via metrics or logs
+- For 1,000+ subscriptions: expect cleanup to complete in <100ms instead of 10+ seconds
+- Cleanup operations are typically background tasks; benefits are most visible on bulk cleanup runs
+
 ### Performance Verification
 
 These pipelining optimizations are transparent to callers. To observe the improvements:
