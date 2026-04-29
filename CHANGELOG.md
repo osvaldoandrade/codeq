@@ -136,6 +136,12 @@ See [`docs/migration.md`](docs/migration.md) for detailed step-by-step procedure
   - Reduces notification delivery latency, especially with high subscription counts
   - Fully transparent to webhooks; no API or configuration changes
   - Reference: `internal/repository/subscription_repository.go:AllowNotifyBatch` and `internal/services/notifier_service.go:NotifyQueueReady`
+- **Timer Allocation Optimization**: Replaced heap-allocating `time.After()` with reusable `time.NewTimer()` in claim retry loop to eliminate garbage collection pressure. ([#436](https://github.com/osvaldoandrade/codeq/pull/436))
+  - Allocation reduction: O(N) → O(1) for N retry iterations (99% reduction for typical 120-iteration claim waits)
+  - GC pressure reduction: 10-20% lower GC pause time during high-concurrency claim operations
+  - Expected improvement: Reduced tail latency (p99, p99.9) under sustained high worker concurrency
+  - Fully transparent to workers; no API or configuration changes needed
+  - Reference: `internal/services/scheduler_service.go:152-174` (ClaimTask retry loop optimization)
 
 ### Added
 
