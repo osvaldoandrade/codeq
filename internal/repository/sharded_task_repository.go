@@ -96,43 +96,95 @@ func (s *shardedTaskRepository) Claim(ctx context.Context, workerID string, comm
 }
 
 func (s *shardedTaskRepository) Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error {
-	// Fan out to all shards since we can't determine shard from taskID alone
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first success or last not-found error
+	resultChan := make(chan error, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	for _, repo := range s.repos {
-		err := repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+		repo := repo // Capture for closure
+		go func() {
+			err := repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+			resultChan <- err
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		err := <-resultChan
 		if err == nil {
-			return nil
+			return nil // Success, cancel remaining goroutines
 		}
 		if !isNotFoundErr(err) {
-			return err
+			return err // Non-not-found error, fail fast
 		}
+		lastNotFoundErr = err
 	}
-	return fmt.Errorf("not-found")
+	return lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) Abandon(ctx context.Context, taskID string, workerID string) error {
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first success or last not-found error
+	resultChan := make(chan error, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	for _, repo := range s.repos {
-		err := repo.Abandon(ctx, taskID, workerID)
+		repo := repo // Capture for closure
+		go func() {
+			err := repo.Abandon(ctx, taskID, workerID)
+			resultChan <- err
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		err := <-resultChan
 		if err == nil {
-			return nil
+			return nil // Success, cancel remaining goroutines
 		}
 		if !isNotFoundErr(err) {
-			return err
+			return err // Non-not-found error, fail fast
 		}
+		lastNotFoundErr = err
 	}
-	return fmt.Errorf("not-found")
+	return lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) Nack(ctx context.Context, taskID string, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error) {
-	for _, repo := range s.repos {
-		delay, dlq, err := repo.Nack(ctx, taskID, workerID, delaySeconds, maxAttemptsDefault, reason)
-		if err == nil {
-			return delay, dlq, nil
-		}
-		if !isNotFoundErr(err) {
-			return 0, false, err
-		}
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first success or last not-found error
+	type nackResult struct {
+		delay int
+		dlq   bool
+		err   error
 	}
-	return 0, false, fmt.Errorf("not-found")
+	resultChan := make(chan nackResult, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for _, repo := range s.repos {
+		repo := repo // Capture for closure
+		go func() {
+			delay, dlq, err := repo.Nack(ctx, taskID, workerID, delaySeconds, maxAttemptsDefault, reason)
+			resultChan <- nackResult{delay, dlq, err}
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		result := <-resultChan
+		if result.err == nil {
+			return result.delay, result.dlq, nil // Success, cancel remaining goroutines
+		}
+		if !isNotFoundErr(result.err) {
+			return 0, false, result.err // Non-not-found error, fail fast
+		}
+		lastNotFoundErr = result.err
+	}
+	return 0, false, lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
@@ -158,16 +210,36 @@ func (s *shardedTaskRepository) PendingLength(ctx context.Context, cmd domain.Co
 }
 
 func (s *shardedTaskRepository) Get(ctx context.Context, taskID string) (*domain.Task, error) {
-	for _, repo := range s.repos {
-		task, err := repo.Get(ctx, taskID)
-		if err == nil {
-			return task, nil
-		}
-		if !isNotFoundErr(err) {
-			return nil, err
-		}
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first found task or last not-found error
+	type getResult struct {
+		task *domain.Task
+		err  error
 	}
-	return nil, fmt.Errorf("not-found")
+	resultChan := make(chan getResult, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for _, repo := range s.repos {
+		repo := repo // Capture for closure
+		go func() {
+			task, err := repo.Get(ctx, taskID)
+			resultChan <- getResult{task, err}
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		result := <-resultChan
+		if result.err == nil {
+			return result.task, nil // Success, cancel remaining goroutines
+		}
+		if !isNotFoundErr(result.err) {
+			return nil, result.err // Non-not-found error, fail fast
+		}
+		lastNotFoundErr = result.err
+	}
+	return nil, lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) AdminQueues(ctx context.Context) (map[string]any, error) {
