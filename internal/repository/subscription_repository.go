@@ -171,7 +171,8 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 	if len(expiredIDs) > 0 {
 		cleanupPipe := r.rdb.Pipeline()
 		for _, id := range expiredIDs {
-			cleanupPipe.ZRem(ctx, key, id)
+			idInterface := interface{}(id)
+			cleanupPipe.ZRem(ctx, key, idInterface)
 		}
 		_, _ = cleanupPipe.Exec(ctx)
 	}
@@ -293,7 +294,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			js, err := cmd.Result()
 			if err == redis.Nil || js == "" {
 				// Expired or missing
-				cleanupPipe.ZRem(ctx, key, id)
+				cleanupPipe.ZRem(ctx, key, interface{}(id))
 				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
 				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
 				continue
@@ -305,7 +306,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			var sub domain.Subscription
 			if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
 				// Corrupted entry, clean it up
-				cleanupPipe.ZRem(ctx, key, id)
+				cleanupPipe.ZRem(ctx, key, interface{}(id))
 				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
 				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
 				continue
@@ -319,7 +320,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 
 			// Subscription is expired, queue for cleanup
 			for _, ev := range sub.EventTypes {
-				cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
+				cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), interface{}(sub.ID))
 			}
 			cleanupPipe.HDel(ctx, r.keySubsHash(), sub.ID)
 			cleanupPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
