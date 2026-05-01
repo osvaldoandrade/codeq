@@ -169,6 +169,7 @@ results, _ := pipe.Exec(ctx)  // All HGETs in 1 RTT
 - **For 100 subscriptions**: ~99ms latency reduction
 - Also batch removes expired subscriptions in single ZRem
 
+
 ## Case Study: Result SaveResult Pipelining Optimization
 
 ### Problem
@@ -205,6 +206,7 @@ Total: **1 RTT** (all writes in single pipeline)
 - **Per-operation latency**: ~3ms reduction at 5ms Redis latency
 - **Throughput impact**: 33% reduction in SaveResult operation latency
 - Scales well with result save volume (more throughput gain at high load)
+
 
 ## Case Study: Task CleanupExpired N+1 Optimization
 

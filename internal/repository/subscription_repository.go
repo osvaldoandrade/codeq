@@ -267,32 +267,35 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			continue
 		}
 
-		// Fetch all subscriptions in single pipelined batch
-		fetchPipe := r.rdb.Pipeline()
+		// Batch fetch all subscription data in a single pipeline (1 RTT instead of N RTTs)
+		pipe := r.rdb.Pipeline()
 		for _, id := range ids {
-			fetchPipe.HGet(ctx, r.keySubsHash(), id)
+			pipe.HGet(ctx, r.keySubsHash(), id)
 		}
-		fetchResults, err := fetchPipe.Exec(ctx)
+		results, err := pipe.Exec(ctx)
 		if err != nil && err != redis.Nil {
-			// Fall back to individual Gets on error
-			for _, id := range ids {
-				r.processExpiredSubscription(ctx, id, key, before, &removed)
-			}
-			continue
+			return removed, err
 		}
 
 		// Process fetched subscriptions in single cleanup pipeline
 		cleanupPipe := r.rdb.TxPipeline()
 		toRemoveCount := 0
 		for i, id := range ids {
-			if i >= len(fetchResults) {
+			if i >= len(results) {
 				break
 			}
-			cmd, ok := fetchResults[i].(*redis.StringCmd)
+
+			strCmd, ok := results[i].(*redis.StringCmd)
 			if !ok {
+				// Type assertion failed - mark for deletion
+				cleanupPipe.ZRem(ctx, key, id)
+				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
+				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
-			js, err := cmd.Result()
+
+			js, err := strCmd.Result()
 			if err == redis.Nil || js == "" {
 				// Expired or missing
 				cleanupPipe.ZRem(ctx, key, interface{}(id))
@@ -316,14 +319,14 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			}
 
 			if sub.ExpiresAt.After(before) {
-				// Not yet expired, re-add with updated score
+				// Not expired - update score
 				cleanupPipe.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID})
 				continue
 			}
 
-			// Subscription is expired, queue for cleanup
+			// Expired - mark for deletion
 			for _, ev := range sub.EventTypes {
-				cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), interface{}(sub.ID))
+				cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
 			}
 			cleanupPipe.HDel(ctx, r.keySubsHash(), sub.ID)
 			cleanupPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
@@ -336,29 +339,4 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 		}
 	}
 	return removed, nil
-}
-
-// Helper function to process a single expired subscription (fallback path)
-func (r *subscriptionRedisRepo) processExpiredSubscription(ctx context.Context, id, key string, before time.Time, removed *int) {
-	sub, err := r.Get(ctx, id)
-	if err != nil {
-		_ = r.rdb.ZRem(ctx, key, id).Err()
-		_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
-		_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
-		*removed++
-		return
-	}
-	if sub.ExpiresAt.After(before) {
-		_ = r.rdb.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID}).Err()
-		return
-	}
-	pipe := r.rdb.TxPipeline()
-	for _, ev := range sub.EventTypes {
-		pipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
-	}
-	pipe.HDel(ctx, r.keySubsHash(), sub.ID)
-	pipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
-	if _, err := pipe.Exec(ctx); err == nil {
-		*removed++
-	}
 }
