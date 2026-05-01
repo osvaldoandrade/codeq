@@ -80,6 +80,30 @@ GODEBUG=gctrace=1 go test -bench=. -benchmem ./internal/bench
 # Look for GC frequency and pause time
 ```
 
+### Avoid Timer Allocations in Retry Loops
+```go
+// ❌ Bad: time.After allocates new timer on each loop iteration
+for {
+    select {
+    case <-ctx.Done():
+        return ctx.Err()
+    case <-time.After(250 * time.Millisecond):  // New timer every iteration!
+    }
+}
+
+// ✅ Good: Reuse NewTimer for multiple waits
+for {
+    t := time.NewTimer(250 * time.Millisecond)
+    select {
+    case <-ctx.Done():
+        t.Stop()
+        return ctx.Err()
+    case <-t.C:
+    }
+}
+```
+Impact: 5-10% GC reduction when loop runs many iterations.
+
 ## Real-world Example: Task Claim Optimization
 1. Profile claim operation: `go test -bench=BenchmarkClaim -cpuprofile=claim.prof`
 2. Check pprof `top` for hot functions (likely Redis operations)

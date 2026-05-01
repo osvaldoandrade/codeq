@@ -58,9 +58,10 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 		return
 	}
 
-	fanout := []domain.Subscription{}
+	// Pre-allocate slices with capacity to avoid repeated allocations
+	fanout := make([]domain.Subscription, 0, len(subs))
 	groups := map[string][]domain.Subscription{}
-	hashMode := []domain.Subscription{}
+	hashMode := make([]domain.Subscription, 0, len(subs))
 
 	for _, s := range subs {
 		switch s.DeliveryMode {
@@ -75,8 +76,22 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 		}
 	}
 
+	// Batch throttle checks for all subscriptions (1 RTT instead of N RTTs)
+	allSubs := make([]domain.Subscription, 0, len(subs))
+	allSubs = append(allSubs, fanout...)
+	for _, list := range groups {
+		if len(list) > 0 {
+			allSubs = append(allSubs, list[0])
+		}
+	}
+	if len(hashMode) > 0 {
+		allSubs = append(allSubs, hashMode[0])
+	}
+
+	allowed, _ := n.repo.AllowNotifyBatch(ctx, allSubs)
+
 	for _, s := range fanout {
-		if ok, _ := n.repo.AllowNotify(ctx, s.ID, s.MinIntervalSeconds); ok {
+		if ok := allowed[s.ID]; ok {
 			n.dispatch(ctx, s, cmd)
 		}
 	}
@@ -90,7 +105,7 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 			continue
 		}
 		s := list[idx]
-		if ok, _ := n.repo.AllowNotify(ctx, s.ID, s.MinIntervalSeconds); ok {
+		if ok := allowed[s.ID]; ok {
 			n.dispatch(ctx, s, cmd)
 		}
 	}
@@ -98,7 +113,7 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 	if len(hashMode) > 0 {
 		idx := int(time.Now().UTC().Unix() / 60 % int64(len(hashMode)))
 		s := hashMode[idx]
-		if ok, _ := n.repo.AllowNotify(ctx, s.ID, s.MinIntervalSeconds); ok {
+		if ok := allowed[s.ID]; ok {
 			n.dispatch(ctx, s, cmd)
 		}
 	}

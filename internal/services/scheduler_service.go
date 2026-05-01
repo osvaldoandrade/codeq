@@ -149,10 +149,8 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		waitSeconds = 30
 	}
 	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
-	timer := time.NewTimer(0)  // Create once, reuse across iterations
+	timer := time.NewTimer(0)
 	defer timer.Stop()
-	timer.Stop()  // Stop the initial timer before first use
-	
 	for {
 		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
 		if err != nil || ok {
@@ -169,7 +167,7 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		if remaining < sleep {
 			sleep = remaining
 		}
-		timer.Reset(sleep)  // Reuse timer instead of allocating new one with time.After
+		timer.Reset(sleep)
 		select {
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
