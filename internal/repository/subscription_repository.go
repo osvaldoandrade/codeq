@@ -277,8 +277,9 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			return removed, err
 		}
 
-		// Process results and batch deletions
-		delPipe := r.rdb.Pipeline()
+		// Process fetched subscriptions in single cleanup pipeline
+		cleanupPipe := r.rdb.TxPipeline()
+		toRemoveCount := 0
 		for i, id := range ids {
 			if i >= len(results) {
 				break
@@ -287,20 +288,20 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			strCmd, ok := results[i].(*redis.StringCmd)
 			if !ok {
 				// Type assertion failed - mark for deletion
-				delPipe.ZRem(ctx, key, id)
-				delPipe.HDel(ctx, r.keySubsHash(), id)
-				delPipe.Del(ctx, r.keySubNotifyThrottle(id))
-				removed++
+				cleanupPipe.ZRem(ctx, key, id)
+				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
+				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 
 			js, err := strCmd.Result()
 			if err == redis.Nil || js == "" {
-				// Not found - mark for deletion
-				delPipe.ZRem(ctx, key, id)
-				delPipe.HDel(ctx, r.keySubsHash(), id)
-				delPipe.Del(ctx, r.keySubNotifyThrottle(id))
-				removed++
+				// Expired or missing
+				cleanupPipe.ZRem(ctx, key, interface{}(id))
+				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
+				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 			if err != nil {
@@ -309,34 +310,33 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 
 			var sub domain.Subscription
 			if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
-				// Unmarshal failed - mark for deletion
-				delPipe.ZRem(ctx, key, id)
-				delPipe.HDel(ctx, r.keySubsHash(), id)
-				delPipe.Del(ctx, r.keySubNotifyThrottle(id))
-				removed++
+				// Corrupted entry, clean it up
+				cleanupPipe.ZRem(ctx, key, interface{}(id))
+				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
+				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 
 			if sub.ExpiresAt.After(before) {
 				// Not expired - update score
-				delPipe.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID})
+				cleanupPipe.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID})
 				continue
 			}
 
 			// Expired - mark for deletion
 			for _, ev := range sub.EventTypes {
-				delPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
+				cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
 			}
-			delPipe.HDel(ctx, r.keySubsHash(), sub.ID)
-			delPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
-			removed++
+			cleanupPipe.HDel(ctx, r.keySubsHash(), sub.ID)
+			cleanupPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
+			toRemoveCount++
 		}
 
-		// Execute all deletions and updates in a single batch
-		if len(ids) > 0 {
-			_, _ = delPipe.Exec(ctx)
+		// Execute all cleanup operations in single pipeline
+		if _, err := cleanupPipe.Exec(ctx); err == nil {
+			removed += toRemoveCount
 		}
 	}
 	return removed, nil
 }
-
