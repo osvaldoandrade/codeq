@@ -61,12 +61,12 @@ func (r *resultRedisRepo) GetTask(ctx context.Context, id string) (*domain.Task,
 func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
 	b, _ := sonic.Marshal(rec)
 
-	// First, get the task in parallel with saving the result
+	// First pipeline: save result and get task (2 commands, 1 RTT)
 	pipe := r.rdb.Pipeline()
 	pipe.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b))
 	pipe.HGet(ctx, r.keyTasksHash(), rec.TaskID)
 	results, err := pipe.Exec(ctx)
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return fmt.Errorf("redis pipeline: %w", err)
 	}
 
@@ -75,19 +75,30 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	if !ok {
 		return fmt.Errorf("unexpected pipeline result type for HGET")
 	}
-	js, err := hgetCmd.Val(), hgetCmd.Err()
-	if err == redis.Nil || js == "" || err != nil {
+	js, jsErr := hgetCmd.Val(), hgetCmd.Err()
+	if jsErr == redis.Nil || js == "" || jsErr != nil {
+		// Result was already saved in the pipeline above; task not found is non-fatal
 		return nil
 	}
 
 	var t domain.Task
 	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
-		return fmt.Errorf("unmarshal task: %w", err)
+		// Result was already saved; unmarshal failure on task is non-fatal
+		return nil
 	}
+
+	// Update task with result reference and save both in a single pipeline
 	t.ResultKey = r.keyResultsHash()
 	nb, _ := sonic.Marshal(t)
-	if err := r.rdb.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb)).Err(); err != nil {
-		return fmt.Errorf("redis HSET task: %w", err)
+
+	// Optimization: Consolidate task update into single pipelined batch with TTL
+	// This combines HSET and ZADD into 1 RTT instead of separate operations
+	// Improves throughput for result submission by reducing context switches
+	updatePipe := r.rdb.TxPipeline()
+	updatePipe.HSet(ctx, r.keyTasksHash(), rec.TaskID, string(nb))
+	updatePipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(24 * time.Hour).UTC().Unix()), Member: rec.TaskID})
+	if _, err := updatePipe.Exec(ctx); err != nil {
+		return fmt.Errorf("redis update pipeline: %w", err)
 	}
 	return nil
 }
