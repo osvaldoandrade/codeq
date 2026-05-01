@@ -1372,6 +1372,125 @@ Webhook notification throttling has been optimized to batch all subscription thr
 - Under low subscription counts (<5 subscriptions): 2-5× throughput gain from reduced overhead
 - Fully transparent to webhooks; no API or configuration changes needed
 
+### Sharded Operations Parallelization
+
+In multi-shard deployments (multiple Redis backends), certain operations must search across shards to find a task. This has been optimized through concurrent goroutines to dramatically reduce latency.
+
+**Operations affected:**
+- Heartbeat (extend worker lease)
+- Abandon (cancel task lease)
+- Nack (mark task failed with backoff)
+- Get (fetch task by ID)
+
+**Search Pattern Optimization:**
+
+When a task is stored in shard N (of 3-5 total shards), these operations previously iterated sequentially:
+
+| Scenario | Shards | RTTs | Latency (5ms RTT) | Status |
+|----------|--------|------|------------------|--------|
+| Task in shard 1 | 3 | 1 | 5ms | ✓ Fast |
+| Task in shard 2 | 3 | 2 | 10ms | ⚠️ Sequential delay |
+| Task in shard 3 | 3 | 3 | 15ms | ❌ Worst case |
+| Task in shard 1 | 10 | 1 | 5ms | ✓ Acceptable |
+| Task in shard 10 | 10 | 10 | 50ms | ❌ Unacceptable |
+
+**Before: Sequential Fan-Out**
+
+```go
+// ❌ Old approach: loop through shards sequentially
+for _, repo := range s.repos {  // 3 shards
+    err := repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+    if err == nil {
+        return nil  // Found in shard 1
+    }
+    if !isNotFoundErr(err) {
+        return err
+    }
+}
+// Worst case: 3 RTTs = 15ms at 5ms RTT
+```
+
+**After: Concurrent Goroutines**
+
+```go
+// ✅ New approach: query all shards in parallel
+resultChan := make(chan error, len(s.repos))  // 3 shards
+ctx, cancel := context.WithCancel(ctx)
+defer cancel()
+
+// Launch all queries concurrently
+for _, repo := range s.repos {
+    repo := repo // Capture for closure
+    go func() {
+        err := repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+        resultChan <- err
+    }()
+}
+
+// Collect results, return first success
+var lastNotFoundErr error
+for i := 0; i < len(s.repos); i++ {
+    err := <-resultChan
+    if err == nil {
+        return nil  // Found in any shard, cancel remaining goroutines
+    }
+    if !isNotFoundErr(err) {
+        return err  // Fatal error, fail fast
+    }
+    lastNotFoundErr = err
+}
+return lastNotFoundErr
+// Worst case: 1 RTT = 5ms at 5ms RTT
+```
+
+**Performance Results:**
+
+| Operation | Before | After | Reduction |
+|-----------|--------|-------|-----------|
+| Heartbeat (worst-case 3 shards) | 3 RTTs (~15ms) | 1 RTT (~5ms) | **66%** |
+| Abandon (worst-case 3 shards) | 3 RTTs (~15ms) | 1 RTT (~5ms) | **66%** |
+| Nack (worst-case 3 shards) | 3 RTTs (~15ms) | 1 RTT (~5ms) | **66%** |
+| Get (worst-case 3 shards) | 3 RTTs (~15ms) | 1 RTT (~5ms) | **66%** |
+
+**Real-world impact:**
+
+For a system with 100 workers heartbeating concurrently on a 3-shard deployment:
+
+- **Before**: 100 workers × 3 RTTs × 5ms = 1,500ms aggregate latency
+- **After**: 100 workers × 1 RTT × 5ms = 500ms aggregate latency
+- **Net improvement: 1,000ms (67% reduction) per heartbeat cycle**
+
+**Implementation details:**
+
+The optimization uses three key techniques:
+
+1. **Concurrent launches**: All shards queried simultaneously via separate goroutines
+2. **Non-blocking channel**: Buffered channel collects results without blocking the launcher
+3. **Fail-fast semantics**:
+   - Return immediately on success (task found)
+   - Return immediately on non-not-found error (database down)
+   - Collect "not-found" errors from all shards for final return
+4. **Context cancellation**: When one goroutine returns successfully, context is cancelled to prevent other goroutines from executing unnecessary Redis commands
+
+**Use cases:**
+
+- ✅ Multi-shard deployments (3-10 Redis backends)
+- ✅ High-frequency operations (heartbeat, abandon)
+- ✅ Worker-heavy workloads with concurrent claims
+- ❌ Single-shard deployments (no benefit, falls back to direct lookup)
+
+**Monitoring:**
+
+Improvements are most visible in:
+
+- Worker heartbeat latency (p50, p99, p99.9)
+- Task abandon/nack latency under load
+- Overall worker throughput during high concurrency
+
+**Reference:**
+
+See `.github/copilot/instructions/10-sharded-operations-parallelization.md` for comprehensive implementation guide and `internal/repository/sharded_task_repository.go` (lines 98-242) for code examples (Heartbeat, Abandon, Nack, Get operations).
+
 ### Performance Verification
 
 These pipelining optimizations are transparent to callers. To observe the improvements:
