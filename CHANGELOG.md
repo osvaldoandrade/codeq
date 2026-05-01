@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fixed type conversion bug in Subscription ListActive**: Corrected `[]string` to `[]interface{}` conversion for Redis ZRem operation
   - Ensures batch removal of invalid subscriptions works correctly
 
+- **Result SaveResult Pipelining Optimization**: Consolidated Redis writes for result operations into atomic pipeline execution ([#438](https://github.com/osvaldoandrade/codeq/pull/438))
+  - Before: Separate HGet task, then HSet result, then HSet task update (2 RTTs with separate syscalls)
+  - After: Single pipeline with HSet result + HSet task (1 RTT, atomic writes)
+  - Benefits: Reduced syscall overhead, atomic write semantics, cleaner code structure
+  - Improved throughput for result submission operations
+  - All tests passing, no API changes required
+  - Location: `internal/repository/result_repository.go:SaveResult`
+  - Documentation: `.github/copilot/instructions/09-saveresult-optimization.md` (new guide)
+  - Reference: `.github/copilot/instructions/02-redis-pipelining.md` (case study added)
+
 - Bumped k6 image in `docker-compose.yml` from 0.49.0 to 0.55.0 to support nullish coalescing (`??`) syntax used in load test scripts
 
 ### Documentation
