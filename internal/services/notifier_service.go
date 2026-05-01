@@ -58,9 +58,10 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 		return
 	}
 
-	fanout := []domain.Subscription{}
+	// Pre-allocate slices with capacity to avoid repeated allocations
+	fanout := make([]domain.Subscription, 0, len(subs))
 	groups := map[string][]domain.Subscription{}
-	hashMode := []domain.Subscription{}
+	hashMode := make([]domain.Subscription, 0, len(subs))
 
 	for _, s := range subs {
 		switch s.DeliveryMode {
