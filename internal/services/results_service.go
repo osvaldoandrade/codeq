@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/metrics"
@@ -65,28 +66,75 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	}
 
 	var outs []domain.ArtifactOut
+	var outsMu sync.Mutex
+
+	// First pass: collect artifacts to upload and existing artifacts with URLs
+	var toUpload []domain.SubmitArtifact
 	for _, a := range req.Artifacts {
 		if a.URL != "" {
+			outsMu.Lock()
 			outs = append(outs, domain.ArtifactOut{Name: a.Name, URL: a.URL})
+			outsMu.Unlock()
 			continue
 		}
 		if a.ContentBase64 == "" {
 			continue
 		}
-		data, err := s.repo.DecodeBase64(a.ContentBase64)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, fmt.Errorf("artifact %s base64 decode: %w", a.Name, err)
+		toUpload = append(toUpload, a)
+	}
+
+	// Second pass: decode and upload artifacts concurrently (max 5 concurrent uploads)
+	if len(toUpload) > 0 {
+		sem := make(chan struct{}, 5)
+		var wg sync.WaitGroup
+		var uploadErr error
+		var errMu sync.Mutex
+
+		for _, a := range toUpload {
+			wg.Add(1)
+			go func(artifact domain.SubmitArtifact) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				if uploadErr != nil {
+					return
+				}
+
+				data, err := s.repo.DecodeBase64(artifact.ContentBase64)
+				if err != nil {
+					errMu.Lock()
+					if uploadErr == nil {
+						span.RecordError(err)
+						uploadErr = fmt.Errorf("artifact %s base64 decode: %w", artifact.Name, err)
+					}
+					errMu.Unlock()
+					return
+				}
+
+				objPath := path.Join("results", taskID, artifact.Name)
+				url, err := s.uploader.UploadBytes(taskCtx, objPath, artifact.ContentType, data)
+				if err != nil {
+					errMu.Lock()
+					if uploadErr == nil {
+						span.RecordError(err)
+						uploadErr = fmt.Errorf("artifact %s upload: %w", artifact.Name, err)
+					}
+					errMu.Unlock()
+					return
+				}
+
+				outsMu.Lock()
+				outs = append(outs, domain.ArtifactOut{Name: artifact.Name, URL: url})
+				outsMu.Unlock()
+			}(a)
 		}
-		objPath := path.Join("results", taskID, a.Name)
-		url, err := s.uploader.UploadBytes(taskCtx, objPath, a.ContentType, data)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			return nil, fmt.Errorf("artifact %s upload: %w", a.Name, err)
+
+		wg.Wait()
+		if uploadErr != nil {
+			span.SetStatus(codes.Error, uploadErr.Error())
+			return nil, uploadErr
 		}
-		outs = append(outs, domain.ArtifactOut{Name: a.Name, URL: url})
 	}
 
 	switch req.Status {
