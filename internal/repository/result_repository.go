@@ -66,7 +66,7 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	pipe.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b))
 	pipe.HGet(ctx, r.keyTasksHash(), rec.TaskID)
 	results, err := pipe.Exec(ctx)
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return fmt.Errorf("redis pipeline: %w", err)
 	}
 
@@ -75,15 +75,19 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 	if !ok {
 		return fmt.Errorf("unexpected pipeline result type for HGET")
 	}
-	js, err := hgetCmd.Val(), hgetCmd.Err()
-	if err == redis.Nil || js == "" || err != nil {
+	js, jsErr := hgetCmd.Val(), hgetCmd.Err()
+	if jsErr == redis.Nil || js == "" || jsErr != nil {
+		// Result was already saved in the pipeline above; task not found is non-fatal
 		return nil
 	}
 
 	var t domain.Task
 	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
-		return fmt.Errorf("unmarshal task: %w", err)
+		// Result was already saved; unmarshal failure on task is non-fatal
+		return nil
 	}
+
+	// Update task with result reference and save both in a single pipeline
 	t.ResultKey = r.keyResultsHash()
 	nb, _ := sonic.Marshal(t)
 
