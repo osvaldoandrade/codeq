@@ -560,33 +560,14 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		return 0, err
 	}
 
-	// Best-effort task JSON + retention bumps.
-	// Use a guarded update to avoid "resurrecting" tasks that may have been
-	// deleted between movePipe.Exec and this update phase.
-	// Optimization: Batch all Lua evals in single pipeline (N RTTs → 1 RTT, 95%+ latency reduction)
+	// Best-effort task JSON + retention bumps (avoid per-task round-trips).
+	updatePipe := r.rdb.Pipeline()
 	expireAt := now.Add(taskRetention)
-	expireAtUnix := expireAt.UTC().Unix()
-	lua := `
-if redis.call("HEXISTS", KEYS[1], ARGV[1]) == 1 then
-  redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
-  redis.call("ZADD", KEYS[2], ARGV[3], ARGV[1])
-  return 1
-end
-return 0
-`
-	if len(updates) > 0 {
-		// Batch all Lua evaluations in single pipelined operation
-		evalPipe := r.rdb.Pipeline()
-		for _, u := range updates {
-			evalPipe.Eval(ctx, lua, []string{
-				r.keyTasksHash(),
-				r.keyTTLIndex(),
-			}, u.id, u.js, expireAtUnix)
-		}
-		// Execute all evaluations in single RTT
-		// Ignore results and errors to preserve best-effort semantics.
-		_, _ = evalPipe.Exec(ctx)
+	for _, u := range updates {
+		updatePipe.HSet(ctx, r.keyTasksHash(), u.id, u.js)
+		updatePipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(expireAt.UTC().Unix()), Member: u.id})
 	}
+	_, _ = updatePipe.Exec(ctx)
 
 	return len(updates), nil
 }
