@@ -65,7 +65,7 @@ Upgrade:
 npm i -g @osvaldoandrade/codeq@latest
 ```
 
-### Use SDKs for Java and Node.js
+### Use SDKs for Java, Node.js, Python, and Go
 
 Integrate codeQ into your microservices with official SDKs:
 
@@ -83,10 +83,23 @@ Integrate codeQ into your microservices with official SDKs:
 npm install @osvaldoandrade/codeq-client
 ```
 
+**Python** (FastAPI, Django, Flask):
+```bash
+pip install codeq-client
+```
+
+**Go** (Gin, Echo, stdlib):
+```bash
+go get github.com/osvaldoandrade/codeq/sdks/go
+```
+
 📚 **SDK Documentation**:
 - [SDK Overview & Quick Start](sdks/README.md)
-- [Java Integration Guide](docs/integrations/java-integration.md)
-- [Node.js Integration Guide](docs/integrations/nodejs-integration.md)
+- [Java SDK](sdks/java/README.md)
+- [Node.js SDK](sdks/nodejs/README.md)
+- [Python SDK](sdks/python/README.md)
+- [Go SDK](sdks/go/README.md)
+- [Integration Guides](docs/integrations/)
 - [Example Applications](examples/)
 
 ### 1) Helm (small cluster)
