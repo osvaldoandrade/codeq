@@ -283,6 +283,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 
 		// Process fetched subscriptions in single cleanup pipeline
 		cleanupPipe := r.rdb.TxPipeline()
+		toRemoveCount := 0
 		for i, id := range ids {
 			if i >= len(fetchResults) {
 				break
@@ -297,6 +298,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 				cleanupPipe.ZRem(ctx, key, interface{}(id))
 				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
 				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 			if err != nil {
@@ -309,6 +311,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 				cleanupPipe.ZRem(ctx, key, interface{}(id))
 				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
 				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 
@@ -324,13 +327,12 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			}
 			cleanupPipe.HDel(ctx, r.keySubsHash(), sub.ID)
 			cleanupPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
+			toRemoveCount++
 		}
 
 		// Execute all cleanup operations in single pipeline
 		if _, err := cleanupPipe.Exec(ctx); err == nil {
-			// Count removed subscriptions by iterating again (simplified for clarity)
-			// In production, could track during pipeline building
-			removed += len(ids)
+			removed += toRemoveCount
 		}
 	}
 	return removed, nil
