@@ -125,7 +125,7 @@ func (r *resultRedisRepo) GetTaskAndResult(ctx context.Context, id string) (*dom
 	taskCmd := pipe.HGet(ctx, r.keyTasksHash(), id)
 	resultCmd := pipe.HGet(ctx, r.keyResultsHash(), id)
 	_, err := pipe.Exec(ctx)
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return nil, nil, fmt.Errorf("redis pipeline: %w", err)
 	}
 
