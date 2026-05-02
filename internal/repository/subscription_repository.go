@@ -171,8 +171,7 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 	if len(expiredIDs) > 0 {
 		cleanupPipe := r.rdb.Pipeline()
 		for _, id := range expiredIDs {
-			idInterface := interface{}(id)
-			cleanupPipe.ZRem(ctx, key, idInterface)
+			cleanupPipe.ZRem(ctx, key, id)
 		}
 		_, _ = cleanupPipe.Exec(ctx)
 	}
