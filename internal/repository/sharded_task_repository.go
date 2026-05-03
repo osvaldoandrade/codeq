@@ -192,18 +192,38 @@ func (s *shardedTaskRepository) MoveDueDelayed(ctx context.Context, cmd domain.C
 }
 
 func (s *shardedTaskRepository) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
-	// Aggregate pending length across all shards where this command may exist
+	// Parallelize pending length queries across all shards where this command may exist
 	shards, err := s.shardSupplier.QueueShards(ctx, string(cmd), "")
 	if err != nil {
 		return 0, err
 	}
-	var total int64
+
+	// Parallelize shard queries with buffered channel
+	type lengthResult struct {
+		length int64
+		err    error
+	}
+	resultChan := make(chan lengthResult, len(shards))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Launch all shard queries concurrently
 	for _, sid := range shards {
-		n, err := s.repoForShard(sid).PendingLength(ctx, cmd)
-		if err != nil {
-			return 0, err
+		sid := sid
+		go func() {
+			n, err := s.repoForShard(sid).PendingLength(ctx, cmd)
+			resultChan <- lengthResult{length: n, err: err}
+		}()
+	}
+
+	// Collect results from all shards
+	var total int64
+	for i := 0; i < len(shards); i++ {
+		result := <-resultChan
+		if result.err != nil {
+			return 0, result.err
 		}
-		total += n
+		total += result.length
 	}
 	return total, nil
 }
@@ -242,13 +262,32 @@ func (s *shardedTaskRepository) Get(ctx context.Context, taskID string) (*domain
 }
 
 func (s *shardedTaskRepository) AdminQueues(ctx context.Context) (map[string]any, error) {
-	merged := map[string]any{}
+	// Parallelize admin queue queries across all shards with buffered channel
+	type queueResult struct {
+		result map[string]any
+		err    error
+	}
+	resultChan := make(chan queueResult, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Launch all shard queries concurrently
 	for _, repo := range s.repos {
-		result, err := repo.AdminQueues(ctx)
-		if err != nil {
-			return nil, err
+		repo := repo
+		go func() {
+			result, err := repo.AdminQueues(ctx)
+			resultChan <- queueResult{result: result, err: err}
+		}()
+	}
+
+	// Collect and merge results from all shards
+	merged := map[string]any{}
+	for i := 0; i < len(s.repos); i++ {
+		queueRes := <-resultChan
+		if queueRes.err != nil {
+			return nil, queueRes.err
 		}
-		for k, v := range result {
+		for k, v := range queueRes.result {
 			if existing, ok := merged[k]; ok {
 				// Sum int64 values from different shards
 				if ev, ok := existing.(int64); ok {
@@ -270,16 +309,35 @@ func (s *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Comma
 		return nil, err
 	}
 
-	aggregate := &domain.QueueStats{Command: cmd}
+	// Parallelize stats queries across all shards with buffered channel
+	type statsResult struct {
+		stats *domain.QueueStats
+		err   error
+	}
+	resultChan := make(chan statsResult, len(shards))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Launch all shard queries concurrently
 	for _, sid := range shards {
-		stats, err := s.repoForShard(sid).QueueStats(ctx, cmd)
-		if err != nil {
-			return nil, err
+		sid := sid
+		go func() {
+			stats, err := s.repoForShard(sid).QueueStats(ctx, cmd)
+			resultChan <- statsResult{stats: stats, err: err}
+		}()
+	}
+
+	// Collect and aggregate results from all shards
+	aggregate := &domain.QueueStats{Command: cmd}
+	for i := 0; i < len(shards); i++ {
+		result := <-resultChan
+		if result.err != nil {
+			return nil, result.err
 		}
-		aggregate.Ready += stats.Ready
-		aggregate.Delayed += stats.Delayed
-		aggregate.InProgress += stats.InProgress
-		aggregate.DLQ += stats.DLQ
+		aggregate.Ready += result.stats.Ready
+		aggregate.Delayed += result.stats.Delayed
+		aggregate.InProgress += result.stats.InProgress
+		aggregate.DLQ += result.stats.DLQ
 	}
 	return aggregate, nil
 }
