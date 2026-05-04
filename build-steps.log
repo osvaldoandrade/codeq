@@ -64,3 +64,72 @@ github.com/gin-gonic/gin/render
 github.com/gin-gonic/gin/binding
 github.com/gin-gonic/gin
 github.com/osvaldoandrade/codeq/internal/middleware
+=== Build Steps Log ===
+Go version: go version go1.23.0 linux/amd64
+Go GOOS/GOARCH: linux/amd64
+Working directory: /home/runner/work/codeq/codeq
+
+=== Downloading Dependencies ===
+all modules verified
+
+=== Building Server Binary ===
+github.com/gin-gonic/gin/internal/bytesconv
+golang.org/x/net/html/atom
+github.com/go-playground/locales/currency
+github.com/leodido/go-urn/scim/schema
+encoding/xml
+github.com/gin-gonic/gin/internal/json
+golang.org/x/net/html
+hash/adler32
+github.com/gin-contrib/sse
+compress/zlib
+debug/dwarf
+internal/saferio
+encoding/csv
+github.com/gabriel-vasile/mimetype/internal/json
+github.com/go-playground/locales
+github.com/go-playground/universal-translator
+github.com/leodido/go-urn
+golang.org/x/sys/cpu
+github.com/gabriel-vasile/mimetype/internal/charset
+golang.org/x/text/internal/tag
+golang.org/x/text/internal/language
+golang.org/x/crypto/sha3
+debug/macho
+github.com/pelletier/go-toml/v2/internal/characters
+github.com/pelletier/go-toml/v2/internal/danger
+github.com/gabriel-vasile/mimetype/internal/magic
+github.com/pelletier/go-toml/v2/unstable
+encoding/gob
+golang.org/x/text/internal/language/compact
+github.com/pelletier/go-toml/v2/internal/tracker
+github.com/pelletier/go-toml/v2
+golang.org/x/text/language
+github.com/gabriel-vasile/mimetype
+github.com/mattn/go-isatty
+github.com/go-playground/validator/v10
+golang.org/x/net/http2/h2c
+github.com/osvaldoandrade/codeq/pkg/domain
+net/rpc
+github.com/osvaldoandrade/codeq/pkg/auth
+github.com/osvaldoandrade/codeq/internal/metrics
+github.com/osvaldoandrade/codeq/pkg/config
+github.com/osvaldoandrade/codeq/internal/backoff
+github.com/osvaldoandrade/codeq/internal/shard
+github.com/prometheus/client_golang/prometheus/promhttp
+github.com/ugorji/go/codec
+github.com/osvaldoandrade/codeq/internal/repository
+github.com/golang-jwt/jwt/v5
+github.com/osvaldoandrade/codeq/pkg/auth/static
+github.com/osvaldoandrade/codeq/pkg/persistence
+github.com/osvaldoandrade/codeq/pkg/auth/jwks
+github.com/osvaldoandrade/codeq/pkg/persistence/memory
+github.com/osvaldoandrade/codeq/pkg/persistence/redis
+github.com/osvaldoandrade/codeq/internal/services
+# github.com/osvaldoandrade/codeq/internal/services
+internal/services/results_service.go:72:24: undefined: domain.SubmitArtifact
+internal/services/results_service.go:95:28: undefined: domain.SubmitArtifact
+github.com/gin-gonic/gin/render
+github.com/gin-gonic/gin/binding
+github.com/gin-gonic/gin
+github.com/osvaldoandrade/codeq/internal/middleware

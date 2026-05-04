@@ -69,7 +69,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	var outsMu sync.Mutex
 
 	// First pass: collect artifacts to upload and existing artifacts with URLs
-	var toUpload []domain.SubmitArtifact
+	var toUpload []domain.ArtifactIn
 	for _, a := range req.Artifacts {
 		if a.URL != "" {
 			outsMu.Lock()
@@ -92,7 +92,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 
 		for _, a := range toUpload {
 			wg.Add(1)
-			go func(artifact domain.SubmitArtifact) {
+			go func(artifact domain.ArtifactIn) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
