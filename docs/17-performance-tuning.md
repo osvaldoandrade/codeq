@@ -1186,10 +1186,11 @@ The subscription notification system uses `ListActive()` to fetch all active sub
 
 Result operations (SaveResult, UpdateTaskOnComplete, RemoveFromInprogAndClearLease) have been optimized to batch related Redis operations:
 
-**SaveResult**:
-- **Before**: HSET result, then HGET task, then HSET task (2-3 RTTs)
-- **After**: HSET + HGET in one batch, then HSET task (1-2 RTTs total)
-- **Impact**: ~25-50% latency reduction
+**SaveResult** ([#438](https://github.com/osvaldoandrade/codeq/pull/438)):
+- **Before**: Separate HGET task, then HSET result, then HSET task update (2 RTTs with separate syscalls)
+- **After**: Single pipeline with HSET result + HSET task update (1 RTT, atomic writes)
+- **Impact**: Reduced syscall overhead and atomic write semantics; improved throughput for result submission
+- **Reference**: `internal/repository/result_repository.go:SaveResult`
 
 **UpdateTaskOnComplete**:
 - **Before**: HGET task, then HSET + ZADD (2 RTTs)
