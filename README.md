@@ -19,6 +19,8 @@ codeQ provides:
 - Persistent queues on KVRocks (Redis protocol).
 - Pull-based worker claims with leases.
 - **Multi-tenant queue isolation** with automatic tenant ID extraction from JWT claims.
+- **Horizontal scaling with queue sharding**: Optional pluggable `ShardSupplier` interface for routing commands/tenants across multiple KVRocks instances.
+- **Pluggable persistence backends**: Redis, memory (testing), and extensible plugin architecture for custom storage (PostgreSQL, DynamoDB, Cassandra, etc.).
 - NACK + backoff + delayed queues.
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
