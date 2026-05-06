@@ -167,13 +167,13 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 		subs = append(subs, sub)
 	}
 
-	// Batch cleanup of expired subscriptions
+	// Batch cleanup of expired subscriptions (direct call instead of pipeline for single operation)
 	if len(expiredIDs) > 0 {
-		cleanupPipe := r.rdb.Pipeline()
-		for _, id := range expiredIDs {
-			cleanupPipe.ZRem(ctx, key, interface{}(id))
+		members := make([]interface{}, len(expiredIDs))
+		for i, id := range expiredIDs {
+			members[i] = id
 		}
-		_, _ = cleanupPipe.Exec(ctx)
+		_ = r.rdb.ZRem(ctx, key, members...).Err()
 	}
 
 	return subs, nil
