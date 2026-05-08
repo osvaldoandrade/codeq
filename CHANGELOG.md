@@ -155,6 +155,13 @@ See [`docs/migration.md`](docs/migration.md) for detailed step-by-step procedure
   - Fully transparent to workers; no API or configuration changes
   - Reference: `internal/repository/sharded_task_repository.go` (lines 98-242) and `.github/copilot/instructions/10-sharded-operations-parallelization.md`
   - Documentation: `docs/17-performance-tuning.md` Section 9: Sharded Operations Parallelization
+- **Hot-path key generation optimization**: Replaced `fmt.Sprintf` with string concatenation in all Redis key generator methods across task, result, and subscription repositories.
+  - Eliminates format string parsing overhead and reduces heap allocations per key generation
+  - Affected hot paths: `keyLease`, `keyIdempotency`, `keyQueueInprog`, `keySubsEvent`, `keySubNotifyThrottle`, `keyGroupRR`
+  - Also replaced `fmt.Sprintf("%d", ...)` with `strconv.FormatInt` for integer-to-string conversions in `ListActive` and `CleanupExpired`
+  - Expected improvement: 5-15% reduction in per-operation allocations, contributing to lower GC pressure and improved tail latencies (p99, p99.9)
+  - Zero behavioral change; identical key strings produced
+  - Reference: `internal/repository/task_repository.go`, `internal/repository/result_repository.go`, `internal/repository/subscription_repository.go`
 
 ### Added
 

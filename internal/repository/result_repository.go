@@ -36,10 +36,10 @@ func (r *resultRedisRepo) keyTasksHash() string   { return "codeq:tasks" }
 func (r *resultRedisRepo) keyResultsHash() string { return "codeq:results" }
 func (r *resultRedisRepo) keyTTLIndex() string    { return "codeq:tasks:ttl" }
 func (r *resultRedisRepo) keyLease(id string) string {
-	return fmt.Sprintf("codeq:lease:%s", id)
+	return "codeq:lease:" + id
 }
 func (r *resultRedisRepo) keyQueueInprog(cmd domain.Command) string {
-	return fmt.Sprintf("codeq:q:%s:inprog", strings.ToLower(string(cmd)))
+	return "codeq:q:" + strings.ToLower(string(cmd)) + ":inprog"
 }
 
 func (r *resultRedisRepo) now() time.Time { return time.Now().In(r.tz) }

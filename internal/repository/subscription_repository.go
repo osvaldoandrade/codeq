@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,15 +39,15 @@ func (r *subscriptionRedisRepo) keySubsHash() string {
 }
 
 func (r *subscriptionRedisRepo) keySubsEvent(cmd domain.Command) string {
-	return fmt.Sprintf("codeq:subs:%s", strings.ToLower(string(cmd)))
+	return "codeq:subs:" + strings.ToLower(string(cmd))
 }
 
 func (r *subscriptionRedisRepo) keySubNotifyThrottle(id string) string {
-	return fmt.Sprintf("codeq:subs:last:%s", id)
+	return "codeq:subs:last:" + id
 }
 
 func (r *subscriptionRedisRepo) keyGroupRR(cmd domain.Command, groupID string) string {
-	return fmt.Sprintf("codeq:subs:rr:%s:%s", strings.ToLower(string(cmd)), groupID)
+	return "codeq:subs:rr:" + strings.ToLower(string(cmd)) + ":" + groupID
 }
 
 func (r *subscriptionRedisRepo) now() time.Time { return time.Now().In(r.tz) }
@@ -120,7 +121,7 @@ func (r *subscriptionRedisRepo) Get(ctx context.Context, id string) (*domain.Sub
 
 func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Command, now time.Time) ([]domain.Subscription, error) {
 	key := r.keySubsEvent(cmd)
-	min := fmt.Sprintf("%d", now.UTC().Unix())
+	min := strconv.FormatInt(now.UTC().Unix(), 10)
 	zrange := &redis.ZRangeBy{Min: min, Max: "+inf", Offset: 0, Count: 1000}
 	ids, err := r.rdb.ZRangeByScore(ctx, key, zrange).Result()
 	if err != nil && err != redis.Nil {
@@ -249,7 +250,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 	if limit <= 0 {
 		limit = 1000
 	}
-	maxTS := fmt.Sprintf("%d", before.UTC().Unix())
+	maxTS := strconv.FormatInt(before.UTC().Unix(), 10)
 	removed := 0
 
 	for _, cmd := range r.allCommands() {
