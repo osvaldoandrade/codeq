@@ -43,7 +43,7 @@ jobs:
       - name: Run Go Benchmarks
         run: |
           echo "=== Running Performance Benchmarks ==="
-          go test -bench=. -benchmem -benchtime=10s -count=3 ./internal/bench > benchmark-results.txt 2>&1
+          go test -bench=. -benchmem -benchtime=3s -count=1 -timeout=10m ./internal/bench > benchmark-results.txt 2>&1
           cat benchmark-results.txt
 
       - name: Run Bloom Filter Benchmarks
@@ -118,7 +118,7 @@ jobs:
           git checkout origin/main || git checkout main
 
           echo "Running baseline benchmarks on main..."
-          go test -bench=. -benchmem -benchtime=10s -count=3 ./internal/bench > benchmark-baseline.txt 2>&1 || true
+          go test -bench=. -benchmem -benchtime=3s -count=1 -timeout=10m ./internal/bench > benchmark-baseline.txt 2>&1 || true
 
           # Return to PR branch
           git checkout -

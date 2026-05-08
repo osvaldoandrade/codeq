@@ -16,7 +16,6 @@ import (
 // TestShardedOperationsParallelization verifies that PendingLength, QueueStats, and AdminQueues
 // use concurrent goroutines to parallelize queries across multiple shards.
 func TestShardedOperationsParallelization(t *testing.T) {
-	// Create 3 Redis instances
 	mr1 := miniredis.RunT(t)
 	mr2 := miniredis.RunT(t)
 	mr3 := miniredis.RunT(t)
@@ -24,79 +23,68 @@ func TestShardedOperationsParallelization(t *testing.T) {
 	defer mr2.Close()
 	defer mr3.Close()
 
-	// Create Redis clients pointing to each instance
 	rdb1 := redis.NewClient(&redis.Options{Addr: mr1.Addr()})
 	rdb2 := redis.NewClient(&redis.Options{Addr: mr2.Addr()})
 	rdb3 := redis.NewClient(&redis.Options{Addr: mr3.Addr()})
 
-	// Create TaskRepository instances for each shard
-	taskRepo1 := &taskRedisRepo{rdb: rdb1, defaultShard: "shard1"}
-	taskRepo2 := &taskRedisRepo{rdb: rdb2, defaultShard: "shard2"}
-	taskRepo3 := &taskRedisRepo{rdb: rdb3, defaultShard: "shard3"}
-
-	// Seed some data in each shard
-	ctx := context.Background()
-
-	// Add 10 pending tasks to each shard
-	for i := 0; i < 10; i++ {
-		task1 := &domain.Task{ID: fmt.Sprintf("task1_%d", i), Command: "test"}
-		task2 := &domain.Task{ID: fmt.Sprintf("task2_%d", i), Command: "test"}
-		task3 := &domain.Task{ID: fmt.Sprintf("task3_%d", i), Command: "test"}
-
-		taskRepo1.Enqueue(ctx, task1, domain.CommandMetadata{}, nil)
-		taskRepo2.Enqueue(ctx, task2, domain.CommandMetadata{}, nil)
-		taskRepo3.Enqueue(ctx, task3, domain.CommandMetadata{}, nil)
+	mockSupplier := &mockShardSupplier{
+		shards: []string{"shard1", "shard2", "shard3"},
 	}
 
-	// Create a ShardedTaskRepository with tracking to verify parallelization
-	repos := []TaskRepository{taskRepo1, taskRepo2, taskRepo3}
+	repo1 := NewTaskRepository(rdb1, time.UTC, "fixed", 1, 3, mockSupplier)
+	repo2 := NewTaskRepository(rdb2, time.UTC, "fixed", 1, 3, mockSupplier)
+	repo3 := NewTaskRepository(rdb3, time.UTC, "fixed", 1, 3, mockSupplier)
+
+	ctx := context.Background()
+
+	// Seed 10 pending tasks in each shard
+	for i := 0; i < 10; i++ {
+		repo1.Enqueue(ctx, domain.CmdGenerateMaster, `{"s":1}`, 0, "", 0, "", time.Time{}, "")
+		repo2.Enqueue(ctx, domain.CmdGenerateMaster, `{"s":2}`, 0, "", 0, "", time.Time{}, "")
+		repo3.Enqueue(ctx, domain.CmdGenerateMaster, `{"s":3}`, 0, "", 0, "", time.Time{}, "")
+	}
+
+	repoMap := map[string]TaskRepository{
+		"shard1": repo1,
+		"shard2": repo2,
+		"shard3": repo3,
+	}
 	shardedRepo := &shardedTaskRepository{
-		repos:         repos,
-		shardSupplier: nil, // Will be set with a mock
+		repos:         repoMap,
+		shardSupplier: mockSupplier,
+		defaultShard:  "shard1",
 	}
 
 	// Test 1: PendingLength should parallelize
 	t.Run("PendingLength parallelization", func(t *testing.T) {
-		// Create a mock shardSupplier
-		mockSupplier := &mockShardSupplier{
-			shards: []string{"shard1", "shard2", "shard3"},
-		}
-		shardedRepo.shardSupplier = mockSupplier
-
-		// Track concurrent calls
 		var callCount int32
 		var maxConcurrent int32
 		var mu sync.Mutex
 		activeGoroutines := 0
 
-		// Wrap the repos with tracking
-		trackedRepos := make([]TaskRepository, len(repos))
-		for i, repo := range repos {
-			trackingRepo := &trackingRepository{
+		trackedRepos := make(map[string]TaskRepository, len(repoMap))
+		for sid, repo := range repoMap {
+			trackedRepos[sid] = &trackingRepository{
 				repo:                repo,
 				onPendingLength:     func() { atomic.AddInt32(&callCount, 1) },
 				onMaxConcurrent:     &maxConcurrent,
 				trackingMutex:       &mu,
 				activeGoroutinesPtr: &activeGoroutines,
 			}
-			trackedRepos[i] = trackingRepo
 		}
 
-		// Replace repos with tracked versions
 		originalRepos := shardedRepo.repos
 		shardedRepo.repos = trackedRepos
 
-		length, err := shardedRepo.PendingLength(ctx, "test")
+		length, err := shardedRepo.PendingLength(ctx, domain.CmdGenerateMaster)
 		if err != nil {
 			t.Fatalf("PendingLength failed: %v", err)
 		}
 
-		// Should have found 30 total pending tasks (10 in each shard)
 		if length != 30 {
 			t.Errorf("Expected 30 pending tasks, got %d", length)
 		}
 
-		// Verify that all shards were queried
 		if callCount != 3 {
 			t.Errorf("Expected 3 calls to PendingLength (one per shard), got %d", callCount)
 		}
@@ -106,17 +94,11 @@ func TestShardedOperationsParallelization(t *testing.T) {
 
 	// Test 2: QueueStats should parallelize
 	t.Run("QueueStats parallelization", func(t *testing.T) {
-		mockSupplier := &mockShardSupplier{
-			shards: []string{"shard1", "shard2", "shard3"},
-		}
-		shardedRepo.shardSupplier = mockSupplier
-
-		stats, err := shardedRepo.QueueStats(ctx, "test")
+		stats, err := shardedRepo.QueueStats(ctx, domain.CmdGenerateMaster)
 		if err != nil {
 			t.Fatalf("QueueStats failed: %v", err)
 		}
 
-		// Should have found 30 total ready tasks
 		if stats.Ready != 30 {
 			t.Errorf("Expected 30 ready tasks, got %d", stats.Ready)
 		}
@@ -124,71 +106,57 @@ func TestShardedOperationsParallelization(t *testing.T) {
 
 	// Test 3: AdminQueues should parallelize
 	t.Run("AdminQueues parallelization", func(t *testing.T) {
-		// AdminQueues doesn't use shardSupplier, just loops all repos
 		result, err := shardedRepo.AdminQueues(ctx)
 		if err != nil {
 			t.Fatalf("AdminQueues failed: %v", err)
 		}
 
-		// Verify that queue stats were aggregated across shards
 		if result == nil || len(result) == 0 {
 			t.Error("Expected AdminQueues to return aggregated results")
 		}
 	})
 }
 
-// TestShardedOperationsPerformance demonstrates performance improvement from parallelization
-// by measuring latency with simulated slow Redis operations.
+// TestShardedOperationsPerformance demonstrates performance improvement from parallelization.
 func TestShardedOperationsPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping performance test in short mode")
 	}
 
-	// Create 5 shards to make performance difference more pronounced
 	numShards := 5
-	shards := make([]TaskRepository, numShards)
-	var setupWaitGroup sync.WaitGroup
+	shardNames := make([]string, numShards)
+	repoMap := make(map[string]TaskRepository, numShards)
 
 	for i := 0; i < numShards; i++ {
 		mr := miniredis.RunT(t)
 		t.Cleanup(mr.Close)
 
 		rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-		shards[i] = &taskRedisRepo{rdb: rdb, defaultShard: fmt.Sprintf("shard%d", i)}
+		sid := fmt.Sprintf("shard%d", i)
+		shardNames[i] = sid
 
-		// Seed each shard with data
-		setupWaitGroup.Add(1)
-		go func(j int, repo TaskRepository) {
-			defer setupWaitGroup.Done()
-			ctx := context.Background()
-			for k := 0; k < 5; k++ {
-				task := &domain.Task{
-					ID:      fmt.Sprintf("task_%d_%d", j, k),
-					Command: "perf_test",
-				}
-				repo.Enqueue(ctx, task, domain.CommandMetadata{}, nil)
-			}
-		}(i, shards[i])
-	}
-	setupWaitGroup.Wait()
+		mockSupplier := &mockShardSupplier{shards: shardNames}
+		repo := NewTaskRepository(rdb, time.UTC, "fixed", 1, 3, mockSupplier)
 
-	mockSupplier := &mockShardSupplier{
-		shards: make([]string, numShards),
-	}
-	for i := 0; i < numShards; i++ {
-		mockSupplier.shards[i] = fmt.Sprintf("shard%d", i)
+		// Seed each shard with 5 tasks
+		ctx := context.Background()
+		for k := 0; k < 5; k++ {
+			repo.Enqueue(ctx, domain.CmdGenerateMaster, `{"perf":true}`, 0, "", 0, "", time.Time{}, "")
+		}
+		repoMap[sid] = repo
 	}
 
+	mockSupplier := &mockShardSupplier{shards: shardNames}
 	shardedRepo := &shardedTaskRepository{
-		repos:         shards,
+		repos:         repoMap,
 		shardSupplier: mockSupplier,
+		defaultShard:  shardNames[0],
 	}
 
 	ctx := context.Background()
 
-	// Measure PendingLength performance
 	start := time.Now()
-	length, err := shardedRepo.PendingLength(ctx, "perf_test")
+	length, err := shardedRepo.PendingLength(ctx, domain.CmdGenerateMaster)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -199,15 +167,10 @@ func TestShardedOperationsPerformance(t *testing.T) {
 	if length != expectedTotal {
 		t.Errorf("Expected %d pending tasks, got %d", expectedTotal, length)
 	}
+	t.Logf("PendingLength across %d shards took %v", numShards, elapsed)
 
-	// With parallelization, latency should be dominated by slowest shard (~1-2ms each)
-	// Without parallelization, latency would be ~5-10ms (sum of all shards)
-	// This test primarily documents that parallelization works correctly
-	t.Logf("PendingLength across %d shards took %v (expected to be dominated by slowest shard, not sum)", numShards, elapsed)
-
-	// Measure QueueStats performance
 	start = time.Now()
-	stats, err := shardedRepo.QueueStats(ctx, "perf_test")
+	stats, err := shardedRepo.QueueStats(ctx, domain.CmdGenerateMaster)
 	elapsed = time.Since(start)
 
 	if err != nil {
@@ -217,10 +180,8 @@ func TestShardedOperationsPerformance(t *testing.T) {
 	if stats.Ready != expectedTotal {
 		t.Errorf("Expected %d ready tasks, got %d", expectedTotal, stats.Ready)
 	}
-
 	t.Logf("QueueStats across %d shards took %v", numShards, elapsed)
 
-	// Measure AdminQueues performance
 	start = time.Now()
 	_, err = shardedRepo.AdminQueues(ctx)
 	elapsed = time.Since(start)
@@ -228,7 +189,6 @@ func TestShardedOperationsPerformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AdminQueues failed: %v", err)
 	}
-
 	t.Logf("AdminQueues across %d shards took %v", numShards, elapsed)
 }
 
@@ -263,7 +223,6 @@ func (tr *trackingRepository) PendingLength(ctx context.Context, cmd domain.Comm
 	currentActive := *tr.activeGoroutinesPtr
 	tr.trackingMutex.Unlock()
 
-	// Update max concurrent
 	for {
 		current := atomic.LoadInt32(tr.onMaxConcurrent)
 		if int32(currentActive) > current {
@@ -285,7 +244,6 @@ func (tr *trackingRepository) PendingLength(ctx context.Context, cmd domain.Comm
 		tr.onPendingLength()
 	}
 
-	// Add a small delay to simulate network latency
 	select {
 	case <-time.After(5 * time.Millisecond):
 	case <-ctx.Done():
@@ -295,13 +253,13 @@ func (tr *trackingRepository) PendingLength(ctx context.Context, cmd domain.Comm
 	return tr.repo.PendingLength(ctx, cmd)
 }
 
-// Implement other required TaskRepository methods (passthrough)
-func (tr *trackingRepository) Enqueue(ctx context.Context, task *domain.Task, metadata domain.CommandMetadata, dedup *domain.Deduplication) (string, error) {
-	return tr.repo.Enqueue(ctx, task, metadata, dedup)
+// Implement remaining TaskRepository interface methods (passthrough)
+func (tr *trackingRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	return tr.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 }
 
-func (tr *trackingRepository) Claim(ctx context.Context, cmd domain.Command, workerID string, ttlSeconds int, inspectionLimit int) (*domain.Task, error) {
-	return tr.repo.Claim(ctx, cmd, workerID, ttlSeconds, inspectionLimit)
+func (tr *trackingRepository) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
+	return tr.repo.Claim(ctx, workerID, commands, leaseSeconds, inspectLimit, maxAttemptsDefault, tenantID)
 }
 
 func (tr *trackingRepository) Heartbeat(ctx context.Context, taskID, workerID string, extendSeconds int) error {
@@ -312,8 +270,8 @@ func (tr *trackingRepository) Abandon(ctx context.Context, taskID, workerID stri
 	return tr.repo.Abandon(ctx, taskID, workerID)
 }
 
-func (tr *trackingRepository) Nack(ctx context.Context, taskID, workerID string, nackReason string) error {
-	return tr.repo.Nack(ctx, taskID, workerID, nackReason)
+func (tr *trackingRepository) Nack(ctx context.Context, taskID, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error) {
+	return tr.repo.Nack(ctx, taskID, workerID, delaySeconds, maxAttemptsDefault, reason)
 }
 
 func (tr *trackingRepository) Get(ctx context.Context, taskID string) (*domain.Task, error) {
@@ -332,6 +290,6 @@ func (tr *trackingRepository) CleanupExpired(ctx context.Context, limit int, bef
 	return tr.repo.CleanupExpired(ctx, limit, before)
 }
 
-func (tr *trackingRepository) MoveDueDelayed(ctx context.Context) (int, error) {
-	return tr.repo.MoveDueDelayed(ctx)
+func (tr *trackingRepository) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
+	return tr.repo.MoveDueDelayed(ctx, cmd, limit)
 }
