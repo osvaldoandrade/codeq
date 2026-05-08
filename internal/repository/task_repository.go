@@ -96,7 +96,7 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 func (r *taskRedisRepo) keyTasksHash() string { return "codeq:tasks" }     // HASH único: field = id, value = JSON
 func (r *taskRedisRepo) keyTTLIndex() string  { return "codeq:tasks:ttl" } // ZSET: member=id, score=expireAt (epoch)
 
-func (r *taskRedisRepo) keyLease(id string) string { return fmt.Sprintf("codeq:lease:%s", id) }
+func (r *taskRedisRepo) keyLease(id string) string { return "codeq:lease:" + id }
 func (r *taskRedisRepo) keyQueuePending(cmd domain.Command, priority int, tenantID string, shardID string) string {
 	return shard.QueueKeyPending(string(cmd), tenantID, shardID, priority)
 }
@@ -110,7 +110,7 @@ func (r *taskRedisRepo) keyQueueDLQ(cmd domain.Command, tenantID string, shardID
 	return shard.QueueKeyDLQ(string(cmd), tenantID, shardID)
 }
 func (r *taskRedisRepo) keyIdempotency(key string) string {
-	return fmt.Sprintf("codeq:idempo:%s", key)
+	return "codeq:idempo:" + key
 }
 
 func (r *taskRedisRepo) now() time.Time { return time.Now().In(r.tz) }
