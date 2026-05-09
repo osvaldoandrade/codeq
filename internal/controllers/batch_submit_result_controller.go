@@ -50,16 +50,32 @@ func (h *batchSubmitResultController) Handle(c *gin.Context) {
 		return
 	}
 
-	results := make([]batchSubmitResult, len(req.Results))
+	// Convert to service batch items
+	items := make([]domain.BatchSubmitItem, len(req.Results))
 	for i, item := range req.Results {
 		item.SubmitResultRequest.WorkerID = claims.Subject
-		rec, err := h.svc.Submit(c.Request.Context(), item.TaskID, item.SubmitResultRequest)
-		if err != nil {
-			results[i] = batchSubmitResult{TaskID: item.TaskID, Error: err.Error()}
-			continue
+		items[i] = domain.BatchSubmitItem{
+			TaskID:              item.TaskID,
+			SubmitResultRequest: item.SubmitResultRequest,
 		}
-		results[i] = batchSubmitResult{TaskID: item.TaskID, Result: rec}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"results": results})
+	// Use batch submit for optimized RTT reduction
+	responses, err := h.svc.BatchSubmit(c.Request.Context(), items)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "batch submit failed"})
+		return
+	}
+
+	// Convert to response format
+	batchResults := make([]batchSubmitResult, len(responses))
+	for i, resp := range responses {
+		if resp.Error != "" {
+			batchResults[i] = batchSubmitResult{TaskID: resp.TaskID, Error: resp.Error}
+		} else {
+			batchResults[i] = batchSubmitResult{TaskID: resp.TaskID, Result: resp.Result}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"results": batchResults})
 }
