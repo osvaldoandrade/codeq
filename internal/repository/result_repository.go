@@ -216,24 +216,25 @@ func (r *resultRedisRepo) GetTasksBatch(ctx context.Context, ids []string) (map[
 
 	// Batch fetch all tasks in a single pipelined operation
 	pipe := r.rdb.Pipeline()
-	for _, id := range ids {
-		pipe.HGet(ctx, r.keyTasksHash(), id)
+	cmds := make([]*redis.StringCmd, len(ids))
+	for i, id := range ids {
+		cmds[i] = pipe.HGet(ctx, r.keyTasksHash(), id)
 	}
-	results, err := pipe.Exec(ctx)
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("redis pipeline: %w", err)
 	}
 
 	tasks := make(map[string]*domain.Task, len(ids))
 	for i, id := range ids {
-		if results[i].Err() == redis.Nil {
+		js, err := cmds[i].Result()
+		if err == redis.Nil || js == "" {
 			continue
 		}
-		if results[i].Err() != nil {
-			return nil, fmt.Errorf("redis HGET task %s: %w", id, results[i].Err())
+		if err != nil {
+			return nil, fmt.Errorf("redis HGET task %s: %w", id, err)
 		}
 
-		js := results[i].Val().(string)
 		var t domain.Task
 		if err := sonic.Unmarshal([]byte(js), &t); err != nil {
 			return nil, fmt.Errorf("unmarshal task %s: %w", id, err)
