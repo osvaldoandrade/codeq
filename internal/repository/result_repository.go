@@ -21,6 +21,9 @@ type ResultRepository interface {
 	UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error
 	RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command) error
 	DecodeBase64(s string) ([]byte, error)
+	GetTasksBatch(ctx context.Context, ids []string) (map[string]*domain.Task, error)
+	BatchUpdateTasksOnComplete(ctx context.Context, updates []domain.TaskCompleteUpdate) error
+	BatchRemoveFromInprogAndClearLease(ctx context.Context, deletes []domain.TaskDeleteInfo) error
 }
 
 type resultRedisRepo struct {
@@ -203,4 +206,119 @@ func (r *resultRedisRepo) DecodeBase64(str string) ([]byte, error) {
 		str += strings.Repeat("=", 4-m)
 	}
 	return base64.StdEncoding.DecodeString(str)
+}
+
+// GetTasksBatch fetches multiple tasks in a single pipelined HGET operation
+func (r *resultRedisRepo) GetTasksBatch(ctx context.Context, ids []string) (map[string]*domain.Task, error) {
+	if len(ids) == 0 {
+		return map[string]*domain.Task{}, nil
+	}
+
+	// Batch fetch all tasks in a single pipelined operation
+	pipe := r.rdb.Pipeline()
+	for _, id := range ids {
+		pipe.HGet(ctx, r.keyTasksHash(), id)
+	}
+	results, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("redis pipeline: %w", err)
+	}
+
+	tasks := make(map[string]*domain.Task, len(ids))
+	for i, id := range ids {
+		if results[i].Err() == redis.Nil {
+			continue
+		}
+		if results[i].Err() != nil {
+			return nil, fmt.Errorf("redis HGET task %s: %w", id, results[i].Err())
+		}
+
+		js := results[i].Val().(string)
+		var t domain.Task
+		if err := sonic.Unmarshal([]byte(js), &t); err != nil {
+			return nil, fmt.Errorf("unmarshal task %s: %w", id, err)
+		}
+		tasks[id] = &t
+	}
+
+	return tasks, nil
+}
+
+// BatchUpdateTasksOnComplete updates multiple tasks on completion in a single pipelined operation
+func (r *resultRedisRepo) BatchUpdateTasksOnComplete(ctx context.Context, updates []domain.TaskCompleteUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// Fetch all tasks first (batched)
+	taskIDs := make([]string, len(updates))
+	for i, upd := range updates {
+		taskIDs[i] = upd.ID
+	}
+	tasks, err := r.GetTasksBatch(ctx, taskIDs)
+	if err != nil {
+		return fmt.Errorf("batch fetch tasks: %w", err)
+	}
+
+	// Update all tasks in a single pipelined operation
+	pipe := r.rdb.Pipeline()
+	ttlTime := r.now().Add(24 * time.Hour).UTC().Unix()
+
+	for _, upd := range updates {
+		task, ok := tasks[upd.ID]
+		if !ok {
+			return fmt.Errorf("task %s not found", upd.ID)
+		}
+
+		task.Status = upd.Status
+		task.LastKnownLocation = domain.LocationNone
+		task.WorkerID = ""
+		task.LeaseUntil = ""
+		task.UpdatedAt = r.now()
+		if upd.ErrorMsg != "" {
+			task.Error = upd.ErrorMsg
+		}
+
+		b, _ := sonic.Marshal(task)
+		pipe.HSet(ctx, r.keyTasksHash(), upd.ID, string(b))
+		pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(ttlTime), Member: upd.ID})
+	}
+
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
+	}
+
+	return nil
+}
+
+// BatchRemoveFromInprogAndClearLease removes multiple tasks from in-progress sets and clears leases
+func (r *resultRedisRepo) BatchRemoveFromInprogAndClearLease(ctx context.Context, deletes []domain.TaskDeleteInfo) error {
+	if len(deletes) == 0 {
+		return nil
+	}
+
+	// Group by command to minimize Redis commands
+	cmdGroups := make(map[domain.Command][]string)
+	for _, del := range deletes {
+		cmdGroups[del.Command] = append(cmdGroups[del.Command], del.ID)
+	}
+
+	// Pipeline all deletions
+	pipe := r.rdb.Pipeline()
+	for cmd, ids := range cmdGroups {
+		inprog := r.keyQueueInprog(cmd)
+		// Remove all IDs from in-progress set for this command
+		for _, id := range ids {
+			pipe.SRem(ctx, inprog, id)
+			pipe.Del(ctx, r.keyLease(id))
+		}
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("redis pipeline: %w", err)
+	}
+
+	return nil
 }

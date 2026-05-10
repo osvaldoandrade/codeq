@@ -100,3 +100,85 @@ func TestResultsServiceGetResultNotFound(t *testing.T) {
 		t.Errorf("Expected 'result not found', got %v", err)
 	}
 }
+
+func TestResultsServiceBatchSubmit(t *testing.T) {
+	mr, _ := miniredis.Run()
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	// Setup task repository and create test tasks
+	taskRepo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
+
+	// Create 3 tasks
+	task1, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data1"}`, 0, "", 5, "", time.Time{}, "")
+	task2, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data2"}`, 0, "", 5, "", time.Time{}, "")
+	task3, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data3"}`, 0, "", 5, "", time.Time{}, "")
+
+	// Claim tasks to move them to in-progress
+	_, _ = taskRepo.Claim(context.Background(), domain.CmdGenerateMaster, 1, "worker1", 30*time.Second)
+	_, _ = taskRepo.Claim(context.Background(), domain.CmdGenerateMaster, 1, "worker1", 30*time.Second)
+	_, _ = taskRepo.Claim(context.Background(), domain.CmdGenerateMaster, 1, "worker1", 30*time.Second)
+
+	resultRepo := repository.NewResultRepository(rdb, time.UTC)
+	uploader := &mockResultsUploader{}
+	logger := slog.Default()
+	now := func() time.Time { return time.Now() }
+
+	svc := NewResultsService(resultRepo, uploader, nil, logger, now, time.UTC)
+
+	// Prepare batch submit items
+	items := []domain.BatchSubmitItem{
+		{
+			TaskID: task1.ID,
+			SubmitResultRequest: domain.SubmitResultRequest{
+				WorkerID: "worker1",
+				Status:   domain.StatusCompleted,
+				Result:   &map[string]interface{}{"output": "result1"},
+			},
+		},
+		{
+			TaskID: task2.ID,
+			SubmitResultRequest: domain.SubmitResultRequest{
+				WorkerID: "worker1",
+				Status:   domain.StatusCompleted,
+				Result:   &map[string]interface{}{"output": "result2"},
+			},
+		},
+		{
+			TaskID: task3.ID,
+			SubmitResultRequest: domain.SubmitResultRequest{
+				WorkerID: "worker1",
+				Status:   domain.StatusFailed,
+				Error:    "Task failed due to timeout",
+			},
+		},
+	}
+
+	// Execute batch submit
+	responses, err := svc.BatchSubmit(context.Background(), items)
+	if err != nil {
+		t.Fatalf("BatchSubmit failed: %v", err)
+	}
+
+	// Validate responses
+	if len(responses) != 3 {
+		t.Errorf("Expected 3 responses, got %d", len(responses))
+	}
+
+	for i, resp := range responses {
+		if resp.Error != "" {
+			t.Errorf("Response %d has error: %s", i, resp.Error)
+		}
+		if resp.Result == nil && items[i].SubmitResultRequest.Status != domain.StatusFailed {
+			t.Errorf("Response %d missing result", i)
+		}
+	}
+
+	// Verify tasks were completed by checking they're no longer in-progress
+	tasks, _ := taskRepo.Get(context.Background(), task1.ID)
+	if tasks[0].Status != domain.StatusCompleted {
+		t.Errorf("Expected task1 status to be COMPLETED, got %s", tasks[0].Status)
+	}
+}
