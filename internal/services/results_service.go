@@ -233,10 +233,11 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 	}
 
 	// Validate all tasks and collect results
+	// Use indexMap to track original item index for each valid result
 	resultRecords := make([]domain.ResultRecord, 0, len(items))
 	taskCompletions := make([]domain.TaskCompleteUpdate, 0, len(items))
 	taskDeletes := make([]domain.TaskDeleteInfo, 0, len(items))
-	validIndices := make(map[int]bool)
+	indexMap := make([]int, 0, len(items)) // Maps result index back to item index
 
 	now := s.now().In(s.loc)
 
@@ -298,26 +299,13 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 			ID:      item.TaskID,
 			Command: task.Command,
 		})
-		validIndices[i] = true
+		indexMap = append(indexMap, i) // Track original index
 	}
 
 	// Batch save all results (RTT: 1 for all results)
 	for i, rec := range resultRecords {
-		// Find the original index
-		origIdx := -1
-		count := 0
-		for j := 0; j < len(items); j++ {
-			if validIndices[j] {
-				if count == i {
-					origIdx = j
-					break
-				}
-				count++
-			}
-		}
-
 		if err := s.repo.SaveResult(ctx, rec); err != nil {
-			responses[origIdx] = domain.BatchSubmitResponse{TaskID: items[origIdx].TaskID, Error: err.Error()}
+			responses[indexMap[i]] = domain.BatchSubmitResponse{TaskID: items[indexMap[i]].TaskID, Error: err.Error()}
 		}
 	}
 
@@ -326,19 +314,8 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 		if err := s.repo.BatchUpdateTasksOnComplete(ctx, taskCompletions); err != nil {
 			// Mark all as failed
 			for i := range taskCompletions {
-				origIdx := -1
-				count := 0
-				for j := 0; j < len(items); j++ {
-					if validIndices[j] {
-						if count == i {
-							origIdx = j
-							break
-						}
-						count++
-					}
-				}
-				responses[origIdx].Error = err.Error()
-				responses[origIdx].Result = nil
+				responses[indexMap[i]].Error = err.Error()
+				responses[indexMap[i]].Result = nil
 			}
 			return responses, err
 		}
@@ -354,18 +331,7 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 
 	// Populate successful responses
 	for i := range resultRecords {
-		origIdx := -1
-		count := 0
-		for j := 0; j < len(items); j++ {
-			if validIndices[j] {
-				if count == i {
-					origIdx = j
-					break
-				}
-				count++
-			}
-		}
-
+		origIdx := indexMap[i]
 		if responses[origIdx].Error == "" {
 			responses[origIdx] = domain.BatchSubmitResponse{
 				TaskID: items[origIdx].TaskID,
