@@ -226,14 +226,18 @@ func (r *resultRedisRepo) GetTasksBatch(ctx context.Context, ids []string) (map[
 
 	tasks := make(map[string]*domain.Task, len(ids))
 	for i, id := range ids {
-		if results[i].Err() == redis.Nil {
+		cmd, ok := results[i].(*redis.StringCmd)
+		if !ok {
 			continue
 		}
-		if results[i].Err() != nil {
-			return nil, fmt.Errorf("redis HGET task %s: %w", id, results[i].Err())
+		js, err := cmd.Result()
+		if err == redis.Nil || js == "" {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("redis HGET task %s: %w", id, err)
 		}
 
-		js := results[i].Val().(string)
 		var t domain.Task
 		if err := sonic.Unmarshal([]byte(js), &t); err != nil {
 			return nil, fmt.Errorf("unmarshal task %s: %w", id, err)
