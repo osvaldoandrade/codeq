@@ -6,10 +6,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,9 +58,10 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 		return
 	}
 
-	fanout := []domain.Subscription{}
+	// Pre-allocate slices with capacity to avoid repeated allocations
+	fanout := make([]domain.Subscription, 0, len(subs))
 	groups := map[string][]domain.Subscription{}
-	hashMode := []domain.Subscription{}
+	hashMode := make([]domain.Subscription, 0, len(subs))
 
 	for _, s := range subs {
 		switch s.DeliveryMode {
@@ -178,9 +179,10 @@ func (n *notifierService) addSignature(req *http.Request, body []byte) {
 	}
 	ts := time.Now().UTC().Unix()
 	mac := hmac.New(sha256.New, []byte(n.secret))
-	_, _ = mac.Write([]byte(fmt.Sprintf("%d.", ts)))
+	_, _ = mac.Write([]byte(strconv.FormatInt(ts, 10)))
+	_, _ = mac.Write([]byte("."))
 	_, _ = mac.Write(body)
 	sig := hex.EncodeToString(mac.Sum(nil))
-	req.Header.Set("X-CodeQ-Timestamp", fmt.Sprintf("%d", ts))
+	req.Header.Set("X-CodeQ-Timestamp", strconv.FormatInt(ts, 10))
 	req.Header.Set("X-CodeQ-Signature", sig)
 }

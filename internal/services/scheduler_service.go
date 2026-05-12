@@ -149,6 +149,8 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		waitSeconds = 30
 	}
 	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
 		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
 		if err != nil || ok {
@@ -165,13 +167,11 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		if remaining < sleep {
 			sleep = remaining
 		}
-		// Use NewTimer instead of time.After to avoid allocations in the retry loop
-		t := time.NewTimer(sleep)
+		timer.Reset(sleep)
 		select {
 		case <-ctx.Done():
-			t.Stop()
 			return nil, false, ctx.Err()
-		case <-t.C:
+		case <-timer.C:
 		}
 	}
 }

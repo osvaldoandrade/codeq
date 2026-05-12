@@ -31,3 +31,6 @@ npm/native/
 node_modules/
 dist/
 coverage/
+build-steps.log
+codeq
+server

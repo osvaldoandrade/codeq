@@ -8,8 +8,8 @@ all modules verified
 
 === Building Server Binary ===
 github.com/gin-gonic/gin/internal/bytesconv
-golang.org/x/net/html/atom
 github.com/go-playground/locales/currency
+golang.org/x/net/html/atom
 github.com/leodido/go-urn/scim/schema
 encoding/xml
 github.com/gin-gonic/gin/internal/json
@@ -26,40 +26,40 @@ github.com/go-playground/universal-translator
 github.com/leodido/go-urn
 golang.org/x/sys/cpu
 github.com/gabriel-vasile/mimetype/internal/charset
+debug/macho
 golang.org/x/crypto/sha3
 golang.org/x/text/internal/tag
-debug/macho
 golang.org/x/text/internal/language
 github.com/pelletier/go-toml/v2/internal/characters
+github.com/gabriel-vasile/mimetype/internal/magic
 github.com/pelletier/go-toml/v2/internal/danger
 github.com/pelletier/go-toml/v2/unstable
-github.com/gabriel-vasile/mimetype/internal/magic
-github.com/pelletier/go-toml/v2/internal/tracker
 encoding/gob
-github.com/pelletier/go-toml/v2
-golang.org/x/text/internal/language/compact
+github.com/pelletier/go-toml/v2/internal/tracker
 github.com/gabriel-vasile/mimetype
+golang.org/x/text/internal/language/compact
+github.com/pelletier/go-toml/v2
 golang.org/x/text/language
 github.com/mattn/go-isatty
-golang.org/x/net/http2/h2c
 github.com/go-playground/validator/v10
+golang.org/x/net/http2/h2c
 github.com/osvaldoandrade/codeq/pkg/domain
+github.com/osvaldoandrade/codeq/internal/metrics
 github.com/osvaldoandrade/codeq/pkg/auth
 github.com/osvaldoandrade/codeq/pkg/config
-github.com/osvaldoandrade/codeq/internal/metrics
 github.com/osvaldoandrade/codeq/internal/backoff
 github.com/osvaldoandrade/codeq/internal/shard
-github.com/prometheus/client_golang/prometheus/promhttp
 net/rpc
+github.com/prometheus/client_golang/prometheus/promhttp
 github.com/osvaldoandrade/codeq/internal/repository
+github.com/ugorji/go/codec
 # github.com/osvaldoandrade/codeq/internal/repository
 internal/repository/subscription_repository.go:173:28: cannot use toRemove (variable of type []string) as []interface{} value in argument to r.rdb.ZRem
 github.com/golang-jwt/jwt/v5
-github.com/ugorji/go/codec
-github.com/osvaldoandrade/codeq/pkg/auth/jwks
 github.com/osvaldoandrade/codeq/pkg/auth/static
 github.com/osvaldoandrade/codeq/pkg/persistence
 github.com/osvaldoandrade/codeq/pkg/persistence/memory
+github.com/osvaldoandrade/codeq/pkg/auth/jwks
 github.com/gin-gonic/gin/render
 github.com/gin-gonic/gin/binding
 github.com/gin-gonic/gin
@@ -76,6 +76,76 @@ all modules verified
 github.com/gin-gonic/gin/internal/bytesconv
 golang.org/x/net/html/atom
 github.com/go-playground/locales/currency
+github.com/leodido/go-urn/scim/schema
+encoding/xml
+github.com/gin-gonic/gin/internal/json
+golang.org/x/net/html
+hash/adler32
+github.com/gin-contrib/sse
+compress/zlib
+debug/dwarf
+internal/saferio
+encoding/csv
+github.com/gabriel-vasile/mimetype/internal/json
+github.com/go-playground/locales
+github.com/go-playground/universal-translator
+github.com/leodido/go-urn
+golang.org/x/sys/cpu
+github.com/gabriel-vasile/mimetype/internal/charset
+golang.org/x/text/internal/tag
+golang.org/x/text/internal/language
+golang.org/x/crypto/sha3
+debug/macho
+github.com/pelletier/go-toml/v2/internal/characters
+github.com/pelletier/go-toml/v2/internal/danger
+github.com/gabriel-vasile/mimetype/internal/magic
+github.com/pelletier/go-toml/v2/unstable
+encoding/gob
+golang.org/x/text/internal/language/compact
+github.com/pelletier/go-toml/v2/internal/tracker
+github.com/pelletier/go-toml/v2
+golang.org/x/text/language
+github.com/gabriel-vasile/mimetype
+github.com/mattn/go-isatty
+github.com/go-playground/validator/v10
+golang.org/x/net/http2/h2c
+github.com/osvaldoandrade/codeq/pkg/domain
+net/rpc
+github.com/osvaldoandrade/codeq/pkg/auth
+github.com/osvaldoandrade/codeq/internal/metrics
+github.com/osvaldoandrade/codeq/pkg/config
+github.com/osvaldoandrade/codeq/internal/backoff
+github.com/osvaldoandrade/codeq/internal/shard
+github.com/prometheus/client_golang/prometheus/promhttp
+github.com/ugorji/go/codec
+github.com/osvaldoandrade/codeq/internal/repository
+github.com/golang-jwt/jwt/v5
+github.com/osvaldoandrade/codeq/pkg/auth/static
+github.com/osvaldoandrade/codeq/pkg/persistence
+github.com/osvaldoandrade/codeq/pkg/auth/jwks
+github.com/osvaldoandrade/codeq/pkg/persistence/memory
+github.com/osvaldoandrade/codeq/pkg/persistence/redis
+github.com/osvaldoandrade/codeq/internal/services
+# github.com/osvaldoandrade/codeq/internal/services
+internal/services/results_service.go:72:24: undefined: domain.SubmitArtifact
+internal/services/results_service.go:95:28: undefined: domain.SubmitArtifact
+github.com/gin-gonic/gin/render
+github.com/gin-gonic/gin/binding
+github.com/gin-gonic/gin
+github.com/osvaldoandrade/codeq/internal/middleware
+=== Build Steps Log ===
+Go version: go version go1.23.0 linux/amd64
+Go GOOS/GOARCH: linux/amd64
+Working directory: /home/runner/work/codeq/codeq
+
+=== Downloading Dependencies ===
+all modules verified
+
+=== Building Server Binary ===
+github.com/gin-gonic/gin/internal/bytesconv
+golang.org/x/net/html/atom
+github.com/go-playground/locales/currency
+github.com/leodido/go-urn/scim/schema
 encoding/xml
 github.com/gin-gonic/gin/internal/json
 golang.org/x/net/html
@@ -88,53 +158,52 @@ encoding/csv
 github.com/gabriel-vasile/mimetype/internal/json
 github.com/go-playground/locales
 github.com/go-playground/universal-translator
-github.com/leodido/go-urn/scim/schema
-golang.org/x/sys/cpu
 github.com/leodido/go-urn
-golang.org/x/crypto/sha3
+golang.org/x/sys/cpu
 github.com/gabriel-vasile/mimetype/internal/charset
-golang.org/x/text/internal/tag
-github.com/pelletier/go-toml/v2/internal/characters
-golang.org/x/text/internal/language
 debug/macho
+golang.org/x/text/internal/tag
+golang.org/x/crypto/sha3
+golang.org/x/text/internal/language
+github.com/pelletier/go-toml/v2/internal/characters
 github.com/pelletier/go-toml/v2/internal/danger
-github.com/pelletier/go-toml/v2/unstable
-encoding/gob
 github.com/gabriel-vasile/mimetype/internal/magic
-github.com/pelletier/go-toml/v2/internal/tracker
-github.com/pelletier/go-toml/v2
+github.com/pelletier/go-toml/v2/unstable
 golang.org/x/text/internal/language/compact
-github.com/gabriel-vasile/mimetype
+github.com/pelletier/go-toml/v2/internal/tracker
+encoding/gob
 golang.org/x/text/language
+github.com/pelletier/go-toml/v2
+github.com/gabriel-vasile/mimetype
 github.com/mattn/go-isatty
 golang.org/x/net/http2/h2c
-github.com/osvaldoandrade/codeq/pkg/domain
-net/rpc
 github.com/go-playground/validator/v10
-github.com/osvaldoandrade/codeq/pkg/auth
+github.com/osvaldoandrade/codeq/pkg/domain
 github.com/osvaldoandrade/codeq/internal/metrics
+github.com/osvaldoandrade/codeq/pkg/auth
 github.com/osvaldoandrade/codeq/pkg/config
 github.com/osvaldoandrade/codeq/internal/backoff
 github.com/osvaldoandrade/codeq/internal/shard
-github.com/ugorji/go/codec
+net/rpc
 github.com/prometheus/client_golang/prometheus/promhttp
 github.com/osvaldoandrade/codeq/internal/repository
+github.com/ugorji/go/codec
 github.com/golang-jwt/jwt/v5
-github.com/osvaldoandrade/codeq/internal/services
+github.com/osvaldoandrade/codeq/pkg/auth/jwks
 github.com/osvaldoandrade/codeq/pkg/auth/static
 github.com/osvaldoandrade/codeq/pkg/persistence
+github.com/osvaldoandrade/codeq/internal/services
 github.com/osvaldoandrade/codeq/pkg/persistence/memory
 github.com/osvaldoandrade/codeq/pkg/persistence/redis
-github.com/osvaldoandrade/codeq/pkg/auth/jwks
-github.com/gin-gonic/gin/binding
 github.com/gin-gonic/gin/render
+github.com/gin-gonic/gin/binding
 github.com/gin-gonic/gin
 github.com/osvaldoandrade/codeq/internal/middleware
 github.com/osvaldoandrade/codeq/internal/controllers
 github.com/osvaldoandrade/codeq/pkg/app
 github.com/osvaldoandrade/codeq/cmd/server
 Server binary size: 33M
-Server binary checksum: 57e78f794b48fd533e28fbd635dc0fb5e3c7d04bb8c905851dd8c6a93ce18876
+Server binary checksum: 148415071b21884fde9750ec6692ec1781bef2cd5ce7f394a3a8d8c21b439a07
 
 === Building CLI Binary ===
 github.com/rivo/uniseg
@@ -148,7 +217,7 @@ github.com/schollz/progressbar/v3
 github.com/spf13/cobra
 github.com/osvaldoandrade/codeq/cmd/codeq
 CLI binary size: 13M
-CLI binary checksum: fdfe6f5043296239557674eea8058e9563f5e053bc45985324441200edb15f75
+CLI binary checksum: 21c084f1df21ef2efc9b3b73480bc5f58073ca6238c054eeeb793c279c49f647
 
 === Running Unit Tests ===
 === RUN   TestComputeFixed
@@ -229,10 +298,10 @@ CLI binary checksum: fdfe6f5043296239557674eea8058e9563f5e053bc45985324441200edb
 --- PASS: TestComputeZeroMaxDelay (0.00s)
 PASS
 coverage: 94.7% of statements
-ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of statements
+ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.004s	coverage: 94.7% of statements
 === RUN   TestBloom_FalsePositiveRate
-    bloom_bench_test.go:92: observed FP rate: 0.9860% (986 / 100000)
---- PASS: TestBloom_FalsePositiveRate (0.06s)
+    bloom_bench_test.go:92: observed FP rate: 0.9760% (976 / 100000)
+--- PASS: TestBloom_FalsePositiveRate (0.05s)
 === RUN   TestBloom_MemorySizeConsistency
 === RUN   TestBloom_MemorySizeConsistency/n=100000_fp=1e-02
     bloom_bench_test.go:126: n=100000 fpRate=1e-02 → mBits=958506 k=7 words=14977 memBytes=119816
@@ -240,10 +309,10 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
     bloom_bench_test.go:126: n=1000000 fpRate=1e-02 → mBits=9585059 k=7 words=149767 memBytes=1198136
 === RUN   TestBloom_MemorySizeConsistency/n=2000000_fp=1e-12
     bloom_bench_test.go:126: n=2000000 fpRate=1e-12 → mBits=115020701 k=40 words=1797199 memBytes=14377592
---- PASS: TestBloom_MemorySizeConsistency (0.01s)
+--- PASS: TestBloom_MemorySizeConsistency (0.00s)
     --- PASS: TestBloom_MemorySizeConsistency/n=100000_fp=1e-02 (0.00s)
     --- PASS: TestBloom_MemorySizeConsistency/n=1000000_fp=1e-02 (0.00s)
-    --- PASS: TestBloom_MemorySizeConsistency/n=2000000_fp=1e-12 (0.01s)
+    --- PASS: TestBloom_MemorySizeConsistency/n=2000000_fp=1e-12 (0.00s)
 === RUN   TestDLQMigrationOptionA_DrainAndCutover
 --- PASS: TestDLQMigrationOptionA_DrainAndCutover (0.01s)
 === RUN   TestDLQMigrationOptionB_InPlaceConversion
@@ -255,7 +324,7 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 === RUN   TestDLQMigrationLargeQueue
 --- PASS: TestDLQMigrationLargeQueue (0.06s)
 === RUN   TestDLQMigrationTaskIntegrity
---- PASS: TestDLQMigrationTaskIntegrity (0.01s)
+--- PASS: TestDLQMigrationTaskIntegrity (0.02s)
 === RUN   TestDLQMigrationRollback
 --- PASS: TestDLQMigrationRollback (0.00s)
 === RUN   TestDLQMigrationConcurrentAccess
@@ -268,7 +337,7 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 === RUN   TestDecodeBase64/valid_base64
 === RUN   TestDecodeBase64/empty_string
 === RUN   TestDecodeBase64/invalid_base64
---- PASS: TestDecodeBase64 (0.00s)
+--- PASS: TestDecodeBase64 (0.01s)
     --- PASS: TestDecodeBase64/valid_base64 (0.00s)
     --- PASS: TestDecodeBase64/empty_string (0.00s)
     --- PASS: TestDecodeBase64/invalid_base64 (0.00s)
@@ -280,16 +349,33 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 --- PASS: TestResultRepositorySaveAndGetResult (0.01s)
 === RUN   TestResultRepositoryGetResultNotFound
 --- PASS: TestResultRepositoryGetResultNotFound (0.01s)
+=== RUN   TestResultRepositoryGetTaskAndResult
+--- PASS: TestResultRepositoryGetTaskAndResult (0.01s)
+=== RUN   TestResultRepositoryGetTaskAndResultTaskNotFound
+--- PASS: TestResultRepositoryGetTaskAndResultTaskNotFound (0.01s)
 === RUN   TestResultRepositoryUpdateTaskOnComplete
 --- PASS: TestResultRepositoryUpdateTaskOnComplete (0.01s)
 === RUN   TestResultRepositoryUpdateTaskOnCompleteFailed
---- PASS: TestResultRepositoryUpdateTaskOnCompleteFailed (0.02s)
+--- PASS: TestResultRepositoryUpdateTaskOnCompleteFailed (0.01s)
 === RUN   TestResultRepositoryRemoveFromInprogAndClearLease
 --- PASS: TestResultRepositoryRemoveFromInprogAndClearLease (0.01s)
 === RUN   TestDecodeBase64ValidData
 --- PASS: TestDecodeBase64ValidData (0.00s)
+=== RUN   TestShardedOperationsParallelization
+=== RUN   TestShardedOperationsParallelization/PendingLength_parallelization
+=== RUN   TestShardedOperationsParallelization/QueueStats_parallelization
+=== RUN   TestShardedOperationsParallelization/AdminQueues_parallelization
+--- PASS: TestShardedOperationsParallelization (0.02s)
+    --- PASS: TestShardedOperationsParallelization/PendingLength_parallelization (0.01s)
+    --- PASS: TestShardedOperationsParallelization/QueueStats_parallelization (0.00s)
+    --- PASS: TestShardedOperationsParallelization/AdminQueues_parallelization (0.00s)
+=== RUN   TestShardedOperationsPerformance
+    sharded_ops_parallelization_test.go:170: PendingLength across 5 shards took 404.778µs
+    sharded_ops_parallelization_test.go:183: QueueStats across 5 shards took 540.391µs
+    sharded_ops_parallelization_test.go:192: AdminQueues across 5 shards took 695.022µs
+--- PASS: TestShardedOperationsPerformance (0.02s)
 === RUN   TestShardedTaskRepository_EnqueueRoutesToCorrectShard
---- PASS: TestShardedTaskRepository_EnqueueRoutesToCorrectShard (0.01s)
+--- PASS: TestShardedTaskRepository_EnqueueRoutesToCorrectShard (0.00s)
 === RUN   TestShardedTaskRepository_ClaimFromCorrectShard
 --- PASS: TestShardedTaskRepository_ClaimFromCorrectShard (0.01s)
 === RUN   TestShardedTaskRepository_GetFansOutToAllShards
@@ -317,9 +403,9 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 === RUN   TestShardedTaskRepository_PendingLengthAggregatesAcrossShards
 --- PASS: TestShardedTaskRepository_PendingLengthAggregatesAcrossShards (0.01s)
 === RUN   TestShardedTaskRepository_CleanupExpiredAcrossShards
---- PASS: TestShardedTaskRepository_CleanupExpiredAcrossShards (0.01s)
+--- PASS: TestShardedTaskRepository_CleanupExpiredAcrossShards (0.00s)
 === RUN   TestShardedTaskRepository_MoveDueDelayedOnCorrectShard
---- PASS: TestShardedTaskRepository_MoveDueDelayedOnCorrectShard (0.01s)
+--- PASS: TestShardedTaskRepository_MoveDueDelayedOnCorrectShard (0.00s)
 === RUN   TestSubscriptionCreate
 --- PASS: TestSubscriptionCreate (0.00s)
 === RUN   TestSubscriptionHeartbeat
@@ -347,11 +433,11 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 === RUN   TestSubscriptionCreateWithHashMode
 --- PASS: TestSubscriptionCreateWithHashMode (0.00s)
 === RUN   TestEnqueueIdempotent
---- PASS: TestEnqueueIdempotent (0.01s)
+--- PASS: TestEnqueueIdempotent (0.00s)
 === RUN   TestEnqueueIdempotentBloomSkipsNegativeGet
 --- PASS: TestEnqueueIdempotentBloomSkipsNegativeGet (0.00s)
 === RUN   TestPriorityClaim
---- PASS: TestPriorityClaim (0.01s)
+--- PASS: TestPriorityClaim (0.00s)
 === RUN   TestClaimGhostBloomSkipsHGet
 --- PASS: TestClaimGhostBloomSkipsHGet (0.01s)
 === RUN   TestClaimRepairRequeuesExpiredLease
@@ -359,21 +445,21 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 === RUN   TestNackDelayedAndDLQ
 --- PASS: TestNackDelayedAndDLQ (0.01s)
 === RUN   TestCleanupExpired
---- PASS: TestCleanupExpired (0.01s)
+--- PASS: TestCleanupExpired (0.00s)
 === RUN   TestCleanupExpiredBloomSkipsAlreadyRemovedIDs
---- PASS: TestCleanupExpiredBloomSkipsAlreadyRemovedIDs (0.01s)
+--- PASS: TestCleanupExpiredBloomSkipsAlreadyRemovedIDs (0.00s)
 === RUN   TestEnqueueScheduledGoesToDelayed
 --- PASS: TestEnqueueScheduledGoesToDelayed (0.01s)
 === RUN   TestHeartbeat
---- PASS: TestHeartbeat (0.01s)
+--- PASS: TestHeartbeat (0.00s)
 === RUN   TestAbandon
 --- PASS: TestAbandon (0.01s)
 === RUN   TestAdminQueues
 --- PASS: TestAdminQueues (0.01s)
 === RUN   TestQueueStats
---- PASS: TestQueueStats (0.01s)
+--- PASS: TestQueueStats (0.00s)
 === RUN   TestPendingLength
---- PASS: TestPendingLength (0.01s)
+--- PASS: TestPendingLength (0.00s)
 === RUN   TestShardSupplierRoutesQueueKeys
 --- PASS: TestShardSupplierRoutesQueueKeys (0.01s)
 === RUN   TestDefaultShardSupplierPreservesLegacyKeys
@@ -387,8 +473,8 @@ ok  	github.com/osvaldoandrade/codeq/internal/backoff	0.006s	coverage: 94.7% of 
 === RUN   TestTenantIsolationInDelayedQueue
 --- PASS: TestTenantIsolationInDelayedQueue (0.00s)
 PASS
-coverage: 72.0% of statements
-ok  	github.com/osvaldoandrade/codeq/internal/repository	2.554s	coverage: 72.0% of statements
+coverage: 75.1% of statements
+ok  	github.com/osvaldoandrade/codeq/internal/repository	2.520s	coverage: 75.1% of statements
 === RUN   TestNewNotifierServiceDefaults
 === RUN   TestNewNotifierServiceDefaults/zero_minNotify
 === RUN   TestNewNotifierServiceDefaults/negative_minNotify
@@ -400,7 +486,7 @@ ok  	github.com/osvaldoandrade/codeq/internal/repository	2.554s	coverage: 72.0% 
 === RUN   TestNotifierServiceNotifyQueueReadyNoSubscriptions
 --- PASS: TestNotifierServiceNotifyQueueReadyNoSubscriptions (0.00s)
 === RUN   TestNotifierServiceNotifyQueueReadyWithSubscription
---- PASS: TestNotifierServiceNotifyQueueReadyWithSubscription (0.16s)
+--- PASS: TestNotifierServiceNotifyQueueReadyWithSubscription (0.15s)
 === RUN   TestNewResultCallbackServiceDefaults
 === RUN   TestNewResultCallbackServiceDefaults/zero_maxAttempts
 === RUN   TestNewResultCallbackServiceDefaults/negative_maxAttempts
@@ -480,7 +566,7 @@ ok  	github.com/osvaldoandrade/codeq/internal/repository	2.554s	coverage: 72.0% 
 === RUN   TestGetTask
 --- PASS: TestGetTask (0.01s)
 === RUN   TestAdminQueues
---- PASS: TestAdminQueues (0.01s)
+--- PASS: TestAdminQueues (0.00s)
 === RUN   TestQueueStats
 --- PASS: TestQueueStats (0.01s)
 === RUN   TestCleanupExpired
@@ -530,8 +616,8 @@ ok  	github.com/osvaldoandrade/codeq/internal/repository	2.554s	coverage: 72.0% 
 === RUN   TestSubscriptionServiceHeartbeatNotFound
 --- PASS: TestSubscriptionServiceHeartbeatNotFound (0.00s)
 PASS
-coverage: 60.0% of statements
-ok  	github.com/osvaldoandrade/codeq/internal/services	1.411s	coverage: 60.0% of statements
+coverage: 55.6% of statements
+ok  	github.com/osvaldoandrade/codeq/internal/services	1.389s	coverage: 55.6% of statements
 === RUN   TestCommandMarshalBinary
 === RUN   TestCommandMarshalBinary/generate_master
 === RUN   TestCommandMarshalBinary/generate_creative
@@ -584,50 +670,50 @@ ok  	github.com/osvaldoandrade/codeq/internal/services	1.411s	coverage: 60.0% of
 --- PASS: TestSubmitResultRequestFields (0.00s)
 PASS
 coverage: 100.0% of statements
-ok  	github.com/osvaldoandrade/codeq/pkg/domain	0.006s	coverage: 100.0% of statements
+ok  	github.com/osvaldoandrade/codeq/pkg/domain	0.005s	coverage: 100.0% of statements
 === RUN   TestLoadConfigOptional_EmptyPath
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:9999 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:9999 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_EmptyPath (0.00s)
 === RUN   TestLoadConfigOptional_WhitespacePath
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_WhitespacePath (0.00s)
 === RUN   TestLoadConfigOptional_FileNotExist
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_FileNotExist (0.00s)
 === RUN   TestLoadConfigOptional_InvalidYAML
 --- PASS: TestLoadConfigOptional_InvalidYAML (0.00s)
 === RUN   TestLoadConfigOptional_ValidConfig
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://identity:8080 TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://identity:8080 TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_ValidConfig (0.00s)
 === RUN   TestLoadConfigOptional_EnvOverrides
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:9090 Redis:env-redis:6380 Identity:http://env-identity:9090 TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:9090 Redis:env-redis:6380 Identity:http://env-identity:9090 TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_EnvOverrides (0.00s)
 === RUN   TestLoadConfigOptional_EnvOverridesEmptyFile
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Scheduler Config: {Port:7070 Redis:redis.local:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Scheduler Config: {Port:7070 Redis:redis.local:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_EnvOverridesEmptyFile (0.00s)
 === RUN   TestLoadConfigOptional_ShardingConfig
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_ShardingConfig (0.00s)
 === RUN   TestLoadConfigOptional_ShardingDisabledByDefault
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_ShardingDisabledByDefault (0.00s)
 === RUN   TestLoadConfigOptional_ShardingBackends
-2026/04/28 20:49:52 Warning: IdentityServiceURL not set, using default
-2026/04/28 20:49:52 Warning: IdentityServiceApiKey not set (dev only)
-2026/04/28 20:49:52 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
+2026/05/09 20:37:47 Warning: IdentityServiceURL not set, using default
+2026/05/09 20:37:47 Warning: IdentityServiceApiKey not set (dev only)
+2026/05/09 20:37:47 Scheduler Config: {Port:8080 Redis:localhost:6379 Identity:http://api.codecompany.ai TZ:America/Sao_Paulo Lease:300s Inspect:200}
 --- PASS: TestLoadConfigOptional_ShardingBackends (0.00s)
 === RUN   TestValidate_ShardingBackendsMissingDefault
 --- PASS: TestValidate_ShardingBackendsMissingDefault (0.00s)
@@ -641,42 +727,40 @@ ok  	github.com/osvaldoandrade/codeq/pkg/domain	0.006s	coverage: 100.0% of state
 --- PASS: TestValidate_ShardingBackendsValidConfig (0.00s)
 PASS
 coverage: 68.8% of statements
-ok  	github.com/osvaldoandrade/codeq/pkg/config	0.009s	coverage: 68.8% of statements
+ok  	github.com/osvaldoandrade/codeq/pkg/config	0.008s	coverage: 68.8% of statements
 Test coverage report:
 github.com/osvaldoandrade/codeq/pkg/domain/task.go:65:					MarshalBinary			100.0%
 github.com/osvaldoandrade/codeq/pkg/domain/task.go:66:					MarshalText			100.0%
 github.com/osvaldoandrade/codeq/pkg/domain/task.go:68:					MarshalBinary			100.0%
 github.com/osvaldoandrade/codeq/pkg/domain/task.go:69:					MarshalText			100.0%
-total:											(statements)			69.5%
+total:											(statements)			70.6%
 
 === Running Go Benchmarks ===
 goos: linux
 goarch: amd64
 pkg: github.com/osvaldoandrade/codeq/internal/bench
-cpu: AMD EPYC 7763 64-Core Processor                
-BenchmarkGCPressure_SustainedEnqueue-4     	   10000	    302348 ns/op	        23.00 gc_cycles	         2.083 gc_pause_ms	   95326 B/op	     320 allocs/op
-BenchmarkGCPressure_ClaimSubmitCycle-4     	    1148	   3210757 ns/op	        57.00 gc_cycles	         2.213 gc_pause_ms	 1945007 B/op	    8140 allocs/op
-BenchmarkHTTP_CreateClaimComplete-4        	    1052	   3314591 ns/op	 1959336 B/op	    8319 allocs/op
-BenchmarkScheduler_CreateClaimComplete-4   	    1089	   3190172 ns/op	 1931190 B/op	    8140 allocs/op
-BenchmarkSonic_MarshalTask_Small-4         	 3728169	       966.3 ns/op	     869 B/op	       7 allocs/op
-BenchmarkSonic_MarshalTask_Medium-4        	 2780168	      1312 ns/op	    1889 B/op	       7 allocs/op
-BenchmarkSonic_MarshalTask_Large-4         	 1000000	      3132 ns/op	   10193 B/op	       7 allocs/op
-BenchmarkStdJSON_MarshalTask_Small-4       	 2079390	      1735 ns/op	     824 B/op	       6 allocs/op
-BenchmarkStdJSON_MarshalTask_Medium-4      	 1207645	      2983 ns/op	    1817 B/op	       6 allocs/op
-BenchmarkStdJSON_MarshalTask_Large-4       	  291658	     12203 ns/op	    9887 B/op	       6 allocs/op
-BenchmarkSonic_UnmarshalTask_Small-4       	 3453794	      1034 ns/op	     828 B/op	       4 allocs/op
-BenchmarkSonic_UnmarshalTask_Medium-4      	 2369000	      1511 ns/op	    2914 B/op	       4 allocs/op
-BenchmarkSonic_UnmarshalTask_Large-4       	  742179	      4577 ns/op	   19450 B/op	       4 allocs/op
-BenchmarkStdJSON_UnmarshalTask_Small-4     	  764592	      4611 ns/op	     800 B/op	      13 allocs/op
-BenchmarkStdJSON_UnmarshalTask_Medium-4    	  325590	     10910 ns/op	    2928 B/op	      13 allocs/op
-BenchmarkStdJSON_UnmarshalTask_Large-4     	   60704	     57599 ns/op	   19568 B/op	      13 allocs/op
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkGCPressure_SustainedEnqueue-4     	   13093	    279216 ns/op	        36.00 gc_cycles	         3.413 gc_pause_ms	  120088 B/op	     320 allocs/op
+BenchmarkGCPressure_ClaimSubmitCycle-4     	    1311	   2687337 ns/op	        65.00 gc_cycles	         2.648 gc_pause_ms	 1948715 B/op	    8175 allocs/op
+BenchmarkHTTP_CreateClaimComplete-4        	    1168	   2834537 ns/op	 1962315 B/op	    8354 allocs/op
+BenchmarkScheduler_CreateClaimComplete-4   	    1274	   2683987 ns/op	 1934682 B/op	    8175 allocs/op
+BenchmarkSonic_MarshalTask_Small-4         	 4169006	       866.8 ns/op	     875 B/op	       7 allocs/op
+BenchmarkSonic_MarshalTask_Medium-4        	 3058898	      1179 ns/op	    1896 B/op	       7 allocs/op
+BenchmarkSonic_MarshalTask_Large-4         	 1000000	      3192 ns/op	   10197 B/op	       7 allocs/op
+BenchmarkStdJSON_MarshalTask_Small-4       	 2264620	      1570 ns/op	     824 B/op	       6 allocs/op
+BenchmarkStdJSON_MarshalTask_Medium-4      	 1246185	      2885 ns/op	    1817 B/op	       6 allocs/op
+BenchmarkStdJSON_MarshalTask_Large-4       	  281997	     12552 ns/op	    9885 B/op	       6 allocs/op
+BenchmarkSonic_UnmarshalTask_Small-4       	 3049520	      1179 ns/op	     830 B/op	       4 allocs/op
+BenchmarkSonic_UnmarshalTask_Medium-4      	 1992312	      1784 ns/op	    2924 B/op	       4 allocs/op
+BenchmarkSonic_UnmarshalTask_Large-4       	  748827	      4823 ns/op	   19449 B/op	       4 allocs/op
+BenchmarkStdJSON_UnmarshalTask_Small-4     	  810355	      4328 ns/op	     800 B/op	      13 allocs/op
+BenchmarkStdJSON_UnmarshalTask_Medium-4    	  329126	     10561 ns/op	    2928 B/op	      13 allocs/op
+BenchmarkStdJSON_UnmarshalTask_Large-4     	   63364	     56313 ns/op	   19568 B/op	      13 allocs/op
 PASS
-ok  	github.com/osvaldoandrade/codeq/internal/bench	68.428s
+ok  	github.com/osvaldoandrade/codeq/internal/bench	71.322s
 
 === Code Formatting Check ===
-⚠️  Unformatted files:
-internal/repository/subscription_bench_test.go
-internal/repository/task_repository.go
+✅ All files properly formatted
 
 === Go Vet Check ===
 
@@ -687,6 +771,72 @@ Rebuild time (server):
 === Build Steps Completed ===
 Artifacts created:
   codeq (13M)
-  coverage.out (97K)
+  coverage.out (101K)
   server (33M)
 Log file: build-steps.log
+=== Build Steps Log ===
+Go version: go version go1.23.0 linux/amd64
+Go GOOS/GOARCH: linux/amd64
+Working directory: /home/runner/work/codeq/codeq
+
+=== Downloading Dependencies ===
+all modules verified
+
+=== Building Server Binary ===
+github.com/gin-gonic/gin/internal/bytesconv
+golang.org/x/net/html/atom
+github.com/go-playground/locales/currency
+github.com/leodido/go-urn/scim/schema
+encoding/xml
+github.com/gin-gonic/gin/internal/json
+golang.org/x/net/html
+github.com/gin-contrib/sse
+hash/adler32
+compress/zlib
+debug/dwarf
+internal/saferio
+encoding/csv
+github.com/gabriel-vasile/mimetype/internal/json
+github.com/go-playground/locales
+github.com/go-playground/universal-translator
+github.com/leodido/go-urn
+golang.org/x/sys/cpu
+debug/macho
+golang.org/x/crypto/sha3
+github.com/gabriel-vasile/mimetype/internal/charset
+golang.org/x/text/internal/tag
+golang.org/x/text/internal/language
+github.com/pelletier/go-toml/v2/internal/characters
+github.com/pelletier/go-toml/v2/internal/danger
+github.com/gabriel-vasile/mimetype/internal/magic
+github.com/pelletier/go-toml/v2/unstable
+encoding/gob
+github.com/pelletier/go-toml/v2/internal/tracker
+golang.org/x/text/internal/language/compact
+github.com/pelletier/go-toml/v2
+github.com/gabriel-vasile/mimetype
+golang.org/x/text/language
+github.com/mattn/go-isatty
+github.com/go-playground/validator/v10
+golang.org/x/net/http2/h2c
+github.com/osvaldoandrade/codeq/pkg/domain
+github.com/osvaldoandrade/codeq/pkg/auth
+github.com/osvaldoandrade/codeq/internal/metrics
+github.com/osvaldoandrade/codeq/pkg/config
+net/rpc
+github.com/osvaldoandrade/codeq/internal/backoff
+github.com/osvaldoandrade/codeq/internal/shard
+github.com/prometheus/client_golang/prometheus/promhttp
+github.com/ugorji/go/codec
+github.com/osvaldoandrade/codeq/internal/repository
+# github.com/osvaldoandrade/codeq/internal/repository
+internal/repository/result_repository.go:236:20: results[i].Val undefined (type redis.Cmder has no field or method Val)
+github.com/golang-jwt/jwt/v5
+github.com/osvaldoandrade/codeq/pkg/auth/static
+github.com/osvaldoandrade/codeq/pkg/auth/jwks
+github.com/osvaldoandrade/codeq/pkg/persistence
+github.com/osvaldoandrade/codeq/pkg/persistence/memory
+github.com/gin-gonic/gin/render
+github.com/gin-gonic/gin/binding
+github.com/gin-gonic/gin
+github.com/osvaldoandrade/codeq/internal/middleware

@@ -133,6 +133,60 @@ func TestResultRepositoryGetResultNotFound(t *testing.T) {
 	}
 }
 
+func TestResultRepositoryGetTaskAndResult(t *testing.T) {
+	ctx, _, _, repo, taskRepo := setupResultRepo(t)
+
+	// Create a task
+	_, _ = taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
+	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
+
+	// Save a result
+	result := map[string]any{"output": "success"}
+	rec := domain.ResultRecord{
+		TaskID:      claimed.ID,
+		Status:      domain.StatusCompleted,
+		Result:      result,
+		CompletedAt: time.Now().UTC(),
+	}
+
+	err := repo.SaveResult(ctx, rec)
+	if err != nil {
+		t.Fatalf("SaveResult() error = %v", err)
+	}
+
+	// Get both task and result together
+	gotTask, gotRec, err := repo.GetTaskAndResult(ctx, claimed.ID)
+	if err != nil {
+		t.Fatalf("GetTaskAndResult() error = %v", err)
+	}
+
+	if gotTask == nil {
+		t.Fatal("Expected task to be returned")
+	}
+	if gotTask.ID != claimed.ID {
+		t.Errorf("GetTaskAndResult() task ID = %v, want %v", gotTask.ID, claimed.ID)
+	}
+
+	if gotRec == nil {
+		t.Fatal("Expected result to be returned")
+	}
+	if gotRec.TaskID != claimed.ID {
+		t.Errorf("GetTaskAndResult() result TaskID = %v, want %v", gotRec.TaskID, claimed.ID)
+	}
+	if gotRec.Status != domain.StatusCompleted {
+		t.Errorf("GetTaskAndResult() result Status = %v, want %v", gotRec.Status, domain.StatusCompleted)
+	}
+}
+
+func TestResultRepositoryGetTaskAndResultTaskNotFound(t *testing.T) {
+	ctx, _, _, repo, _ := setupResultRepo(t)
+
+	_, _, err := repo.GetTaskAndResult(ctx, "nonexistent-task-id")
+	if err == nil {
+		t.Fatal("Expected error for nonexistent task")
+	}
+}
+
 func TestResultRepositoryUpdateTaskOnComplete(t *testing.T) {
 	ctx, _, _, repo, taskRepo := setupResultRepo(t)
 

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,15 +39,15 @@ func (r *subscriptionRedisRepo) keySubsHash() string {
 }
 
 func (r *subscriptionRedisRepo) keySubsEvent(cmd domain.Command) string {
-	return fmt.Sprintf("codeq:subs:%s", strings.ToLower(string(cmd)))
+	return "codeq:subs:" + strings.ToLower(string(cmd))
 }
 
 func (r *subscriptionRedisRepo) keySubNotifyThrottle(id string) string {
-	return fmt.Sprintf("codeq:subs:last:%s", id)
+	return "codeq:subs:last:" + id
 }
 
 func (r *subscriptionRedisRepo) keyGroupRR(cmd domain.Command, groupID string) string {
-	return fmt.Sprintf("codeq:subs:rr:%s:%s", strings.ToLower(string(cmd)), groupID)
+	return "codeq:subs:rr:" + strings.ToLower(string(cmd)) + ":" + groupID
 }
 
 func (r *subscriptionRedisRepo) now() time.Time { return time.Now().In(r.tz) }
@@ -120,7 +121,7 @@ func (r *subscriptionRedisRepo) Get(ctx context.Context, id string) (*domain.Sub
 
 func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Command, now time.Time) ([]domain.Subscription, error) {
 	key := r.keySubsEvent(cmd)
-	min := fmt.Sprintf("%d", now.UTC().Unix())
+	min := strconv.FormatInt(now.UTC().Unix(), 10)
 	zrange := &redis.ZRangeBy{Min: min, Max: "+inf", Offset: 0, Count: 1000}
 	ids, err := r.rdb.ZRangeByScore(ctx, key, zrange).Result()
 	if err != nil && err != redis.Nil {
@@ -167,13 +168,13 @@ func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Comma
 		subs = append(subs, sub)
 	}
 
-	// Batch cleanup of expired subscriptions
+	// Batch cleanup of expired subscriptions (direct call instead of pipeline for single operation)
 	if len(expiredIDs) > 0 {
-		cleanupPipe := r.rdb.Pipeline()
-		for _, id := range expiredIDs {
-			cleanupPipe.ZRem(ctx, key, id)
+		members := make([]interface{}, len(expiredIDs))
+		for i, id := range expiredIDs {
+			members[i] = id
 		}
-		_, _ = cleanupPipe.Exec(ctx)
+		_ = r.rdb.ZRem(ctx, key, members...).Err()
 	}
 
 	return subs, nil
@@ -249,7 +250,7 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 	if limit <= 0 {
 		limit = 1000
 	}
-	maxTS := fmt.Sprintf("%d", before.UTC().Unix())
+	maxTS := strconv.FormatInt(before.UTC().Unix(), 10)
 	removed := 0
 
 	for _, cmd := range r.allCommands() {
@@ -266,36 +267,41 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			continue
 		}
 
-		// Fetch all subscriptions in single pipelined batch
-		fetchPipe := r.rdb.Pipeline()
+		// Batch fetch all subscription data in a single pipeline (1 RTT instead of N RTTs)
+		pipe := r.rdb.Pipeline()
 		for _, id := range ids {
-			fetchPipe.HGet(ctx, r.keySubsHash(), id)
+			pipe.HGet(ctx, r.keySubsHash(), id)
 		}
-		fetchResults, err := fetchPipe.Exec(ctx)
+		results, err := pipe.Exec(ctx)
 		if err != nil && err != redis.Nil {
-			// Fall back to individual Gets on error
-			for _, id := range ids {
-				r.processExpiredSubscription(ctx, id, key, before, &removed)
-			}
-			continue
+			return removed, err
 		}
 
 		// Process fetched subscriptions in single cleanup pipeline
 		cleanupPipe := r.rdb.TxPipeline()
+		toRemoveCount := 0
 		for i, id := range ids {
-			if i >= len(fetchResults) {
+			if i >= len(results) {
 				break
 			}
-			cmd, ok := fetchResults[i].(*redis.StringCmd)
+
+			strCmd, ok := results[i].(*redis.StringCmd)
 			if !ok {
-				continue
-			}
-			js, err := cmd.Result()
-			if err == redis.Nil || js == "" {
-				// Expired or missing
+				// Type assertion failed - mark for deletion
 				cleanupPipe.ZRem(ctx, key, id)
 				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
 				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
+				continue
+			}
+
+			js, err := strCmd.Result()
+			if err == redis.Nil || js == "" {
+				// Expired or missing
+				cleanupPipe.ZRem(ctx, key, interface{}(id))
+				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
+				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 			if err != nil {
@@ -305,57 +311,32 @@ func (r *subscriptionRedisRepo) CleanupExpired(ctx context.Context, limit int, b
 			var sub domain.Subscription
 			if err := sonic.Unmarshal([]byte(js), &sub); err != nil {
 				// Corrupted entry, clean it up
-				cleanupPipe.ZRem(ctx, key, id)
+				cleanupPipe.ZRem(ctx, key, interface{}(id))
 				cleanupPipe.HDel(ctx, r.keySubsHash(), id)
 				cleanupPipe.Del(ctx, r.keySubNotifyThrottle(id))
+				toRemoveCount++
 				continue
 			}
 
 			if sub.ExpiresAt.After(before) {
-				// Not yet expired, re-add with updated score
+				// Not expired - update score
 				cleanupPipe.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID})
 				continue
 			}
 
-			// Subscription is expired, queue for cleanup
+			// Expired - mark for deletion
 			for _, ev := range sub.EventTypes {
 				cleanupPipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
 			}
 			cleanupPipe.HDel(ctx, r.keySubsHash(), sub.ID)
 			cleanupPipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
+			toRemoveCount++
 		}
 
 		// Execute all cleanup operations in single pipeline
 		if _, err := cleanupPipe.Exec(ctx); err == nil {
-			// Count removed subscriptions by iterating again (simplified for clarity)
-			// In production, could track during pipeline building
-			removed += len(ids)
+			removed += toRemoveCount
 		}
 	}
 	return removed, nil
-}
-
-// Helper function to process a single expired subscription (fallback path)
-func (r *subscriptionRedisRepo) processExpiredSubscription(ctx context.Context, id, key string, before time.Time, removed *int) {
-	sub, err := r.Get(ctx, id)
-	if err != nil {
-		_ = r.rdb.ZRem(ctx, key, id).Err()
-		_ = r.rdb.HDel(ctx, r.keySubsHash(), id).Err()
-		_ = r.rdb.Del(ctx, r.keySubNotifyThrottle(id)).Err()
-		*removed++
-		return
-	}
-	if sub.ExpiresAt.After(before) {
-		_ = r.rdb.ZAdd(ctx, key, &redis.Z{Score: float64(sub.ExpiresAt.UTC().Unix()), Member: sub.ID}).Err()
-		return
-	}
-	pipe := r.rdb.TxPipeline()
-	for _, ev := range sub.EventTypes {
-		pipe.ZRem(ctx, r.keySubsEvent(ev), sub.ID)
-	}
-	pipe.HDel(ctx, r.keySubsHash(), sub.ID)
-	pipe.Del(ctx, r.keySubNotifyThrottle(sub.ID))
-	if _, err := pipe.Exec(ctx); err == nil {
-		*removed++
-	}
 }

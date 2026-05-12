@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/shard"
@@ -96,43 +95,95 @@ func (s *shardedTaskRepository) Claim(ctx context.Context, workerID string, comm
 }
 
 func (s *shardedTaskRepository) Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error {
-	// Fan out to all shards since we can't determine shard from taskID alone
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first success or last not-found error
+	resultChan := make(chan error, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	for _, repo := range s.repos {
-		err := repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+		repo := repo // Capture for closure
+		go func() {
+			err := repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+			resultChan <- err
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		err := <-resultChan
 		if err == nil {
-			return nil
+			return nil // Success, cancel remaining goroutines
 		}
 		if !isNotFoundErr(err) {
-			return err
+			return err // Non-not-found error, fail fast
 		}
+		lastNotFoundErr = err
 	}
-	return fmt.Errorf("not-found")
+	return lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) Abandon(ctx context.Context, taskID string, workerID string) error {
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first success or last not-found error
+	resultChan := make(chan error, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	for _, repo := range s.repos {
-		err := repo.Abandon(ctx, taskID, workerID)
+		repo := repo // Capture for closure
+		go func() {
+			err := repo.Abandon(ctx, taskID, workerID)
+			resultChan <- err
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		err := <-resultChan
 		if err == nil {
-			return nil
+			return nil // Success, cancel remaining goroutines
 		}
 		if !isNotFoundErr(err) {
-			return err
+			return err // Non-not-found error, fail fast
 		}
+		lastNotFoundErr = err
 	}
-	return fmt.Errorf("not-found")
+	return lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) Nack(ctx context.Context, taskID string, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error) {
-	for _, repo := range s.repos {
-		delay, dlq, err := repo.Nack(ctx, taskID, workerID, delaySeconds, maxAttemptsDefault, reason)
-		if err == nil {
-			return delay, dlq, nil
-		}
-		if !isNotFoundErr(err) {
-			return 0, false, err
-		}
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first success or last not-found error
+	type nackResult struct {
+		delay int
+		dlq   bool
+		err   error
 	}
-	return 0, false, fmt.Errorf("not-found")
+	resultChan := make(chan nackResult, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for _, repo := range s.repos {
+		repo := repo // Capture for closure
+		go func() {
+			delay, dlq, err := repo.Nack(ctx, taskID, workerID, delaySeconds, maxAttemptsDefault, reason)
+			resultChan <- nackResult{delay, dlq, err}
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		result := <-resultChan
+		if result.err == nil {
+			return result.delay, result.dlq, nil // Success, cancel remaining goroutines
+		}
+		if !isNotFoundErr(result.err) {
+			return 0, false, result.err // Non-not-found error, fail fast
+		}
+		lastNotFoundErr = result.err
+	}
+	return 0, false, lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
@@ -141,43 +192,102 @@ func (s *shardedTaskRepository) MoveDueDelayed(ctx context.Context, cmd domain.C
 }
 
 func (s *shardedTaskRepository) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
-	// Aggregate pending length across all shards where this command may exist
+	// Parallelize pending length queries across all shards where this command may exist
 	shards, err := s.shardSupplier.QueueShards(ctx, string(cmd), "")
 	if err != nil {
 		return 0, err
 	}
-	var total int64
+
+	// Parallelize shard queries with buffered channel
+	type lengthResult struct {
+		length int64
+		err    error
+	}
+	resultChan := make(chan lengthResult, len(shards))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Launch all shard queries concurrently
 	for _, sid := range shards {
-		n, err := s.repoForShard(sid).PendingLength(ctx, cmd)
-		if err != nil {
-			return 0, err
+		sid := sid
+		go func() {
+			n, err := s.repoForShard(sid).PendingLength(ctx, cmd)
+			resultChan <- lengthResult{length: n, err: err}
+		}()
+	}
+
+	// Collect results from all shards
+	var total int64
+	for i := 0; i < len(shards); i++ {
+		result := <-resultChan
+		if result.err != nil {
+			return 0, result.err
 		}
-		total += n
+		total += result.length
 	}
 	return total, nil
 }
 
 func (s *shardedTaskRepository) Get(ctx context.Context, taskID string) (*domain.Task, error) {
-	for _, repo := range s.repos {
-		task, err := repo.Get(ctx, taskID)
-		if err == nil {
-			return task, nil
-		}
-		if !isNotFoundErr(err) {
-			return nil, err
-		}
+	// Parallelize shard lookups to avoid sequential fan-out latency
+	// All shards are queried concurrently; return first found task or last not-found error
+	type getResult struct {
+		task *domain.Task
+		err  error
 	}
-	return nil, fmt.Errorf("not-found")
+	resultChan := make(chan getResult, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for _, repo := range s.repos {
+		repo := repo // Capture for closure
+		go func() {
+			task, err := repo.Get(ctx, taskID)
+			resultChan <- getResult{task, err}
+		}()
+	}
+
+	var lastNotFoundErr error
+	for i := 0; i < len(s.repos); i++ {
+		result := <-resultChan
+		if result.err == nil {
+			return result.task, nil // Success, cancel remaining goroutines
+		}
+		if !isNotFoundErr(result.err) {
+			return nil, result.err // Non-not-found error, fail fast
+		}
+		lastNotFoundErr = result.err
+	}
+	return nil, lastNotFoundErr
 }
 
 func (s *shardedTaskRepository) AdminQueues(ctx context.Context) (map[string]any, error) {
-	merged := map[string]any{}
+	// Parallelize admin queue queries across all shards with buffered channel
+	type queueResult struct {
+		result map[string]any
+		err    error
+	}
+	resultChan := make(chan queueResult, len(s.repos))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Launch all shard queries concurrently
 	for _, repo := range s.repos {
-		result, err := repo.AdminQueues(ctx)
-		if err != nil {
-			return nil, err
+		repo := repo
+		go func() {
+			result, err := repo.AdminQueues(ctx)
+			resultChan <- queueResult{result: result, err: err}
+		}()
+	}
+
+	// Collect and merge results from all shards
+	merged := map[string]any{}
+	for i := 0; i < len(s.repos); i++ {
+		queueRes := <-resultChan
+		if queueRes.err != nil {
+			return nil, queueRes.err
 		}
-		for k, v := range result {
+		for k, v := range queueRes.result {
 			if existing, ok := merged[k]; ok {
 				// Sum int64 values from different shards
 				if ev, ok := existing.(int64); ok {
@@ -199,16 +309,35 @@ func (s *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Comma
 		return nil, err
 	}
 
-	aggregate := &domain.QueueStats{Command: cmd}
+	// Parallelize stats queries across all shards with buffered channel
+	type statsResult struct {
+		stats *domain.QueueStats
+		err   error
+	}
+	resultChan := make(chan statsResult, len(shards))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Launch all shard queries concurrently
 	for _, sid := range shards {
-		stats, err := s.repoForShard(sid).QueueStats(ctx, cmd)
-		if err != nil {
-			return nil, err
+		sid := sid
+		go func() {
+			stats, err := s.repoForShard(sid).QueueStats(ctx, cmd)
+			resultChan <- statsResult{stats: stats, err: err}
+		}()
+	}
+
+	// Collect and aggregate results from all shards
+	aggregate := &domain.QueueStats{Command: cmd}
+	for i := 0; i < len(shards); i++ {
+		result := <-resultChan
+		if result.err != nil {
+			return nil, result.err
 		}
-		aggregate.Ready += stats.Ready
-		aggregate.Delayed += stats.Delayed
-		aggregate.InProgress += stats.InProgress
-		aggregate.DLQ += stats.DLQ
+		aggregate.Ready += result.stats.Ready
+		aggregate.Delayed += result.stats.Delayed
+		aggregate.InProgress += result.stats.InProgress
+		aggregate.DLQ += result.stats.DLQ
 	}
 	return aggregate, nil
 }
