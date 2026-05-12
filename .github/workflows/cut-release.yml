@@ -6,7 +6,6 @@ on:
       version:
         description: "Version (e.g. 0.3.0)"
         required: true
-        default: "0.3.0"
 
 permissions:
   actions: write
