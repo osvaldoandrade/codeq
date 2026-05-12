@@ -216,21 +216,18 @@ func (r *resultRedisRepo) GetTasksBatch(ctx context.Context, ids []string) (map[
 
 	// Batch fetch all tasks in a single pipelined operation
 	pipe := r.rdb.Pipeline()
-	for _, id := range ids {
-		pipe.HGet(ctx, r.keyTasksHash(), id)
+	cmds := make([]*redis.StringCmd, len(ids))
+	for i, id := range ids {
+		cmds[i] = pipe.HGet(ctx, r.keyTasksHash(), id)
 	}
-	results, err := pipe.Exec(ctx)
+	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("redis pipeline: %w", err)
 	}
 
 	tasks := make(map[string]*domain.Task, len(ids))
 	for i, id := range ids {
-		cmd, ok := results[i].(*redis.StringCmd)
-		if !ok {
-			continue
-		}
-		js, err := cmd.Result()
+		js, err := cmds[i].Result()
 		if err == redis.Nil || js == "" {
 			continue
 		}
