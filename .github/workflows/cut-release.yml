@@ -68,4 +68,4 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v${{ inputs.version }}"
-          gh workflow run release.yml --ref main -f tag="$TAG"
+          gh workflow run release.yml --ref "$TAG" -f tag="$TAG"
