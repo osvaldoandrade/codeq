@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.3.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +21,7 @@ concurrency:
 
 env:
   BIN_NAME: codeq
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -22,6 +29,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -58,8 +67,8 @@ jobs:
       - name: GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
           generate_release_notes: true
           files: |
             dist/*
@@ -80,7 +89,7 @@ jobs:
             echo "Missing secret NPM_TOKEN (required to publish to registry.npmjs.org)." >&2
             exit 1
           fi
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           cd npm
           npm version --no-git-tag-version "$VERSION"
           npm pack --dry-run
@@ -90,7 +99,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           PREFIX="${RUNNER_TEMP}/codeq-npm-smoke"
 
           for attempt in {1..12}; do
@@ -110,10 +119,13 @@ jobs:
   publish-pypi:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -127,7 +139,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           cd sdks/python
           sed -i "s/^version = .*/version = \"${VERSION}\"/" pyproject.toml
           grep -q "^version = \"${VERSION}\"" pyproject.toml || {
@@ -152,12 +164,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Create Go SDK tag
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME}"
+          VERSION="${RELEASE_TAG}"
           SDK_TAG="sdks/go/${VERSION}"
           if git rev-parse "$SDK_TAG" >/dev/null 2>&1; then
             echo "Tag $SDK_TAG already exists, skipping."

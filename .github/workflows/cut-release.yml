@@ -9,6 +9,7 @@ on:
         default: "0.3.0"
 
 permissions:
+  actions: write
   contents: write
 
 concurrency:
@@ -59,3 +60,12 @@ jobs:
             git tag "$GO_SDK_TAG"
             git push origin "$GO_SDK_TAG"
           fi
+
+      - name: Dispatch release workflow
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v${{ inputs.version }}"
+          gh workflow run release.yml --ref main -f tag="$TAG"
