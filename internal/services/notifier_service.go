@@ -62,33 +62,36 @@ func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Comma
 	fanout := make([]domain.Subscription, 0, len(subs))
 	groups := map[string][]domain.Subscription{}
 	hashMode := make([]domain.Subscription, 0, len(subs))
+	throttleCandidate := make([]domain.Subscription, 0, len(subs))
 
+	// Single pass to organize subscriptions and collect throttle candidates
 	for _, s := range subs {
 		switch s.DeliveryMode {
 		case "fanout":
 			fanout = append(fanout, s)
+			throttleCandidate = append(throttleCandidate, s)
 		case "group":
 			groups[s.GroupID] = append(groups[s.GroupID], s)
 		case "hash":
 			hashMode = append(hashMode, s)
 		default:
 			fanout = append(fanout, s)
+			throttleCandidate = append(throttleCandidate, s)
 		}
 	}
 
-	// Batch throttle checks for all subscriptions (1 RTT instead of N RTTs)
-	allSubs := make([]domain.Subscription, 0, len(subs))
-	allSubs = append(allSubs, fanout...)
+	// Add first representative from each group and hash mode for throttle checks
 	for _, list := range groups {
 		if len(list) > 0 {
-			allSubs = append(allSubs, list[0])
+			throttleCandidate = append(throttleCandidate, list[0])
 		}
 	}
 	if len(hashMode) > 0 {
-		allSubs = append(allSubs, hashMode[0])
+		throttleCandidate = append(throttleCandidate, hashMode[0])
 	}
 
-	allowed, _ := n.repo.AllowNotifyBatch(ctx, allSubs)
+	// Batch throttle checks (1 RTT instead of N RTTs)
+	allowed, _ := n.repo.AllowNotifyBatch(ctx, throttleCandidate)
 
 	for _, s := range fanout {
 		if ok := allowed[s.ID]; ok {
