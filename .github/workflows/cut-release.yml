@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g. 0.2.1)"
+        description: "Version (e.g. 0.3.0)"
         required: true
-        default: "0.2.1"
+        default: "0.3.0"
 
 permissions:
   contents: write
@@ -59,4 +59,3 @@ jobs:
             git tag "$GO_SDK_TAG"
             git push origin "$GO_SDK_TAG"
           fi
-
