@@ -675,6 +675,9 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 		src := r.keyQueuePending(cmd, priority, tenantID, sid)
 		dst := r.keyQueueInprog(cmd, tenantID, sid)
 
+		// Collect ghost task IDs for batch cleanup (avoid pipeline per iteration)
+		var ghostIDs []string
+
 		for i := 0; i < inspectLimit; i++ {
 			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
 			if err == redis.Nil {
@@ -688,13 +691,10 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 				return nil, false, nil // fila vazia / no unique id found
 			}
 
-			// If admin cleanup already deleted this task, skip the Redis HGET and just clean up
+			// If admin cleanup already deleted this task, collect for batch cleanup
 			// any queue references. False positives are bounded by the Bloom filter FP rate.
 			if r.ghostBloom != nil && r.ghostBloom.MaybeHas(id) {
-				pipe := r.rdb.Pipeline()
-				pipe.SRem(ctx, dst, id)
-				pipe.LRem(ctx, src, 0, id) // remove any remaining duplicates in this pending list
-				_, _ = pipe.Exec(ctx)
+				ghostIDs = append(ghostIDs, id)
 				continue
 			}
 
@@ -770,6 +770,17 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 
 			return t, true, nil
 		}
+
+		// Batch cleanup of all collected ghost task IDs (1 RTT instead of N RTTs)
+		if len(ghostIDs) > 0 {
+			cleanupPipe := r.rdb.Pipeline()
+			for _, id := range ghostIDs {
+				cleanupPipe.SRem(ctx, dst, id)
+				cleanupPipe.LRem(ctx, src, 0, id)
+			}
+			_, _ = cleanupPipe.Exec(ctx)
+		}
+
 		return nil, false, nil
 	}
 
