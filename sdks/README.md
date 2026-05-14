@@ -317,17 +317,15 @@ npm run start:dev
 - [Node.js/TypeScript Integration Guide](../docs/integrations/nodejs-integration.md)
 - [Python Integration Guide](../docs/integrations/python-integration.md)
 - [Go Integration Guide](../docs/integrations/go-integration.md)
-- [SDK Integration Overview](../SDK_INTEGRATION_OVERVIEW.md)
 
 ### Deployment Recipes
-- [Kubernetes Deployment](deploy/kubernetes/)
+- [Kubernetes Deployment](../deploy/kubernetes/)
   - Spring Boot deployment with HPA
   - NestJS deployment with autoscaling
   - Ingress configuration
-- [Docker Compose](deploy/docker-compose/)
+- [Docker Compose](../deploy/docker-compose/)
   - Complete stack with CodeQ + KVRocks
-  - Multi-service setup
-  - Nginx reverse proxy
+  - Local development and single-node server templates
 
 ### Core Documentation
 - [Getting Started](docs/00-getting-started.md)
@@ -494,8 +492,10 @@ Run with local CodeQ server:
 
 ```bash
 # Start CodeQ with docker-compose
-cd deploy/docker-compose
-docker-compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 
 # Run integration tests
 cd examples/java/springboot
@@ -523,15 +523,14 @@ kubectl apply -f deploy/kubernetes/nestjs-deployment.yaml
 
 Run complete stack:
 ```bash
-cd deploy/docker-compose
-docker-compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 ```
 
 Access services:
 - CodeQ Server: http://localhost:8080
-- Spring Boot: http://localhost:8081
-- NestJS: http://localhost:3000
-- Express: http://localhost:3001
 
 ## 🤝 Contributing
 

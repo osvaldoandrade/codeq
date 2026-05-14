@@ -55,7 +55,10 @@ git clone https://github.com/osvaldoandrade/codeq
 cd codeq
 
 # Start all services (KVRocks + codeQ API + example tasks)
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 
 # Verify the server is running
 curl -sSf http://localhost:8080/metrics | head
@@ -69,13 +72,19 @@ This will start:
 To view logs:
 
 ````bash
-docker compose logs -f codeq
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  logs -f codeq
 ````
 
 To stop all services:
 
 ````bash
-docker compose down
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  down
 ````
 
 For more details on local development with Docker Compose, including hot reload and observability stack, see [Local Development Guide](22-local-development.md).
@@ -307,7 +316,10 @@ codeQ supports OpenTelemetry distributed tracing to help you trace tasks through
 1. Start codeQ with the observability stack (includes Jaeger):
 
 ````bash
-docker compose --profile obs up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile obs up -d
 ````
 
 2. Enable tracing in your `.env` file:
@@ -323,7 +335,10 @@ TRACING_SAMPLE_RATIO=1.0
 3. Restart codeQ:
 
 ````bash
-docker compose restart codeq
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  restart codeq
 ````
 
 4. Create and process a task, then view traces in Jaeger UI:

@@ -6,26 +6,36 @@ This document describes the load testing harness shipped with the repository (Is
 
 - **k6 HTTP scenarios** in `loadtest/k6/` for producer + worker traffic.
 - **Go benchmarks** in `internal/bench/` for quick perf regression checks.
-- **Observability stack** via `docker compose --profile obs up -d` (Prometheus + Grafana) to view `/metrics`.
+- **Observability stack** via the local Compose profile `obs` (Prometheus + Grafana) to view `/metrics`.
 
 ## Running k6 Scenarios (Local)
 
 Start a local stack:
 
 ```bash
-docker compose up -d
-docker compose --profile obs up -d   # optional: Prometheus + Grafana
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
+
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile obs up -d   # optional: Prometheus + Grafana
 ```
 
 Run a scenario:
 
 ```bash
-docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 ```
 
 ### Environment Variables
 
-The k6 scripts in `loadtest/k6/` default `CODEQ_BASE_URL` to `http://localhost:8080` when run directly. When you run k6 via `docker compose`, the `k6` service in `docker-compose.yml` sets `CODEQ_BASE_URL` to `http://codeq:8080` so the container can reach the `codeq` service on the compose network. You can override these by setting the env vars before running `docker compose` (or by editing `docker-compose.yml`):
+The k6 scripts in `loadtest/k6/` default `CODEQ_BASE_URL` to `http://localhost:8080` when run directly. When you run k6 via the local Compose stack, the `k6` service in `deploy/docker-compose/local-dev/compose.yaml` sets `CODEQ_BASE_URL` to `http://codeq:8080` so the container can reach the `codeq` service on the compose network. You can override these by setting the env vars before running `docker compose`:
 
 - `CODEQ_BASE_URL` (script default: `http://localhost:8080`; docker-compose default inside loadtest container: `http://codeq:8080`)
 - `CODEQ_PRODUCER_TOKEN` (default: `dev-token`)
@@ -86,4 +96,3 @@ go test ./internal/bench -bench . -benchtime=30s
 ```
 
 These benchmarks run in-process (Gin engine + miniredis) and are intended to catch regressions and compare branches.
-

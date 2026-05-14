@@ -1,0 +1,28 @@
+.git
+.github
+.idea
+.vscode
+.claude
+.artifacts
+node_modules
+dist
+build
+coverage
+tmp
+*.log
+
+# Local working trees not needed in image
+codeq-install/
+deploy/docker-compose/
+docs/
+examples/
+helm/
+loadtest/
+sdks/
+
+# Test outputs and editor backups
+*.swp
+*.swo
+*.test
+*.out
+**/.DS_Store

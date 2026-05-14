@@ -117,9 +117,10 @@ func TestResultsServiceBatchSubmit(t *testing.T) {
 	task3, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data3"}`, 0, "", 5, "", time.Time{}, "")
 
 	// Claim tasks to move them to in-progress
-	_, _ = taskRepo.Claim(context.Background(), domain.CmdGenerateMaster, 1, "worker1", 30*time.Second)
-	_, _ = taskRepo.Claim(context.Background(), domain.CmdGenerateMaster, 1, "worker1", 30*time.Second)
-	_, _ = taskRepo.Claim(context.Background(), domain.CmdGenerateMaster, 1, "worker1", 30*time.Second)
+	cmds := []domain.Command{domain.CmdGenerateMaster}
+	_, _, _ = taskRepo.Claim(context.Background(), "worker1", cmds, 30, 1, 5, "")
+	_, _, _ = taskRepo.Claim(context.Background(), "worker1", cmds, 30, 1, 5, "")
+	_, _, _ = taskRepo.Claim(context.Background(), "worker1", cmds, 30, 1, 5, "")
 
 	resultRepo := repository.NewResultRepository(rdb, time.UTC)
 	uploader := &mockResultsUploader{}
@@ -135,7 +136,7 @@ func TestResultsServiceBatchSubmit(t *testing.T) {
 			SubmitResultRequest: domain.SubmitResultRequest{
 				WorkerID: "worker1",
 				Status:   domain.StatusCompleted,
-				Result:   &map[string]interface{}{"output": "result1"},
+				Result:   map[string]any{"output": "result1"},
 			},
 		},
 		{
@@ -143,7 +144,7 @@ func TestResultsServiceBatchSubmit(t *testing.T) {
 			SubmitResultRequest: domain.SubmitResultRequest{
 				WorkerID: "worker1",
 				Status:   domain.StatusCompleted,
-				Result:   &map[string]interface{}{"output": "result2"},
+				Result:   map[string]any{"output": "result2"},
 			},
 		},
 		{
@@ -177,8 +178,8 @@ func TestResultsServiceBatchSubmit(t *testing.T) {
 	}
 
 	// Verify tasks were completed by checking they're no longer in-progress
-	tasks, _ := taskRepo.Get(context.Background(), task1.ID)
-	if tasks[0].Status != domain.StatusCompleted {
-		t.Errorf("Expected task1 status to be COMPLETED, got %s", tasks[0].Status)
+	task, _ := taskRepo.Get(context.Background(), task1.ID)
+	if task.Status != domain.StatusCompleted {
+		t.Errorf("Expected task1 status to be COMPLETED, got %s", task.Status)
 	}
 }

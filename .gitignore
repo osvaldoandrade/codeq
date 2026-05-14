@@ -12,6 +12,7 @@ go.work.sum
 .venv
 .idea
 .env
+codeq-install/
 .DS_Store
 tmp/
 .artifacts/

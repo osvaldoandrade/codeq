@@ -30,19 +30,42 @@ codeQ provides:
 
 ## Get started
 
-### Local Development with Docker Compose (Recommended)
+### Local development with Docker Compose
 
 The quickest way to try codeQ locally:
 
 ```bash
 git clone https://github.com/osvaldoandrade/codeq
 cd codeq
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 ```
 
 This starts KVRocks, the codeQ API server, and seeds example tasks. Access at `http://localhost:8080`.
 
 See [Local Development Guide](docs/22-local-development.md) for details on hot reload, testing, and observability.
+
+### Install a server
+
+Use the console wizard to generate a Docker or Kubernetes/Helm install bundle:
+
+```bash
+codeq install
+```
+
+Non-interactive Kubernetes example:
+
+```bash
+codeq install \
+  --target kubernetes \
+  --size small \
+  --namespace codeq \
+  --identity-service-url https://issuer.example.com \
+  --worker-jwks-url https://issuer.example.com/.well-known/jwks.json \
+  --worker-issuer https://issuer.example.com
+```
 
 ### Install CLI (macOS/Linux/Windows via Git Bash)
 
@@ -102,15 +125,17 @@ go get github.com/osvaldoandrade/codeq/sdks/go
 - [Integration Guides](docs/integrations/)
 - [Example Applications](examples/)
 
-### 1) Helm (small cluster)
+### Helm
 
-The chart in this repo deploys codeQ and, by default, a single-node KVRocks instance.
+The chart in this repo deploys codeQ and, by default in the small profile, a single-node KVRocks instance.
 
 ```bash
 git clone https://github.com/osvaldoandrade/codeq
 cd codeq
 
-helm install codeq ./helm/codeq \
+helm upgrade --install codeq ./helm/codeq \
+  -f ./helm/codeq/values-small.yaml \
+  --namespace codeq --create-namespace \
   --set secrets.enabled=true \
   --set secrets.webhookHmacSecret=YOUR_SECRET \
   --set config.identityServiceUrl=https://your-auth-server.com \
@@ -121,7 +146,8 @@ helm install codeq ./helm/codeq \
 Disable embedded KVRocks and point to your own:
 
 ```bash
-helm install codeq ./helm/codeq \
+helm upgrade --install codeq ./helm/codeq \
+  -f ./helm/codeq/values-medium.yaml \
   --set kvrocks.enabled=false \
   --set config.redisAddr=your-kvrocks:6666
 ```
@@ -201,7 +227,8 @@ Key references:
 
 - `pkg/`: public packages (`app`, `config`, `domain`)
 - `internal/`: controllers, middleware, services, repositories, providers
-- `helm/codeq`: Helm chart
+- `deploy/`: Docker Compose, Kubernetes, and config examples
+- `helm/codeq`: Helm chart and size profiles
 - `docs/`: full specification
 
 ## License

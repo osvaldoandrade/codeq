@@ -59,7 +59,8 @@ func (m *mockSchedulerService) CleanupExpired(context.Context, int, time.Time) (
 }
 
 type mockResultsService struct {
-	submitFunc func(ctx context.Context, taskID string, req domain.SubmitResultRequest) (*domain.ResultRecord, error)
+	submitFunc      func(ctx context.Context, taskID string, req domain.SubmitResultRequest) (*domain.ResultRecord, error)
+	batchSubmitFunc func(ctx context.Context, items []domain.BatchSubmitItem) ([]domain.BatchSubmitResponse, error)
 }
 
 func (m *mockResultsService) Submit(ctx context.Context, taskID string, req domain.SubmitResultRequest) (*domain.ResultRecord, error) {
@@ -67,6 +68,23 @@ func (m *mockResultsService) Submit(ctx context.Context, taskID string, req doma
 		return m.submitFunc(ctx, taskID, req)
 	}
 	return &domain.ResultRecord{TaskID: taskID, Status: req.Status}, nil
+}
+
+func (m *mockResultsService) BatchSubmit(ctx context.Context, items []domain.BatchSubmitItem) ([]domain.BatchSubmitResponse, error) {
+	if m.batchSubmitFunc != nil {
+		return m.batchSubmitFunc(ctx, items)
+	}
+	// Default: delegate to Submit per item, mirroring the real service's per-item semantics.
+	responses := make([]domain.BatchSubmitResponse, len(items))
+	for i, item := range items {
+		rec, err := m.Submit(ctx, item.TaskID, item.SubmitResultRequest)
+		if err != nil {
+			responses[i] = domain.BatchSubmitResponse{TaskID: item.TaskID, Error: err.Error()}
+		} else {
+			responses[i] = domain.BatchSubmitResponse{TaskID: item.TaskID, Result: rec}
+		}
+	}
+	return responses, nil
 }
 
 func (m *mockResultsService) Get(context.Context, string) (*domain.ResultRecord, *domain.Task, error) {

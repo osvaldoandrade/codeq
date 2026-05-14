@@ -357,7 +357,10 @@ export class HealthController {
 **Solution**: Ensure CodeQ server is running on `http://localhost:8080`:
 ````bash
 cd ../..
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 ````
 
 ### Issue: "Unauthorized" error

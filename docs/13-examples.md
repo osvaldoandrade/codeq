@@ -430,7 +430,10 @@ The trace context is:
 
 ````bash
 # Start codeQ with observability stack
-docker compose --profile obs up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile obs up -d
 
 # Enable tracing in .env
 cat >> .env << 'EOF'
@@ -442,7 +445,10 @@ TRACING_SAMPLE_RATIO=1.0
 EOF
 
 # Restart codeQ
-docker compose restart codeq
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  restart codeq
 
 # Create a task
 TASK_ID=$(curl -s -X POST http://localhost:8080/v1/codeq/tasks \
@@ -525,4 +531,3 @@ Sampling is parent-based by default, so if an incoming request has a sampled tra
 - **Integration Guides**:
   - [Java Integration](integrations/java-integration.md)
   - [Node.js Integration](integrations/nodejs-integration.md)
-

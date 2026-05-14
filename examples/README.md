@@ -143,8 +143,10 @@ For now, the [Python Integration Guide](../docs/integrations/python-integration.
 All examples require a running CodeQ server. Use Docker Compose:
 
 ````bash
-cd ../deploy/docker-compose
-docker-compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 ````
 
 This starts:

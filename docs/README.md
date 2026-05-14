@@ -15,6 +15,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 13. `docs/13-examples.md` - Usage examples and common patterns
 14. `docs/14-configuration.md` - Configuration reference
 15. `docs/15-cli-reference.md` - Complete CLI command reference
+22. `docs/22-local-development.md` - Local development with Docker Compose
 26. `docs/26-load-testing.md` - Load testing framework and benchmarks
 28. `docs/28-troubleshooting.md` - Troubleshooting guide for common issues
 29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
@@ -41,7 +42,6 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 19. `docs/19-testing.md` - Test coverage and testing strategy
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
-22. `docs/22-local-development.md` - Local development with docker-compose
 27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
 
 ### Integration Guides
@@ -51,8 +51,14 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 - `docs/integrations/python-integration.md` - Python SDK with FastAPI, Django, Flask
 - `docs/integrations/go-integration.md` - Go SDK with standard library, Gin, Echo
 - `sdks/README.md` - SDK overview and quick start guide
-- `SDK_INTEGRATION_OVERVIEW.md` - SDK ecosystem overview and feature matrix
 - `examples/` - Working example applications
+
+### Deployment Assets
+
+- `deploy/docker-compose/` - Local and single-node server Compose templates
+- `deploy/kubernetes/` - Kubernetes example manifests; use Helm for server installs
+- `deploy/config/codeq.example.yml` - Server configuration example
+- `helm/codeq/` - Helm chart and size profiles
 
 ### Explanation (Understanding-Oriented)
 

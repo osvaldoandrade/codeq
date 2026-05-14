@@ -392,6 +392,19 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 // It also skips duplicate IDs that may exist in pending while already in in-progress (best-effort
 // self-healing for rare duplication bugs).
 //
+// PreloadScripts uploads the Lua scripts used by this package to the given Redis-compatible
+// backend (kvrocks) so the hot claim path always hits EVALSHA. Idempotent — safe to call once
+// per backend at startup.
+func PreloadScripts(ctx context.Context, rdb *redis.Client) error {
+	if rdb == nil {
+		return nil
+	}
+	if err := claimMoveScript.Load(ctx, rdb).Err(); err != nil {
+		return fmt.Errorf("preload claimMoveScript: %w", err)
+	}
+	return nil
+}
+
 // KEYS[1] = pending list key
 // KEYS[2] = in-progress set key
 // ARGV[1] = max inner iterations (int)
@@ -677,6 +690,11 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 
 		for i := 0; i < inspectLimit; i++ {
 			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
+			if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
+				// kvrocks returns "ERR NOSCRIPT ..." which go-redis v8 does not match
+				// against its HasPrefix("NOSCRIPT ") fallback. Force EVAL to load the script.
+				res, err = claimMoveScript.Eval(ctx, r.rdb, []string{src, dst}, 1).Result()
+			}
 			if err == redis.Nil {
 				return nil, false, nil // empty queue
 			}

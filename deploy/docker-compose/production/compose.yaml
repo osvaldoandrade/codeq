@@ -1,0 +1,56 @@
+name: codeq
+
+services:
+  codeq:
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:0.1.0}
+    ports:
+      - "${CODEQ_PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      ENV: ${CODEQ_ENV:-prod}
+      LOG_LEVEL: ${CODEQ_LOG_LEVEL:-info}
+      LOG_FORMAT: json
+      REDIS_ADDR: ${REDIS_ADDR:-kvrocks:6666}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL:?set IDENTITY_SERVICE_URL}
+      WORKER_JWKS_URL: ${WORKER_JWKS_URL:?set WORKER_JWKS_URL}
+      WORKER_ISSUER: ${WORKER_ISSUER:?set WORKER_ISSUER}
+      WORKER_AUDIENCE: ${WORKER_AUDIENCE:-codeq-worker}
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET:?set WEBHOOK_HMAC_SECRET}
+      LOCAL_ARTIFACTS_DIR: /var/lib/codeq/artifacts
+      DEFAULT_LEASE_SECONDS: ${DEFAULT_LEASE_SECONDS:-300}
+      REQUEUE_INSPECT_LIMIT: ${REQUEUE_INSPECT_LIMIT:-200}
+      MAX_ATTEMPTS_DEFAULT: ${MAX_ATTEMPTS_DEFAULT:-5}
+      BACKOFF_POLICY: ${BACKOFF_POLICY:-exp_full_jitter}
+      BACKOFF_BASE_SECONDS: ${BACKOFF_BASE_SECONDS:-5}
+      BACKOFF_MAX_SECONDS: ${BACKOFF_MAX_SECONDS:-900}
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      TRACING_SERVICE_NAME: ${TRACING_SERVICE_NAME:-codeq}
+      TRACING_OTLP_ENDPOINT: ${TRACING_OTLP_ENDPOINT:-}
+      TRACING_OTLP_INSECURE: ${TRACING_OTLP_INSECURE:-false}
+      TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO:-1.0}
+    depends_on:
+      - kvrocks
+    volumes:
+      - codeq-artifacts:/var/lib/codeq/artifacts
+    restart: unless-stopped
+    networks:
+      - codeq
+
+  kvrocks:
+    image: apache/kvrocks:2.7.0
+    ports:
+      - "${KVROCKS_PORT:-6666}:6666"
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks
+    restart: unless-stopped
+    networks:
+      - codeq
+
+volumes:
+  codeq-artifacts:
+  kvrocks-data:
+
+networks:
+  codeq:
+    driver: bridge

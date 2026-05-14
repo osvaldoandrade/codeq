@@ -1,4 +1,4 @@
-# Local Development (docker-compose)
+# Local Development (Docker Compose)
 
 This guide sets up a full local environment for codeQ development using Docker Compose:
 
@@ -17,7 +17,10 @@ cp .env.example .env
 2. Start everything:
 
 ````bash
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 ````
 
 3. Verify:
@@ -29,18 +32,24 @@ curl -sSf http://localhost:8080/metrics | head
 4. Watch logs:
 
 ````bash
-docker compose logs -f codeq
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  logs -f codeq
 ````
 
 5. Stop:
 
 ````bash
-docker compose down
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  down
 ````
 
 ## Hot Reload
 
-`docker-compose.override.yml` runs the API server via `air` using `.air.toml`.
+`deploy/docker-compose/local-dev/compose.override.yaml` runs the API server via `air` using `.air.toml`.
 Any change under `./internal`, `./pkg`, `./cmd`, etc should trigger a rebuild/restart.
 
 ## Seeded Example Tasks
@@ -58,7 +67,10 @@ curl -sS -H "Authorization: Bearer $TOKEN" \
 ## Run Tests Inside the Container
 
 ````bash
-docker compose exec codeq go test ./...
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  exec codeq go test ./...
 ````
 
 ## Optional Observability Stack (Prometheus + Grafana + Jaeger)
@@ -66,7 +78,10 @@ docker compose exec codeq go test ./...
 Start with the `obs` profile:
 
 ````bash
-docker compose --profile obs up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile obs up -d
 ````
 
 Then open:
@@ -86,10 +101,16 @@ codeQ includes a comprehensive load testing framework with k6 scenarios. Run loa
 
 ````bash
 # Start codeQ with dependencies
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 
 # Run a load test scenario
-docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 ````
 
 **Available scenarios:**
@@ -105,11 +126,17 @@ docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughp
 ````bash
 # High throughput test
 RATE=1000 DURATION=10m WORKER_VUS=300 \
-  docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+  docker compose \
+    -f deploy/docker-compose/local-dev/compose.yaml \
+    -f deploy/docker-compose/local-dev/compose.override.yaml \
+    --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 
 # Quick burst test
 RATE=2000 BURST_DURATION=5s DRAIN_DURATION=2m WORKER_VUS=400 \
-  docker compose --profile loadtest run --rm k6 run /scripts/02_burst_10k_10s.js
+  docker compose \
+    -f deploy/docker-compose/local-dev/compose.yaml \
+    -f deploy/docker-compose/local-dev/compose.override.yaml \
+    --profile loadtest run --rm k6 run /scripts/02_burst_10k_10s.js
 ````
 
 **Monitor performance:**
@@ -121,4 +148,3 @@ RATE=2000 BURST_DURATION=5s DRAIN_DURATION=2m WORKER_VUS=400 \
 For comprehensive load testing documentation, see:
 - [`docs/26-load-testing.md`](26-load-testing.md) - Complete load testing guide
 - [`loadtest/README.md`](../loadtest/README.md) - Scenario documentation and usage
-

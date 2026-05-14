@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -80,6 +83,58 @@ type cliConfig struct {
 type authConfig struct {
 	Login    loginConfig    `yaml:"login"`
 	Exchange exchangeConfig `yaml:"exchange"`
+}
+
+type installOptions struct {
+	Target             string
+	Size               string
+	Release            string
+	Namespace          string
+	Chart              string
+	OutputDir          string
+	Image              string
+	Domain             string
+	RedisAddr          string
+	IdentityServiceURL string
+	WorkerJwksURL      string
+	WorkerIssuer       string
+	WorkerAudience     string
+	WebhookHmacSecret  string
+	Build              bool
+	BuildContext       string
+	Execute            bool
+	NoPrompt           bool
+}
+
+type installProfile struct {
+	Name                 string
+	Description          string
+	Replicas             int
+	MinReplicas          int
+	MaxReplicas          int
+	TargetCPU            int
+	CPURequest           string
+	MemoryRequest        string
+	CPULimit             string
+	MemoryLimit          string
+	KVRocksSize          string
+	KVRocksCPURequest    string
+	KVRocksMemoryRequest string
+	KVRocksCPULimit      string
+	KVRocksMemoryLimit   string
+	ArtifactsEnabled     bool
+	ArtifactsSize        string
+	RequeueInspectLimit  int
+	EmbeddedKVRocks      bool
+	DevAuth              bool
+}
+
+type installBundle struct {
+	OutputDir    string
+	Files        []string
+	BuildCommand []string
+	Command      []string
+	Warnings     []string
 }
 
 type loginConfig struct {
@@ -245,6 +300,7 @@ func main() {
 	root.AddCommand(taskCmd(&baseURL, &producerToken, &workerToken, &admin, ui))
 	root.AddCommand(workerCmd(&baseURL, &producerToken, &workerToken, &admin, ui))
 	root.AddCommand(queueCmd(&baseURL, &producerToken, &workerToken, &admin, ui))
+	root.AddCommand(installCmd(ui))
 	root.AddCommand(migrateCmd(ui))
 
 	if err := root.Execute(); err != nil {
@@ -958,6 +1014,620 @@ func queueCmd(baseURL, producerToken, workerToken *string, admin *bool, ui *ui) 
 	return cmd
 }
 
+func installCmd(ui *ui) *cobra.Command {
+	opts := installOptions{
+		Target:             "",
+		Size:               "small",
+		Release:            "codeq",
+		Namespace:          "codeq",
+		Chart:              "./helm/codeq",
+		OutputDir:          "codeq-install",
+		Image:              "ghcr.io/osvaldoandrade/codeq-service:latest",
+		IdentityServiceURL: "https://issuer.example.com",
+		WorkerJwksURL:      "https://issuer.example.com/.well-known/jwks.json",
+		WorkerIssuer:       "https://issuer.example.com",
+		WorkerAudience:     "codeq-worker",
+	}
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Generate a Docker or Helm install bundle",
+		Long: "Generate a Docker Compose or Kubernetes/Helm installation bundle for codeQ.\n" +
+			"By default this command writes files and prints the next command. Use --execute to run it.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sizeChanged := cmd.Flags().Changed("size")
+			targetChanged := cmd.Flags().Changed("target")
+			imageChanged := cmd.Flags().Changed("image")
+			if !targetChanged && opts.Target == "" {
+				opts.Target = "docker"
+			}
+			opts.Target = normalizeInstallTarget(opts.Target)
+			if !sizeChanged {
+				if opts.Target == "docker" {
+					opts.Size = "dev"
+				} else {
+					opts.Size = "small"
+				}
+			}
+
+			if !opts.NoPrompt && isTerminal(int(os.Stdin.Fd())) {
+				if err := runInstallWizard(&opts); err != nil {
+					return err
+				}
+			}
+
+			opts.Target = normalizeInstallTarget(opts.Target)
+			opts.Size = strings.ToLower(strings.TrimSpace(opts.Size))
+			profile, err := installProfileFor(opts.Size)
+			if err != nil {
+				return err
+			}
+			if opts.Target != "docker" && opts.Target != "kubernetes" {
+				return errors.New("target must be one of: docker, kubernetes")
+			}
+			if opts.Build {
+				if opts.Target != "docker" {
+					return errors.New("--build is only supported with --target docker")
+				}
+				if !imageChanged {
+					opts.Image = "codeq-service:local"
+				}
+			}
+			if strings.TrimSpace(opts.WebhookHmacSecret) == "" {
+				secret, err := randomHex(32)
+				if err != nil {
+					return err
+				}
+				opts.WebhookHmacSecret = secret
+			}
+
+			bundle, err := writeInstallBundle(opts, profile)
+			if err != nil {
+				return err
+			}
+			printInstallBundle(bundle, ui)
+
+			if opts.Execute {
+				if err := validateExecutableInstall(opts, profile); err != nil {
+					return err
+				}
+				if len(bundle.BuildCommand) > 0 {
+					fmt.Printf("%s Running: %s\n", ui.info("[INFO]"), shellJoin(bundle.BuildCommand))
+					if err := runInstallCommand(cmd.Context(), bundle.BuildCommand); err != nil {
+						return err
+					}
+				}
+				fmt.Printf("%s Running: %s\n", ui.info("[INFO]"), shellJoin(bundle.Command))
+				if err := runInstallCommand(cmd.Context(), bundle.Command); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&opts.Target, "target", opts.Target, "Install target: docker|kubernetes")
+	cmd.Flags().StringVar(&opts.Size, "size", opts.Size, "Install size: dev|small|medium|large")
+	cmd.Flags().StringVar(&opts.Release, "release", opts.Release, "Helm release name")
+	cmd.Flags().StringVar(&opts.Namespace, "namespace", opts.Namespace, "Kubernetes namespace")
+	cmd.Flags().StringVar(&opts.Chart, "chart", opts.Chart, "Helm chart path or reference")
+	cmd.Flags().StringVar(&opts.OutputDir, "output-dir", opts.OutputDir, "Directory for generated install files")
+	cmd.Flags().StringVar(&opts.Image, "image", opts.Image, "codeQ server image")
+	cmd.Flags().StringVar(&opts.Domain, "domain", opts.Domain, "Ingress host for Kubernetes")
+	cmd.Flags().StringVar(&opts.RedisAddr, "redis-addr", opts.RedisAddr, "External Redis/KVRocks address")
+	cmd.Flags().StringVar(&opts.IdentityServiceURL, "identity-service-url", opts.IdentityServiceURL, "Producer identity service base URL")
+	cmd.Flags().StringVar(&opts.WorkerJwksURL, "worker-jwks-url", opts.WorkerJwksURL, "Worker JWKS URL")
+	cmd.Flags().StringVar(&opts.WorkerIssuer, "worker-issuer", opts.WorkerIssuer, "Worker token issuer")
+	cmd.Flags().StringVar(&opts.WorkerAudience, "worker-audience", opts.WorkerAudience, "Worker token audience")
+	cmd.Flags().StringVar(&opts.WebhookHmacSecret, "webhook-hmac-secret", opts.WebhookHmacSecret, "Webhook HMAC secret; generated when empty")
+	cmd.Flags().BoolVar(&opts.Build, "build", false, "Build the codeQ server image locally with docker build before launching (target=docker)")
+	cmd.Flags().StringVar(&opts.BuildContext, "build-context", "", "Docker build context (defaults to repo root)")
+	cmd.Flags().BoolVar(&opts.Execute, "execute", false, "Run docker compose or helm after generating files")
+	cmd.Flags().BoolVar(&opts.NoPrompt, "no-prompt", false, "Disable interactive wizard prompts")
+	return cmd
+}
+
+func installProfiles() map[string]installProfile {
+	return map[string]installProfile{
+		"dev": {
+			Name:                 "dev",
+			Description:          "single-node development stack with static dev tokens",
+			Replicas:             1,
+			MinReplicas:          1,
+			MaxReplicas:          1,
+			TargetCPU:            80,
+			CPURequest:           "100m",
+			MemoryRequest:        "256Mi",
+			CPULimit:             "500m",
+			MemoryLimit:          "512Mi",
+			KVRocksSize:          "2Gi",
+			KVRocksCPURequest:    "100m",
+			KVRocksMemoryRequest: "256Mi",
+			KVRocksCPULimit:      "500m",
+			KVRocksMemoryLimit:   "512Mi",
+			ArtifactsSize:        "1Gi",
+			RequeueInspectLimit:  200,
+			EmbeddedKVRocks:      true,
+			DevAuth:              true,
+		},
+		"small": {
+			Name:                 "small",
+			Description:          "small production install with embedded KVRocks",
+			Replicas:             2,
+			MinReplicas:          2,
+			MaxReplicas:          4,
+			TargetCPU:            75,
+			CPURequest:           "250m",
+			MemoryRequest:        "512Mi",
+			CPULimit:             "1",
+			MemoryLimit:          "1Gi",
+			KVRocksSize:          "20Gi",
+			KVRocksCPURequest:    "250m",
+			KVRocksMemoryRequest: "512Mi",
+			KVRocksCPULimit:      "1",
+			KVRocksMemoryLimit:   "1Gi",
+			ArtifactsSize:        "5Gi",
+			RequeueInspectLimit:  200,
+			EmbeddedKVRocks:      true,
+		},
+		"medium": {
+			Name:                "medium",
+			Description:         "multi-replica production install; external KVRocks recommended",
+			Replicas:            3,
+			MinReplicas:         3,
+			MaxReplicas:         8,
+			TargetCPU:           70,
+			CPURequest:          "500m",
+			MemoryRequest:       "1Gi",
+			CPULimit:            "2",
+			MemoryLimit:         "2Gi",
+			KVRocksSize:         "50Gi",
+			ArtifactsEnabled:    true,
+			ArtifactsSize:       "20Gi",
+			RequeueInspectLimit: 500,
+		},
+		"large": {
+			Name:                "large",
+			Description:         "larger production install; external KVRocks required",
+			Replicas:            5,
+			MinReplicas:         5,
+			MaxReplicas:         20,
+			TargetCPU:           65,
+			CPURequest:          "1",
+			MemoryRequest:       "2Gi",
+			CPULimit:            "4",
+			MemoryLimit:         "4Gi",
+			KVRocksSize:         "100Gi",
+			ArtifactsEnabled:    true,
+			ArtifactsSize:       "100Gi",
+			RequeueInspectLimit: 1000,
+		},
+	}
+}
+
+func installProfileFor(size string) (installProfile, error) {
+	profile, ok := installProfiles()[strings.ToLower(strings.TrimSpace(size))]
+	if !ok {
+		return installProfile{}, errors.New("size must be one of: dev, small, medium, large")
+	}
+	return profile, nil
+}
+
+func runInstallWizard(opts *installOptions) error {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("codeQ install wizard")
+	opts.Target = promptChoice(reader, "Target (docker/kubernetes)", emptyOr(opts.Target, "docker"), []string{"docker", "kubernetes", "k8s", "helm"})
+	opts.Target = normalizeInstallTarget(opts.Target)
+	defaultSize := "small"
+	if opts.Target == "docker" {
+		defaultSize = "dev"
+	}
+	opts.Size = promptChoice(reader, "Size (dev/small/medium/large)", emptyOr(opts.Size, defaultSize), []string{"dev", "small", "medium", "large"})
+	opts.OutputDir = prompt(reader, "Output directory", emptyOr(opts.OutputDir, "codeq-install"))
+	if opts.Target == "docker" {
+		opts.Build = promptYesNo(reader, "Build server image locally with docker build", opts.Build)
+	}
+	defaultImage := "ghcr.io/osvaldoandrade/codeq-service:latest"
+	if opts.Build {
+		defaultImage = "codeq-service:local"
+	}
+	opts.Image = prompt(reader, "Server image", emptyOr(opts.Image, defaultImage))
+
+	if opts.Target == "kubernetes" {
+		opts.Release = prompt(reader, "Helm release", emptyOr(opts.Release, "codeq"))
+		opts.Namespace = prompt(reader, "Namespace", emptyOr(opts.Namespace, "codeq"))
+		opts.Chart = prompt(reader, "Chart", emptyOr(opts.Chart, "./helm/codeq"))
+		opts.Domain = prompt(reader, "Ingress host (optional)", opts.Domain)
+	}
+
+	profile, err := installProfileFor(opts.Size)
+	if err != nil {
+		return err
+	}
+	if !profile.DevAuth {
+		opts.IdentityServiceURL = prompt(reader, "Identity service URL", opts.IdentityServiceURL)
+		opts.WorkerJwksURL = prompt(reader, "Worker JWKS URL", opts.WorkerJwksURL)
+		opts.WorkerIssuer = prompt(reader, "Worker issuer", opts.WorkerIssuer)
+		opts.WorkerAudience = prompt(reader, "Worker audience", emptyOr(opts.WorkerAudience, "codeq-worker"))
+	}
+	if opts.Target == "kubernetes" || !profile.EmbeddedKVRocks {
+		opts.RedisAddr = prompt(reader, "External KVRocks/Redis address (blank for embedded when supported)", opts.RedisAddr)
+	}
+	if opts.WebhookHmacSecret == "" {
+		opts.WebhookHmacSecret = prompt(reader, "Webhook HMAC secret (blank to generate)", "")
+	}
+	opts.Execute = promptYesNo(reader, "Run install command now", opts.Execute)
+	return nil
+}
+
+func normalizeInstallTarget(target string) string {
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "", "docker", "compose", "docker-compose":
+		return "docker"
+	case "k8s", "kubernetes", "helm":
+		return "kubernetes"
+	default:
+		return strings.ToLower(strings.TrimSpace(target))
+	}
+}
+
+func writeInstallBundle(opts installOptions, profile installProfile) (installBundle, error) {
+	outDir := filepath.Clean(opts.OutputDir)
+	if outDir == "." || outDir == "" {
+		outDir = "codeq-install"
+	}
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return installBundle{}, err
+	}
+	if opts.Target == "kubernetes" {
+		return writeHelmInstallBundle(opts, profile, outDir)
+	}
+	return writeDockerInstallBundle(opts, profile, outDir)
+}
+
+func writeDockerInstallBundle(opts installOptions, profile installProfile, outDir string) (installBundle, error) {
+	composePath := filepath.Join(outDir, "compose.yaml")
+	envPath := filepath.Join(outDir, ".env")
+	if err := os.WriteFile(composePath, []byte(renderDockerInstallCompose()), 0o644); err != nil {
+		return installBundle{}, err
+	}
+	if err := os.WriteFile(envPath, []byte(renderDockerInstallEnv(opts, profile)), 0o600); err != nil {
+		return installBundle{}, err
+	}
+	bundle := installBundle{
+		OutputDir: outDir,
+		Files:     []string{composePath, envPath},
+		Command:   []string{"docker", "compose", "--env-file", envPath, "-f", composePath, "up", "-d"},
+	}
+	if opts.Build {
+		ctx := strings.TrimSpace(opts.BuildContext)
+		if ctx == "" {
+			ctx = "."
+		}
+		bundle.BuildCommand = []string{"docker", "build", "-t", opts.Image, ctx}
+	}
+	if profile.Name == "medium" || profile.Name == "large" {
+		bundle.Warnings = append(bundle.Warnings, "Docker Compose is generated as a single-node server install; use --target kubernetes for multi-replica production.")
+	}
+	return bundle, nil
+}
+
+func writeHelmInstallBundle(opts installOptions, profile installProfile, outDir string) (installBundle, error) {
+	valuesPath := filepath.Join(outDir, "values.yaml")
+	values, warnings := renderHelmInstallValues(opts, profile)
+	if err := os.WriteFile(valuesPath, []byte(values), 0o600); err != nil {
+		return installBundle{}, err
+	}
+	return installBundle{
+		OutputDir: outDir,
+		Files:     []string{valuesPath},
+		Command: []string{
+			"helm", "upgrade", "--install", opts.Release, opts.Chart,
+			"--namespace", opts.Namespace,
+			"--create-namespace",
+			"-f", valuesPath,
+		},
+		Warnings: warnings,
+	}, nil
+}
+
+func renderDockerInstallCompose() string {
+	return `name: codeq
+
+services:
+  codeq:
+    image: ${CODEQ_IMAGE}
+    ports:
+      - "${CODEQ_PORT:-8080}:8080"
+    environment:
+      PORT: "8080"
+      ENV: ${CODEQ_ENV}
+      LOG_LEVEL: ${CODEQ_LOG_LEVEL}
+      LOG_FORMAT: json
+      REDIS_ADDR: ${REDIS_ADDR}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      IDENTITY_SERVICE_URL: ${IDENTITY_SERVICE_URL}
+      WORKER_JWKS_URL: ${WORKER_JWKS_URL}
+      WORKER_ISSUER: ${WORKER_ISSUER}
+      WORKER_AUDIENCE: ${WORKER_AUDIENCE}
+      WEBHOOK_HMAC_SECRET: ${WEBHOOK_HMAC_SECRET}
+      LOCAL_ARTIFACTS_DIR: /var/lib/codeq/artifacts
+      DEFAULT_LEASE_SECONDS: ${DEFAULT_LEASE_SECONDS}
+      REQUEUE_INSPECT_LIMIT: ${REQUEUE_INSPECT_LIMIT}
+      MAX_ATTEMPTS_DEFAULT: ${MAX_ATTEMPTS_DEFAULT}
+      BACKOFF_POLICY: ${BACKOFF_POLICY}
+      BACKOFF_BASE_SECONDS: ${BACKOFF_BASE_SECONDS}
+      BACKOFF_MAX_SECONDS: ${BACKOFF_MAX_SECONDS}
+      ALLOW_PRODUCER_AS_WORKER: ${ALLOW_PRODUCER_AS_WORKER}
+      PRODUCER_AUTH_PROVIDER: ${PRODUCER_AUTH_PROVIDER:-}
+      PRODUCER_AUTH_CONFIG: ${PRODUCER_AUTH_CONFIG:-}
+      WORKER_AUTH_PROVIDER: ${WORKER_AUTH_PROVIDER:-}
+      WORKER_AUTH_CONFIG: ${WORKER_AUTH_CONFIG:-}
+      TRACING_ENABLED: ${TRACING_ENABLED}
+      TRACING_SERVICE_NAME: codeq
+      TRACING_OTLP_ENDPOINT: ${TRACING_OTLP_ENDPOINT:-}
+      TRACING_OTLP_INSECURE: ${TRACING_OTLP_INSECURE}
+      TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO}
+    depends_on:
+      - kvrocks
+    volumes:
+      - codeq-artifacts:/var/lib/codeq/artifacts
+    restart: unless-stopped
+    networks:
+      - codeq
+
+  kvrocks:
+    image: apache/kvrocks:2.7.0
+    ports:
+      - "${KVROCKS_PORT:-6666}:6666"
+    volumes:
+      - kvrocks-data:/var/lib/kvrocks
+    restart: unless-stopped
+    networks:
+      - codeq
+
+volumes:
+  codeq-artifacts:
+  kvrocks-data:
+
+networks:
+  codeq:
+    driver: bridge
+`
+}
+
+func renderDockerInstallEnv(opts installOptions, profile installProfile) string {
+	envMode := "prod"
+	logLevel := "info"
+	identityURL := opts.IdentityServiceURL
+	workerJwksURL := opts.WorkerJwksURL
+	workerIssuer := opts.WorkerIssuer
+	allowProducerAsWorker := "false"
+	producerAuthProvider := ""
+	producerAuthConfig := ""
+	workerAuthProvider := ""
+	workerAuthConfig := ""
+	if profile.DevAuth {
+		envMode = "dev"
+		logLevel = "debug"
+		identityURL = "http://api.codecompany.ai"
+		workerJwksURL = ""
+		workerIssuer = ""
+		allowProducerAsWorker = "true"
+		producerAuthProvider = "static"
+		producerAuthConfig = `{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN"}}`
+		workerAuthProvider = "static"
+		workerAuthConfig = `{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"]}`
+	}
+	redisAddr := opts.RedisAddr
+	if strings.TrimSpace(redisAddr) == "" {
+		redisAddr = "kvrocks:6666"
+	}
+
+	lines := []string{
+		envKV("CODEQ_IMAGE", opts.Image),
+		envKV("CODEQ_PORT", "8080"),
+		envKV("CODEQ_ENV", envMode),
+		envKV("CODEQ_LOG_LEVEL", logLevel),
+		envKV("REDIS_ADDR", redisAddr),
+		envKV("REDIS_PASSWORD", ""),
+		envKV("KVROCKS_PORT", "6666"),
+		envKV("IDENTITY_SERVICE_URL", identityURL),
+		envKV("WORKER_JWKS_URL", workerJwksURL),
+		envKV("WORKER_ISSUER", workerIssuer),
+		envKV("WORKER_AUDIENCE", emptyOr(opts.WorkerAudience, "codeq-worker")),
+		envKV("WEBHOOK_HMAC_SECRET", opts.WebhookHmacSecret),
+		envKV("DEFAULT_LEASE_SECONDS", "300"),
+		envKV("REQUEUE_INSPECT_LIMIT", fmt.Sprintf("%d", profile.RequeueInspectLimit)),
+		envKV("MAX_ATTEMPTS_DEFAULT", "5"),
+		envKV("BACKOFF_POLICY", "exp_full_jitter"),
+		envKV("BACKOFF_BASE_SECONDS", "5"),
+		envKV("BACKOFF_MAX_SECONDS", "900"),
+		envKV("ALLOW_PRODUCER_AS_WORKER", allowProducerAsWorker),
+		envKV("PRODUCER_AUTH_PROVIDER", producerAuthProvider),
+		envKV("PRODUCER_AUTH_CONFIG", producerAuthConfig),
+		envKV("WORKER_AUTH_PROVIDER", workerAuthProvider),
+		envKV("WORKER_AUTH_CONFIG", workerAuthConfig),
+		envKV("TRACING_ENABLED", "false"),
+		envKV("TRACING_OTLP_ENDPOINT", ""),
+		envKV("TRACING_OTLP_INSECURE", "false"),
+		envKV("TRACING_SAMPLE_RATIO", "1.0"),
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderHelmInstallValues(opts installOptions, profile installProfile) (string, []string) {
+	var warnings []string
+	imageRepo, imageTag := splitImageRef(opts.Image)
+	redisAddr := strings.TrimSpace(opts.RedisAddr)
+	embeddedKVRocks := profile.EmbeddedKVRocks && redisAddr == ""
+	if !embeddedKVRocks && redisAddr == "" {
+		redisAddr = "CHANGE_ME_KVROCKS:6666"
+		warnings = append(warnings, profile.Name+" profile expects an external KVRocks/Redis address; set --redis-addr before executing.")
+	}
+	if embeddedKVRocks {
+		redisAddr = "127.0.0.1:6379"
+	}
+
+	envMode := "prod"
+	logLevel := "info"
+	allowProducerAsWorker := false
+	extraEnv := "extraEnv: []\n"
+	if profile.DevAuth {
+		envMode = "dev"
+		logLevel = "debug"
+		allowProducerAsWorker = true
+		extraEnv = `extraEnv:
+  - name: PRODUCER_AUTH_PROVIDER
+    value: static
+  - name: PRODUCER_AUTH_CONFIG
+    value: '{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN"}}'
+  - name: WORKER_AUTH_PROVIDER
+    value: static
+  - name: WORKER_AUTH_CONFIG
+    value: '{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"]}'
+`
+	}
+
+	ingressBlock := "ingress:\n  enabled: false\n"
+	if strings.TrimSpace(opts.Domain) != "" {
+		ingressBlock = fmt.Sprintf(`ingress:
+  enabled: true
+  hosts:
+    - host: %q
+      paths:
+        - path: /v1/codeq
+          pathType: Prefix
+`, opts.Domain)
+	}
+
+	return fmt.Sprintf(`image:
+  repository: %q
+  tag: %q
+  pullPolicy: IfNotPresent
+
+replicaCount: %d
+
+config:
+  env: %q
+  logLevel: %q
+  logFormat: json
+  redisAddr: %q
+  identityServiceUrl: %q
+  workerJwksUrl: %q
+  workerIssuer: %q
+  workerAudience: %q
+  allowProducerAsWorker: %t
+  defaultLeaseSeconds: 300
+  requeueInspectLimit: %d
+  maxAttemptsDefault: 5
+  backoffPolicy: exp_full_jitter
+  backoffBaseSeconds: 5
+  backoffMaxSeconds: 900
+
+secrets:
+  enabled: true
+  webhookHmacSecret: %q
+
+autoscaling:
+  enabled: %t
+  minReplicas: %d
+  maxReplicas: %d
+  targetCPUUtilizationPercentage: %d
+
+resources:
+  requests:
+    cpu: %q
+    memory: %q
+  limits:
+    cpu: %q
+    memory: %q
+
+kvrocks:
+  enabled: %t
+  persistence:
+    enabled: true
+    size: %q
+  resources:
+    requests:
+      cpu: %q
+      memory: %q
+    limits:
+      cpu: %q
+      memory: %q
+
+persistence:
+  artifacts:
+    enabled: %t
+    size: %q
+
+%s
+%s`, imageRepo, imageTag, profile.Replicas, envMode, logLevel, redisAddr,
+		opts.IdentityServiceURL, opts.WorkerJwksURL, opts.WorkerIssuer, emptyOr(opts.WorkerAudience, "codeq-worker"),
+		allowProducerAsWorker, profile.RequeueInspectLimit, opts.WebhookHmacSecret,
+		profile.Name != "dev", profile.MinReplicas, profile.MaxReplicas, profile.TargetCPU,
+		profile.CPURequest, profile.MemoryRequest, profile.CPULimit, profile.MemoryLimit,
+		embeddedKVRocks, profile.KVRocksSize, emptyOr(profile.KVRocksCPURequest, "250m"),
+		emptyOr(profile.KVRocksMemoryRequest, "512Mi"), emptyOr(profile.KVRocksCPULimit, "1"),
+		emptyOr(profile.KVRocksMemoryLimit, "1Gi"), profile.ArtifactsEnabled, emptyOr(profile.ArtifactsSize, "1Gi"),
+		ingressBlock, extraEnv), warnings
+}
+
+func validateExecutableInstall(opts installOptions, profile installProfile) error {
+	if opts.Target == "kubernetes" && isLocalChart(opts.Chart) && !fileExists(filepath.Join(opts.Chart, "Chart.yaml")) {
+		return fmt.Errorf("helm chart not found at %s", opts.Chart)
+	}
+	if profile.DevAuth {
+		return nil
+	}
+	missing := []string{}
+	if strings.Contains(opts.IdentityServiceURL, "example.com") || strings.TrimSpace(opts.IdentityServiceURL) == "" {
+		missing = append(missing, "--identity-service-url")
+	}
+	if strings.Contains(opts.WorkerJwksURL, "example.com") || strings.TrimSpace(opts.WorkerJwksURL) == "" {
+		missing = append(missing, "--worker-jwks-url")
+	}
+	if strings.Contains(opts.WorkerIssuer, "example.com") || strings.TrimSpace(opts.WorkerIssuer) == "" {
+		missing = append(missing, "--worker-issuer")
+	}
+	if opts.Target == "kubernetes" && !profile.EmbeddedKVRocks && strings.TrimSpace(opts.RedisAddr) == "" {
+		missing = append(missing, "--redis-addr")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("refusing --execute with placeholder production settings; provide %s", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+func runInstallCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("empty install command")
+	}
+	proc := exec.CommandContext(ctx, args[0], args[1:]...)
+	proc.Stdout = os.Stdout
+	proc.Stderr = os.Stderr
+	proc.Stdin = os.Stdin
+	return proc.Run()
+}
+
+func printInstallBundle(bundle installBundle, ui *ui) {
+	fmt.Printf("%s Installation bundle written to %s\n", ui.ok("[OK]"), bundle.OutputDir)
+	for _, file := range bundle.Files {
+		fmt.Printf("  %s\n", file)
+	}
+	for _, warning := range bundle.Warnings {
+		fmt.Printf("%s %s\n", ui.warn("[WARN]"), warning)
+	}
+	fmt.Println()
+	if len(bundle.BuildCommand) > 0 {
+		fmt.Println("Build command:")
+		fmt.Printf("  %s\n", shellJoin(bundle.BuildCommand))
+		fmt.Println()
+	}
+	fmt.Println("Next command:")
+	fmt.Printf("  %s\n", shellJoin(bundle.Command))
+}
+
 func workerLoop(ctx context.Context, c *client, events []string, leaseSec int, waitSec int, ackMode string, nackDelay int, ui *ui) {
 	payload := map[string]any{
 		"commands":     events,
@@ -1109,6 +1779,7 @@ Examples:
   codeq task create --event render_video --priority 10 --payload '{"jobId":500}'
   codeq worker start --events render_video --concurrency 5
   codeq queue inspect render_video
+  codeq install --target kubernetes --size small
 
 `, title, configPath())
 }
@@ -1458,6 +2129,98 @@ func prompt(r *bufio.Reader, label, def string) string {
 		return def
 	}
 	return line
+}
+
+func promptChoice(r *bufio.Reader, label, def string, allowed []string) string {
+	allowedSet := map[string]struct{}{}
+	for _, v := range allowed {
+		allowedSet[strings.ToLower(v)] = struct{}{}
+	}
+	for {
+		v := strings.ToLower(strings.TrimSpace(prompt(r, label, def)))
+		if _, ok := allowedSet[v]; ok {
+			return v
+		}
+		fmt.Printf("Choose one of: %s\n", strings.Join(allowed, ", "))
+	}
+}
+
+func promptYesNo(r *bufio.Reader, label string, def bool) bool {
+	defLabel := "n"
+	if def {
+		defLabel = "y"
+	}
+	for {
+		v := strings.ToLower(strings.TrimSpace(prompt(r, label+" (y/n)", defLabel)))
+		switch v {
+		case "y", "yes", "s", "sim", "true", "1":
+			return true
+		case "n", "no", "nao", "false", "0":
+			return false
+		}
+		fmt.Println("Answer y or n.")
+	}
+}
+
+func randomHex(bytesLen int) (string, error) {
+	b := make([]byte, bytesLen)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func envKV(key, value string) string {
+	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, "\r", "")
+	return key + "=" + value
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func isLocalChart(chart string) bool {
+	chart = strings.TrimSpace(chart)
+	if chart == "" {
+		return false
+	}
+	return strings.HasPrefix(chart, ".") || strings.HasPrefix(chart, "/")
+}
+
+func shellJoin(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(arg string) string {
+	if arg == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(arg, " \t\n'\"\\$`!*?[]{}()<>|&;") {
+		return arg
+	}
+	return "'" + strings.ReplaceAll(arg, "'", "'\"'\"'") + "'"
+}
+
+func splitImageRef(image string) (string, string) {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return "ghcr.io/osvaldoandrade/codeq-service", "0.1.0"
+	}
+	if at := strings.LastIndex(image, "@"); at > -1 {
+		return image[:at], image[at+1:]
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon > lastSlash {
+		return image[:lastColon], image[lastColon+1:]
+	}
+	return image, "latest"
 }
 
 func maskToken(v string) string {

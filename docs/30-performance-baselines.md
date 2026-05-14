@@ -242,7 +242,7 @@ Run each scenario with the same parameters documented above and compare:
 
 For automated regression testing, add a workflow step that:
 
-1. Starts KVRocks + codeQ via `docker compose up -d`.
+1. Starts KVRocks + codeQ via the local Compose files in `deploy/docker-compose/local-dev/`.
 2. Runs a representative subset of k6 scenarios (e.g., scenario 01 at reduced rate).
 3. Uses k6 thresholds (already defined in each script) to fail the build on regressions.
 4. Archives k6 JSON output as a workflow artifact for trend analysis.
@@ -252,10 +252,16 @@ Example CI step:
 ```yaml
 - name: Load test (smoke)
   run: |
-    docker compose up -d
+    docker compose \
+      -f deploy/docker-compose/local-dev/compose.yaml \
+      -f deploy/docker-compose/local-dev/compose.override.yaml \
+      up -d
     # Wait for healthcheck
     until curl -sf http://localhost:8080/metrics; do sleep 5; done
-    docker compose --profile loadtest run --rm \
+    docker compose \
+      -f deploy/docker-compose/local-dev/compose.yaml \
+      -f deploy/docker-compose/local-dev/compose.override.yaml \
+      --profile loadtest run --rm \
       -e RATE=100 -e DURATION=30s -e WORKER_VUS=20 \
       k6 run /scripts/01_sustained_throughput.js --out json=results.json
   timeout-minutes: 5

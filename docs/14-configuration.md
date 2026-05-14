@@ -1,5 +1,9 @@
 # Configuration
 
+The canonical file-based example lives at `deploy/config/codeq.example.yml`.
+Docker Compose and Helm examples live under `deploy/docker-compose` and
+`helm/codeq`.
+
 ## Core
 
 - `port` (int): HTTP port, default 8080
