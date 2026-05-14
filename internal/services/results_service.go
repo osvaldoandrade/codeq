@@ -302,11 +302,13 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 		indexMap = append(indexMap, i) // Track original index
 	}
 
-	// Batch save all results (RTT: 1 for all results)
-	for i, rec := range resultRecords {
-		if err := s.repo.SaveResult(ctx, rec); err != nil {
+	// Batch save all results (RTT: 1 for fetching all tasks + 1 for writes = 2 RTTs vs N*2 RTTs)
+	if err := s.repo.BatchSaveResults(ctx, resultRecords); err != nil {
+		// Mark all results as failed
+		for i := range resultRecords {
 			responses[indexMap[i]] = domain.BatchSubmitResponse{TaskID: items[indexMap[i]].TaskID, Error: err.Error()}
 		}
+		return responses, err
 	}
 
 	// Batch update tasks (RTT: 1 for all task updates)
