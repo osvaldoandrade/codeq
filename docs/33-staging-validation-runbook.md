@@ -7,7 +7,7 @@ This runbook describes how to validate codeQ performance in a staging environmen
 | Requirement | Details |
 |---|---|
 | Staging cluster | Docker Compose or Kubernetes deployment matching production topology |
-| k6 | v0.55+ (`docker compose --profile loadtest`) |
+| k6 | v0.55+ via the local Compose `loadtest` profile |
 | Go toolchain | 1.24+ for running Go benchmarks |
 | `benchstat` | `go install golang.org/x/perf/cmd/benchstat@latest` |
 | Monitoring | Prometheus + Grafana (optional but recommended) |
@@ -102,7 +102,10 @@ Expected memory usage per filter:
 ### 5.1 Start Staging Environment
 
 ````bash
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 # Wait for healthcheck
 until curl -sf http://localhost:8080/metrics; do sleep 5; done
 ````
@@ -113,27 +116,45 @@ Run each scenario and compare against the baselines in `docs/30-performance-base
 
 ````bash
 # Scenario 1: Sustained throughput (most representative)
-docker compose --profile loadtest run --rm \
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm \
   k6 run /scripts/01_sustained_throughput.js --out json=results-01.json
 
 # Scenario 2: Burst load
-docker compose --profile loadtest run --rm \
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm \
   k6 run /scripts/02_burst_10k_10s.js --out json=results-02.json
 
 # Scenario 3: Many workers
-docker compose --profile loadtest run --rm \
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm \
   k6 run /scripts/03_many_workers.js --out json=results-03.json
 
 # Scenario 4: Prefill queue
-docker compose --profile loadtest run --rm \
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm \
   k6 run /scripts/04_prefill_queue.js --out json=results-04.json
 
 # Scenario 5: Mixed priorities
-docker compose --profile loadtest run --rm \
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm \
   k6 run /scripts/05_mixed_priorities.js --out json=results-05.json
 
 # Scenario 6: Delayed tasks
-docker compose --profile loadtest run --rm \
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm \
   k6 run /scripts/06_delayed_tasks.js --out json=results-06.json
 ````
 

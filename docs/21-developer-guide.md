@@ -10,10 +10,16 @@ The fastest way to start developing codeQ is using Docker Compose with hot reloa
 # Clone and start all services
 git clone https://github.com/osvaldoandrade/codeq
 cd codeq
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 
 # Watch logs during development
-docker compose logs -f codeq
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  logs -f codeq
 ````
 
 The development environment includes:
@@ -29,13 +35,19 @@ The development environment includes:
 **Run tests inside the container:**
 
 ````bash
-docker compose exec codeq go test ./...
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  exec codeq go test ./...
 ````
 
 **With observability stack (Prometheus + Grafana + Jaeger):**
 
 ````bash
-docker compose --profile obs up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile obs up -d
 ````
 
 For complete details, see [Local Development Guide](22-local-development.md).
@@ -523,7 +535,7 @@ r.Post("/v1/codeq/your-endpoint", controllers.YourNewController(schedulerService
 **Performance and load tests:**
 - **k6 load scenarios**: HTTP-level testing with realistic producer and worker traffic patterns
   - Located in `loadtest/k6/`
-  - Run via Docker Compose: `docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js`
+  - Run via Docker Compose: `docker compose -f deploy/docker-compose/local-dev/compose.yaml -f deploy/docker-compose/local-dev/compose.override.yaml --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js`
   - Six pre-built scenarios covering sustained load, bursts, many workers, queue depth, priorities, and delays
 - **Go benchmarks**: Fast in-memory benchmarks for regression testing
   - Located in `internal/bench/`

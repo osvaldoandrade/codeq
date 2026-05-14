@@ -179,3 +179,75 @@ jobs:
           fi
           git tag "$SDK_TAG"
           git push origin "$SDK_TAG"
+
+  publish-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: ${{ github.repository_owner }}/codeq-service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Compute version
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          echo "version=${VERSION}" >>"$GITHUB_OUTPUT"
+          echo "image_lower=${REGISTRY}/${IMAGE_NAME,,}" >>"$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push codeq-service image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ steps.vars.outputs.version }}
+            COMMIT=${{ github.sha }}
+          tags: |
+            ${{ steps.vars.outputs.image_lower }}:${{ steps.vars.outputs.version }}
+            ${{ steps.vars.outputs.image_lower }}:${{ env.RELEASE_TAG }}
+            ${{ steps.vars.outputs.image_lower }}:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.vars.outputs.version }}
+
+      - name: Ensure package is public (best-effort)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "Skipping: secret GHCR_ADMIN_TOKEN is not set."
+            echo "To auto-publish ghcr.io/${IMAGE_NAME,,} as public, create a PAT with admin:packages and store it as GHCR_ADMIN_TOKEN."
+            exit 0
+          fi
+          gh api -X PATCH \
+            "/user/packages/container/codeq-service" \
+            -f visibility=public

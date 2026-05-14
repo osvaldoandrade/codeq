@@ -444,7 +444,10 @@ To use CodeQ SDK in your own project, add:
 **Solution**: Ensure CodeQ server is running on configured URL:
 ````bash
 cd ../..
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 ````
 
 ### Issue: "Unauthorized" error

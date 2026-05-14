@@ -85,6 +85,41 @@ These flags apply to all commands:
 
 ## Commands
 
+### codeq install
+
+Generate a Docker Compose or Kubernetes/Helm installation bundle.
+
+````bash
+codeq install
+````
+
+Non-interactive examples:
+
+````bash
+codeq install --target docker --size dev --no-prompt
+
+codeq install \
+  --target kubernetes \
+  --size medium \
+  --namespace codeq \
+  --redis-addr kvrocks.prod.svc.cluster.local:6666 \
+  --identity-service-url https://issuer.example.com \
+  --worker-jwks-url https://issuer.example.com/.well-known/jwks.json \
+  --worker-issuer https://issuer.example.com \
+  --no-prompt
+````
+
+**Options:**
+- `--target <docker|kubernetes>`: Installation target
+- `--size <dev|small|medium|large>`: Capacity profile
+- `--output-dir <path>`: Directory for generated files
+- `--execute`: Run `docker compose` or `helm upgrade --install` after generation
+- `--chart <path>`: Helm chart path or reference
+- `--namespace <name>`: Kubernetes namespace
+- `--redis-addr <host:port>`: External KVRocks/Redis address
+
+---
+
 ### codeq init
 
 Initialize or update CLI configuration interactively.

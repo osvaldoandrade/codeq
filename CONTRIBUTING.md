@@ -200,14 +200,23 @@ codeQ includes a comprehensive load testing framework to validate performance an
 
 ````bash
 # Start codeQ and dependencies
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 
 # Run a sustained throughput scenario
-docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 
 # Run with custom parameters
 RATE=1000 DURATION=10m WORKER_VUS=200 \
-  docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+  docker compose \
+    -f deploy/docker-compose/local-dev/compose.yaml \
+    -f deploy/docker-compose/local-dev/compose.override.yaml \
+    --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 ````
 
 **Run Go benchmarks** (fast, in-memory):

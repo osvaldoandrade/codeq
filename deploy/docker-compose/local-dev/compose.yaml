@@ -1,4 +1,4 @@
-version: "3.8"
+name: codeq-dev
 
 services:
   kvrocks:
@@ -13,7 +13,7 @@ services:
     image: golang:1.23
     working_dir: /app
     volumes:
-      - ./:/app
+      - ../../../:/app
     ports:
       - "${CODEQ_PORT:-8080}:8080"
     environment:
@@ -80,7 +80,7 @@ services:
       codeq:
         condition: service_healthy
     volumes:
-      - ./loadtest/k6:/scripts:ro
+      - ../../../loadtest/k6:/scripts:ro
     environment:
       - CODEQ_BASE_URL=http://codeq:8080
       - CODEQ_PRODUCER_TOKEN=${CODEQ_PRODUCER_TOKEN:-dev-token}
@@ -94,7 +94,7 @@ services:
     ports:
       - "${PROMETHEUS_PORT:-9090}:9090"
     volumes:
-      - ./deploy/docker-compose/local-dev/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on:
       - codeq
     restart: unless-stopped
@@ -108,8 +108,8 @@ services:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS:-admin}
     volumes:
-      - ./deploy/docker-compose/local-dev/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./docs/grafana:/var/lib/grafana/dashboards:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../../docs/grafana:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
     restart: unless-stopped

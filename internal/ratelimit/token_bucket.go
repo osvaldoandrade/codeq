@@ -38,6 +38,19 @@ func NewTokenBucketLimiter(rdb *redis.Client) *TokenBucketLimiter {
 	return &TokenBucketLimiter{rdb: rdb}
 }
 
+// PreloadScripts uploads the Lua scripts used by this package to the given Redis-compatible
+// backend (kvrocks) so the hot rate-limit path always hits EVALSHA. Idempotent — safe to
+// call once per backend at startup.
+func PreloadScripts(ctx context.Context, rdb *redis.Client) error {
+	if rdb == nil {
+		return nil
+	}
+	if err := tokenBucketScript.Load(ctx, rdb).Err(); err != nil {
+		return fmt.Errorf("preload tokenBucketScript: %w", err)
+	}
+	return nil
+}
+
 var tokenBucketScript = redis.NewScript(`
 local key = KEYS[1]
 local rate = tonumber(ARGV[1]) -- tokens/sec
@@ -100,6 +113,11 @@ func (l *TokenBucketLimiter) Allow(ctx context.Context, scope string, subject st
 	ttlMS := computeTTLMS(ratePerSec, capacity)
 
 	res, err := tokenBucketScript.Run(ctx, l.rdb, []string{key}, ratePerSec, capacity, nowMS, ttlMS).Result()
+	if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
+		// kvrocks returns "ERR NOSCRIPT ..." which go-redis v8 does not match
+		// against its HasPrefix("NOSCRIPT ") fallback. Force EVAL to load the script.
+		res, err = tokenBucketScript.Eval(ctx, l.rdb, []string{key}, ratePerSec, capacity, nowMS, ttlMS).Result()
+	}
 	if err != nil {
 		return Decision{}, err
 	}

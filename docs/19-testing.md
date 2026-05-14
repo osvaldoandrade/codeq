@@ -287,14 +287,23 @@ A complete k6-based load testing suite is available in `loadtest/k6/` with six p
 
 ````bash
 # Start codeQ with dependencies
-docker compose up -d
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  up -d
 
 # Run a scenario
-docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+docker compose \
+  -f deploy/docker-compose/local-dev/compose.yaml \
+  -f deploy/docker-compose/local-dev/compose.override.yaml \
+  --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 
 # Customize with environment variables
 RATE=1000 DURATION=10m WORKER_VUS=300 \
-  docker compose --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
+  docker compose \
+    -f deploy/docker-compose/local-dev/compose.yaml \
+    -f deploy/docker-compose/local-dev/compose.override.yaml \
+    --profile loadtest run --rm k6 run /scripts/01_sustained_throughput.js
 ````
 
 ### Go Benchmarks

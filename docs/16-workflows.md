@@ -108,7 +108,7 @@ The repository uses GitHub Actions for CI/CD, documentation, code quality, and r
 - Push to `main` branch (with path filters)
   - Go source files (`**.go`, `go.mod`, `go.sum`)
   - Documentation files (`docs/**`, `*.md`)
-  - Configuration files (`docker-compose*.yml`, `Dockerfile`, `.env.example`, `helm/**`)
+  - Configuration files (`deploy/docker-compose/**`, `deploy/config/**`, `Dockerfile`, `.env.example`, `helm/**`)
   - SDK and examples (`sdks/**`, `examples/**`)
   - Workflow file changes
 - Manual workflow dispatch

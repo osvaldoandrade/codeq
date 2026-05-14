@@ -59,6 +59,12 @@ func WithWorkerValidator(validator auth.Validator) ApplicationOption {
 
 func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application, error) {
 	redisClient := providers.NewRedisProvider(cfg.RedisAddr, cfg.RedisPassword)
+	if err := repository.PreloadScripts(context.Background(), redisClient); err != nil {
+		return nil, fmt.Errorf("preload repository scripts: %w", err)
+	}
+	if err := ratelimit.PreloadScripts(context.Background(), redisClient); err != nil {
+		return nil, fmt.Errorf("preload ratelimit scripts: %w", err)
+	}
 	limiter := ratelimit.NewTokenBucketLimiter(redisClient)
 
 	loc, err := time.LoadLocation(cfg.Timezone)
@@ -124,12 +130,16 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 			if poolSize <= 0 {
 				poolSize = 10
 			}
-			clients[name] = redis.NewClient(&redis.Options{
+			client := redis.NewClient(&redis.Options{
 				Addr:     backend.Address,
 				Password: backend.Password,
 				DB:       backend.DB,
 				PoolSize: poolSize,
 			})
+			if err := repository.PreloadScripts(context.Background(), client); err != nil {
+				return nil, fmt.Errorf("preload repository scripts on shard %s: %w", name, err)
+			}
+			clients[name] = client
 		}
 		defaultShard := cfg.Sharding.DefaultShard
 		if defaultShard == "" {
