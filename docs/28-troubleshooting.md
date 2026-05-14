@@ -12,7 +12,40 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 
 ## Common issues
 
-### 1. API returns `503` or does not start
+### 1. API fails to start with "preload repository scripts" error
+
+**Symptoms:** API startup fails with error: `preload repository scripts: ...` or similar.
+
+**Possible causes:**
+- KVRocks is unreachable during startup (connection timeout).
+- KVRocks memory is exhausted and cannot store Lua scripts.
+- Network connectivity issues between API and KVRocks.
+- KVRocks is running an incompatible version.
+
+**Resolution:**
+1. Verify KVRocks is running and reachable: `redis-cli -h <host> -p 6666 ping`.
+2. Check KVRocks memory usage: `redis-cli INFO memory` (look for `used_memory` vs `maxmemory`).
+3. Ensure KVRocks has sufficient memory (scripts are small; typically <5KB total).
+4. Review codeQ startup logs for the full error message.
+5. If necessary, increase KVRocks `maxmemory` or `timeout` settings.
+6. Ensure the API and KVRocks are on compatible versions (codeQ targets KVRocks 2.6+).
+
+### 2. Tasks fail with "NOSCRIPT" errors (visible in logs)
+
+**Symptoms:** Intermittent task claim failures or rate limiter rejections; logs show `NOSCRIPT` or script retry messages.
+
+**Possible causes:**
+- Lua scripts were evicted from KVRocks memory due to memory pressure.
+- Script preload failed silently (this should not happen; check startup logs).
+- KVRocks restarted and lost script cache.
+
+**Resolution:**
+1. This is typically handled automatically: codeQ detects NOSCRIPT and falls back to EVAL (reloading the script).
+2. If failures persist, restart the API to trigger script preloading again.
+3. Increase KVRocks memory to prevent script eviction.
+4. Review KVRocks memory usage and consider persistence tuning.
+
+### 3. API returns `503` or does not start
 
 **Symptoms:** `/healthz` is unreachable or returns an error.
 
@@ -27,7 +60,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 3. Validate `config.yml` syntax with a YAML linter.
 4. Ensure the listen port is not already in use.
 
-### 2. Tasks stuck in ready queue (not being claimed)
+### 4. Tasks stuck in ready queue (not being claimed)
 
 **Symptoms:** `codeq_queue_depth{queue="ready"}` grows while `codeq_task_claimed_total` rate is zero.
 
@@ -41,7 +74,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 2. Check worker logs for connection errors.
 3. Verify network connectivity between worker and API.
 
-### 3. Growing dead-letter queue (DLQ)
+### 5. Growing dead-letter queue (DLQ)
 
 **Symptoms:** `codeq_dlq_depth` increases steadily.
 
@@ -56,7 +89,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 3. Review worker logs at the time tasks failed.
 4. After fixing the root cause, requeue tasks from the DLQ.
 
-### 4. High end-to-end latency
+### 6. High end-to-end latency
 
 **Symptoms:** `histogram_quantile(0.95, ...)` on `codeq_task_processing_latency_seconds` is above expected SLO.
 
@@ -72,7 +105,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 3. Review [Performance Tuning](17-performance-tuning.md) for KVRocks configuration.
 4. Consider reducing `artifactIn` payload size.
 
-### 5. Lease expirations spiking
+### 7. Lease expirations spiking
 
 **Symptoms:** `codeq_lease_expired_total` rate increases.
 
@@ -87,7 +120,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 3. Check worker logs for panics or OOM kills.
 4. Review task processing duration to set an appropriate lease value.
 
-### 6. Webhook delivery failures
+### 8. Webhook delivery failures
 
 **Symptoms:** `codeq_webhook_deliveries_total{outcome="failure"}` rate is high.
 
@@ -103,7 +136,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 3. Review codeQ logs for HTTP response codes from the subscriber.
 4. See [Webhooks](12-webhooks.md) for retry and backoff behavior.
 
-### 7. Rate limit rejections (HTTP 429)
+### 9. Rate limit rejections (HTTP 429)
 
 **Symptoms:** Clients receive `429 Too Many Requests`. `codeq_rate_limit_hits_total` increases.
 
@@ -119,7 +152,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 4. Increase `requestsPerMinute` and `burstSize` if limits are too low.
 5. See [Operations § Rate limiting](10-operations.md#rate-limiting) for best practices.
 
-### 8. Prometheus scrape failures
+### 10. Prometheus scrape failures
 
 **Symptoms:** Gaps in Grafana dashboards. `up{job="codeq"} == 0`.
 
@@ -133,7 +166,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 2. Confirm `prometheus.yml` has the correct `targets` list.
 3. Check network policies / firewall rules between Prometheus and codeQ.
 
-### 9. Tracing spans not appearing
+### 11. Tracing spans not appearing
 
 **Symptoms:** Traces are missing in Jaeger or Tempo.
 
@@ -148,7 +181,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 3. Set `tracingSampleRatio: 1.0` temporarily to verify spans are exported.
 4. See [Operations § Tracing](10-operations.md#tracing-opentelemetry) for configuration.
 
-### 10. Build failure: `bytedance/sonic/loader` undefined symbols
+### 12. Build failure: `bytedance/sonic/loader` undefined symbols
 
 **Symptoms:** Build fails with errors like `undefined: _func`, `undefined: moduledata` in `sonic/loader`.
 
