@@ -169,7 +169,7 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		cfg.BackoffBaseSeconds,
 		cfg.BackoffMaxSeconds,
 	)
-	resultRepo := repository.NewResultRepository(redisClient, loc)
+	resultRepo := repository.NewResultRepository(redisClient, loc, shardSupplier)
 	uploader := providers.NewLocalUploader(cfg.LocalArtifactsDir)
 	resultCallback := services.NewResultCallbackService(
 		logger,

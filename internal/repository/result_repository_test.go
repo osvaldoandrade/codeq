@@ -22,7 +22,7 @@ func setupResultRepo(t *testing.T) (context.Context, *miniredis.Miniredis, *redi
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 
-	repo := NewResultRepository(rdb, time.UTC)
+	repo := NewResultRepository(rdb, time.UTC, nil)
 	taskRepo := NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 
 	return context.Background(), mr, rdb, repo, taskRepo
@@ -236,7 +236,7 @@ func TestResultRepositoryRemoveFromInprogAndClearLease(t *testing.T) {
 	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Remove from in-progress and clear lease
-	err := repo.RemoveFromInprogAndClearLease(ctx, claimed.ID, domain.CmdGenerateMaster)
+	err := repo.RemoveFromInprogAndClearLease(ctx, claimed.ID, domain.CmdGenerateMaster, claimed.TenantID)
 	if err != nil {
 		t.Fatalf("RemoveFromInprogAndClearLease() error = %v", err)
 	}

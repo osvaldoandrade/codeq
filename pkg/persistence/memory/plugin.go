@@ -337,7 +337,7 @@ func (s *resultStorage) UpdateTaskOnComplete(ctx context.Context, taskID string,
 	return nil
 }
 
-func (s *resultStorage) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command) error {
+func (s *resultStorage) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command, tenantID string) error {
 	s.plugin.mu.Lock()
 	defer s.plugin.mu.Unlock()
 

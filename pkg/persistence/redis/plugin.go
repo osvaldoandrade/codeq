@@ -47,7 +47,7 @@ func NewPlugin(config persistence.PluginConfig) (persistence.PluginPersistence, 
 		nil, // uses default shard supplier
 	)
 
-	resultRepo := repository.NewResultRepository(client, config.Timezone)
+	resultRepo := repository.NewResultRepository(client, config.Timezone, nil)
 	subscriptionRepo := repository.NewSubscriptionRepository(client, config.Timezone)
 
 	return &Plugin{

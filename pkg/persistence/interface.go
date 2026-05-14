@@ -89,7 +89,7 @@ type ResultStorage interface {
 	UpdateTaskOnComplete(ctx context.Context, taskID string, status domain.TaskStatus, errorMsg string) error
 
 	// RemoveFromInprogAndClearLease removes task from in-progress and clears lease
-	RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command) error
+	RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command, tenantID string) error
 }
 
 // SubscriptionStorage defines persistence operations for worker subscriptions

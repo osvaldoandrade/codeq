@@ -9,8 +9,9 @@ type TaskCompleteUpdate struct {
 
 // TaskDeleteInfo represents task deletion info for batch cleanup operations
 type TaskDeleteInfo struct {
-	ID      string
-	Command Command
+	ID       string
+	Command  Command
+	TenantID string
 }
 
 // BatchSubmitItem represents a single item in a batch submit request

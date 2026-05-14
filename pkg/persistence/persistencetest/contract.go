@@ -253,7 +253,7 @@ func testResultStorage(t *testing.T, plugin persistence.PluginPersistence) {
 	})
 
 	t.Run("RemoveFromInprogAndClearLease", func(t *testing.T) {
-		err := rs.RemoveFromInprogAndClearLease(ctx, claimed.ID, cmd)
+		err := rs.RemoveFromInprogAndClearLease(ctx, claimed.ID, cmd, claimed.TenantID)
 		if err != nil {
 			t.Fatalf("RemoveFromInprogAndClearLease() error: %v", err)
 		}

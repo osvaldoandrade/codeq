@@ -173,7 +173,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
-	if err := s.repo.RemoveFromInprogAndClearLease(taskCtx, taskID, task.Command); err != nil {
+	if err := s.repo.RemoveFromInprogAndClearLease(taskCtx, taskID, task.Command, task.TenantID); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -296,8 +296,9 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 			ErrorMsg: req.Error,
 		})
 		taskDeletes = append(taskDeletes, domain.TaskDeleteInfo{
-			ID:      item.TaskID,
-			Command: task.Command,
+			ID:       item.TaskID,
+			Command:  task.Command,
+			TenantID: task.TenantID,
 		})
 		indexMap = append(indexMap, i) // Track original index
 	}

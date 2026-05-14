@@ -119,8 +119,8 @@ func (a *resultStorageAdapter) UpdateTaskOnComplete(ctx context.Context, taskID 
 	return a.repo.UpdateTaskOnComplete(ctx, taskID, status, errorMsg)
 }
 
-func (a *resultStorageAdapter) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command) error {
-	return a.repo.RemoveFromInprogAndClearLease(ctx, taskID, cmd)
+func (a *resultStorageAdapter) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command, tenantID string) error {
+	return a.repo.RemoveFromInprogAndClearLease(ctx, taskID, cmd, tenantID)
 }
 
 // subscriptionStorageAdapter adapts repository.SubscriptionRepository to persistence.SubscriptionStorage
