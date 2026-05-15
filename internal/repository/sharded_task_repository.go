@@ -79,6 +79,11 @@ func (s *shardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command,
 	return s.repoForShard(sid).Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 }
 
+func (s *shardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	sid := s.resolveShard(ctx, cmd, tenantID)
+	return s.repoForShard(sid).EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+}
+
 func (s *shardedTaskRepository) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
 	// Try claiming from each command's resolved shard
 	for _, cmd := range commands {
