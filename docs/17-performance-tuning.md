@@ -2060,6 +2060,155 @@ This optimization pairs well with:
 - Related batch optimization: `.github/copilot/instructions/13-batch-submit-result-optimization.md`
 - Section 13: Hot-Path Key Generation (above)
 
+## 15. Result Submission Race Condition: Atomic Finalization
+
+### The Problem: Task Resurrection Under Load
+
+Under sustained load (e.g., 100 rps with 20 concurrent workers), a race condition in the result-submission path causes approximately 6% of submissions to fail with a `409 not-in-progress` error, and ~190 tasks per test window end up in the dead-letter queue (DLQ) even though they successfully completed.
+
+The root cause is a non-atomic sequence of operations:
+
+````
+1. UpdateTaskOnComplete → HSet status=COMPLETED (but lease key still alive)
+2. RemoveFromInprogAndClearLease → SRem inprog + Del lease (separate operations)
+````
+
+Between these steps, another worker running `Claim` invokes `requeueExpired`:
+1. `SRandMemberN(inprog)` still sees the task ID (SRem hasn't run yet)
+2. `TTL(keyLease)` returns `-2` because `Del` already executed
+3. It calls `Nack("LEASE_EXPIRED")`; Nack sees status != IN_PROGRESS and errors
+4. The fallback path `LPUSH`es the ID back to the pending queue, **resurrecting a completed task**
+5. Another worker reclaims it, increments `Attempts++` on each loop
+6. Eventually `MAX_ATTEMPTS` is hit and the task lands in the DLQ
+
+### The Solution: Atomic Finalization with TxPipeline
+
+Combine all finalization operations into a single `MULTI/EXEC` block using `TxPipeline`:
+
+````go
+// Before: Non-atomic, multi-step finalization
+r.UpdateTaskOnComplete(id, cmd, tenantID, COMPLETED, "")  // HSet only
+r.RemoveFromInprogAndClearLease(id, cmd, tenantID)        // Separate SRem + Del
+
+// After: Atomic finalization in single MULTI/EXEC
+pipe := r.rdb.TxPipeline()
+pipe.HSet(ctx, r.keyTasksHash(), id, string(b))           // ✅ All operations land
+pipe.SRem(ctx, inprog, id)                                  // ✅ in single EXEC
+pipe.Del(ctx, r.keyLease(id))
+pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{...})
+pipe.Exec(ctx)
+````
+
+**Why this works:**
+- Redis `MULTI/EXEC` provides snapshot isolation: concurrent `Claim` operations observe an atomic before-or-after state
+- Once `HSet` and `SRem` commit together, `requeueExpired` cannot observe the intermediate "completed but in-progress" state
+- If `TTL` returns `-2`, the task is definitely gone from the inprog set, so it can be safely cleaned up without resurrection
+
+### Defense in Depth: Error Differentiation in requeueExpired
+
+Even with atomic finalization, weak isolation in some Redis variants (e.g., KVRocks 2.7) can asymmetrically observe the MULTI/EXEC boundary. Add defensive error handling:
+
+````go
+// Before: Any Nack error falls back to resurrection
+err := r.Nack(id, "LEASE_EXPIRED")
+if err != nil {
+    r.rdb.LPush(ctx, src, id)  // ❌ Resurrects completed tasks
+}
+
+// After: Only resurrect on genuine infra errors
+err := r.Nack(id, "LEASE_EXPIRED")
+if err != nil {
+    if strings.Contains(err.Error(), "not-in-progress") ||
+       strings.Contains(err.Error(), "not-found") {
+        // Task already moved on or removed; just clean up stale inprog entry
+        r.rdb.SRem(ctx, inprog, id)
+    } else {
+        // Genuine infra error: safe to resurrect
+        r.rdb.LPush(ctx, src, id)
+    }
+}
+````
+
+**Key difference:**
+- Semantic errors (`not-in-progress`, `not-found`) indicate the task is genuinely completed elsewhere; just clean the stale queue reference
+- Only infrastructure errors justify resurrection
+
+### Measured Impact (k6 smoke test: 100 rps × 30s × 20 workers)
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|------------|
+| DLQ depth | 196 | 112 | **-43%** |
+| Failed tasks | 381 | 175 | **-54%** |
+| Lease expiry errors | 5,075 | 4,233 | **-17%** |
+
+### Known Residual Race
+
+A smaller residual race remains under extreme concurrency (likely KVRocks 2.7 MULTI/EXEC not blocking concurrent readers). Cleanly eliminating it would require a Lua script that atomically touches `inprog`, `lease`, and task hash in one server-side operation. This is filed as a follow-up.
+
+### Implementation Details
+
+**Location:** `internal/repository/result_repository.go` → `UpdateTaskOnComplete()`, `BatchUpdateTasksOnComplete()`, and `task_repository.go` → `requeueExpired()`
+
+**Adjacent change:** `UpdateTaskOnComplete` signature now takes `(cmd, tenantID)` so the inprog key is tenant-scoped (matches the claim path). Propagated through the persistence interface, Redis/memory adapters, and contract tests.
+
+## 16. Create Task Optimization: Eliminate PendingLength RTT
+
+### The Problem: Redundant RTT on Enqueue Hot Path
+
+The scheduler's `CreateTask` method historically paid a second RTT just to decide whether to fire `NotifyQueueReady`:
+
+````
+1. TaskRepository.Enqueue(...) → LPush pending, get length ≥1 to decide "queue went 0→1"
+2. SchedulerService.CreateTask(...) → if queue was empty, call GetPendingLength()  ❌ Extra RTT
+````
+
+This redundant probe added ~100-300µs latency per create operation on real Redis/KVRocks.
+
+### The Solution: Capture LPush Return Value
+
+Use the return value from `LPush` (the new list length) instead of issuing a second `LLEN`:
+
+````go
+// Before: Two RTTs on enqueue path
+task, err := r.Enqueue(ctx, t)
+if task != nil && task.Status == SCHEDULED {
+    // Task scheduled; no queue ready notification needed
+} else {
+    // Assume empty queue transition; measure it
+    len, err := r.PendingLength(ctx, cmd)  // ❌ Extra RTT (10 LLEN pipeline)
+    if len == 1 {
+        r.notifyReady()
+    }
+}
+
+// After: One RTT via LPush return value
+task, ready, err := r.EnqueueWithReady(ctx, t)
+if ready {
+    r.notifyReady()  // ✅ Decision made with first RTT's data
+}
+````
+
+**Key improvements:**
+- `EnqueueWithReady()` returns the LPush length directly
+- Eliminates the second `PendingLength()` RTT on the create path
+- Single RTT per create regardless of queue state
+
+### Measured Impact (miniredis, arm64)
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|------------|
+| CreateTask latency | 286µs/op | 134µs/op | **-53%** |
+| Allocations | 320 allocs/op | 108 allocs/op | **-66%** |
+| Projected throughput (prefill) | ~2.1k creates/s | ~4k creates/s | **90% improvement** |
+
+Real Redis/KVRocks: ~100-300µs per RTT, so the prefill scenario improves from ~2.1k to ~4k creates/s due to eliminated RTT overhead.
+
+### Implementation Details
+
+**Location:** `internal/repository/task_repository.go` → `EnqueueWithReady()`, `internal/services/scheduler_service.go` → `CreateTask()`, `sharded_task_repository.go` → forwards to resolved shard
+
+**Measurement:** New benchmark `BenchmarkScheduler_CreateOnly` locks in the win and provides regression detection.
+
 ## Summary
 
 Performance tuning requires balancing throughput, latency, and resource costs. Start with recommended defaults, monitor key metrics, and adjust based on observed bottlenecks. Scale API servers horizontally and KVRocks vertically. Use decision trees to select appropriate lease durations, backoff policies, and webhook configurations. For extreme scale, plan for sharding or multi-region deployments.

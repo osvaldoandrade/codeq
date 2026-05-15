@@ -4,6 +4,8 @@
 
 Each Redis command is linearizable, but workflows span multiple keys without a multi-key transaction. This yields at-least-once delivery and eventual convergence. codeQ favors availability and throughput over global ordering.
 
+**Exception:** Result finalization uses atomic `MULTI/EXEC` (TxPipeline) to prevent task resurrection. See [Performance Tuning § Result Submission Race Condition](17-performance-tuning.md#15-result-submission-race-condition-atomic-finalization) for details.
+
 ## Delivery semantics
 
 - At-least-once delivery: duplicate processing is possible.
@@ -13,7 +15,7 @@ Each Redis command is linearizable, but workflows span multiple keys without a m
 ## Failure windows
 
 - If a crash occurs after the atomic claim move (Lua `RPOP` + `SADD`) and before `SETEX`, the task is stuck in in-progress without a lease. The requeue logic detects missing/expired leases and moves it back to ready.
-- If a crash occurs after result persistence but before list cleanup, the result is authoritative and the list is repaired later.
+- If a crash occurs after result persistence but before atomic finalization (`MULTI/EXEC`), the service will retry the finalization on the next heartbeat or manual recovery. The result is authoritative and the list is repaired atomically.
 
 ## Clocks
 

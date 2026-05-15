@@ -282,7 +282,7 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 - `result_repository.go`: Result storage
   - `SaveResult()`: Store task result (HSET)
   - `GetResult()`: Retrieve task result (HGET)
-  - `UpdateTaskOnComplete()`: Update task status on completion
+  - `UpdateTaskOnComplete()`: Atomically finalize task status, inprog removal, and lease cleanup via MULTI/EXEC to prevent task resurrection under load
   - `RemoveFromInprogAndClearLease()`: Clean up in-progress SET and lease key (SREM + DEL)
 
 - `subscription_repository.go`: Subscription storage
@@ -298,8 +298,11 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
 
 **Example**:
 ````go
-// Enqueue a task
-task, err := taskRepo.Enqueue(ctx, domain.CmdGenerateMaster, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+// Enqueue a task with ready flag to skip PendingLength RTT
+task, ready, err := taskRepo.EnqueueWithReady(ctx, domain.CmdGenerateMaster, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+if ready {
+    notifier.NotifyQueueReady(ctx, domain.CmdGenerateMaster)
+}
 
 // Claim a task (includes inline repair of expired leases via SRANDMEMBER + pipelined TTL)
 task, claimed, err := taskRepo.Claim(ctx, workerID, []domain.Command{domain.CmdGenerateMaster}, leaseSeconds, inspectLimit, maxAttemptsDefault, tenantID)
