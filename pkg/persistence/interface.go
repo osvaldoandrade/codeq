@@ -85,8 +85,8 @@ type ResultStorage interface {
 	// GetResult retrieves a task result by task ID
 	GetResult(ctx context.Context, taskID string) (*domain.ResultRecord, error)
 
-	// UpdateTaskOnComplete updates task status when completed
-	UpdateTaskOnComplete(ctx context.Context, taskID string, status domain.TaskStatus, errorMsg string) error
+	// UpdateTaskOnComplete atomically finalizes a task (status + inprog/lease cleanup)
+	UpdateTaskOnComplete(ctx context.Context, taskID string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error
 
 	// RemoveFromInprogAndClearLease removes task from in-progress and clears lease
 	RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command, tenantID string) error

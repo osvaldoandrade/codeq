@@ -19,7 +19,7 @@ type ResultRepository interface {
 	GetTaskAndResult(ctx context.Context, id string) (*domain.Task, *domain.ResultRecord, error)
 	SaveResult(ctx context.Context, rec domain.ResultRecord) error
 	GetResult(ctx context.Context, id string) (*domain.ResultRecord, error)
-	UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error
+	UpdateTaskOnComplete(ctx context.Context, id string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error
 	RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error
 	DecodeBase64(s string) ([]byte, error)
 	GetTasksBatch(ctx context.Context, ids []string) (map[string]*domain.Task, error)
@@ -161,8 +161,11 @@ func (r *resultRedisRepo) GetTaskAndResult(ctx context.Context, id string) (*dom
 	return &task, &rec, nil
 }
 
-func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error {
-	// Fetch task
+// UpdateTaskOnComplete atomically finalizes a task: status change, inprog
+// removal and lease deletion all land in the same MULTI/EXEC so the
+// claim-time requeue probe cannot observe a "task in inprog with TTL=-2"
+// intermediate state and resurrect a completed task.
+func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error {
 	js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
 	if err == redis.Nil || js == "" {
 		return fmt.Errorf("not-found")
@@ -179,15 +182,19 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 	t.WorkerID = ""
 	t.LeaseUntil = ""
 	t.UpdatedAt = r.now()
+	if errorMsg != "" {
+		t.Error = errorMsg
+	}
 
 	b, _ := sonic.Marshal(t)
 
-	// Pipeline both the task update and TTL bump in single RTT
-	pipe := r.rdb.Pipeline()
+	inprog := r.keyQueueInprog(ctx, cmd, tenantID)
+	pipe := r.rdb.TxPipeline()
 	pipe.HSet(ctx, r.keyTasksHash(), id, string(b))
+	pipe.SRem(ctx, inprog, id)
+	pipe.Del(ctx, r.keyLease(id))
 	pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(r.now().Add(24 * time.Hour).UTC().Unix()), Member: id})
-	_, err = pipe.Exec(ctx)
-	if err != nil {
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("redis pipeline: %w", err)
 	}
 	return nil
@@ -267,8 +274,10 @@ func (r *resultRedisRepo) BatchUpdateTasksOnComplete(ctx context.Context, update
 		return fmt.Errorf("batch fetch tasks: %w", err)
 	}
 
-	// Update all tasks in a single pipelined operation
-	pipe := r.rdb.Pipeline()
+	// Atomic batch finalize: HSet status + SRem inprog + Del lease + ZAdd TTL
+	// for every task, all inside one MULTI/EXEC so the claim-time requeue probe
+	// cannot resurrect a half-completed task.
+	pipe := r.rdb.TxPipeline()
 	ttlTime := r.now().Add(24 * time.Hour).UTC().Unix()
 
 	for _, upd := range updates {
@@ -287,7 +296,10 @@ func (r *resultRedisRepo) BatchUpdateTasksOnComplete(ctx context.Context, update
 		}
 
 		b, _ := sonic.Marshal(task)
+		inprog := r.keyQueueInprog(ctx, task.Command, task.TenantID)
 		pipe.HSet(ctx, r.keyTasksHash(), upd.ID, string(b))
+		pipe.SRem(ctx, inprog, upd.ID)
+		pipe.Del(ctx, r.keyLease(upd.ID))
 		pipe.ZAdd(ctx, r.keyTTLIndex(), &redis.Z{Score: float64(ttlTime), Member: upd.ID})
 	}
 

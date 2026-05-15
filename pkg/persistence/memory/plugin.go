@@ -321,7 +321,7 @@ func (s *resultStorage) GetResult(ctx context.Context, taskID string) (*domain.R
 	return &recCopy, nil
 }
 
-func (s *resultStorage) UpdateTaskOnComplete(ctx context.Context, taskID string, status domain.TaskStatus, errorMsg string) error {
+func (s *resultStorage) UpdateTaskOnComplete(ctx context.Context, taskID string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error {
 	s.plugin.mu.Lock()
 	defer s.plugin.mu.Unlock()
 
@@ -332,7 +332,10 @@ func (s *resultStorage) UpdateTaskOnComplete(ctx context.Context, taskID string,
 
 	task.Status = status
 	task.Error = errorMsg
+	task.WorkerID = ""
+	task.LeaseUntil = ""
 	task.UpdatedAt = time.Now()
+	delete(s.plugin.leases, taskID)
 
 	return nil
 }

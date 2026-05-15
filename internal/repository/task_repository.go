@@ -491,7 +491,18 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 		// Lease expirou -> requeue via delayed (backoff) or DLQ
 		_, _, err := r.Nack(ctx, id, "", delaySeconds, maxAttemptsDefault, "LEASE_EXPIRED")
 		if err != nil {
-			// fallback to pending if nack fails
+			// If the task has already terminated (Submit raced with the TTL probe and
+			// deleted the lease key before we removed the id from inprog), Nack returns
+			// "not-in-progress" / "not-found". Re-enqueueing those would resurrect a
+			// completed task and trigger an attempts-storm into the DLQ. Just clean up
+			// the inprog set entry and move on.
+			msg := err.Error()
+			if strings.Contains(msg, "not-in-progress") || strings.Contains(msg, "not-found") {
+				_ = r.rdb.SRem(ctx, inprog, id).Err()
+				moved++
+				continue
+			}
+			// Genuine infra error: fall back to pending so the task is not lost.
 			if err := r.rdb.SRem(ctx, inprog, id).Err(); err != nil {
 				return moved, fmt.Errorf("SREM inprog: %w", err)
 			}

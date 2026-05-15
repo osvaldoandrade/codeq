@@ -168,12 +168,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		return nil, err
 	}
 
-	if err := s.repo.UpdateTaskOnComplete(taskCtx, taskID, req.Status, req.Error); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
-		return nil, err
-	}
-	if err := s.repo.RemoveFromInprogAndClearLease(taskCtx, taskID, task.Command, task.TenantID); err != nil {
+	if err := s.repo.UpdateTaskOnComplete(taskCtx, taskID, task.Command, task.TenantID, req.Status, req.Error); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -322,13 +317,8 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 		}
 	}
 
-	// Batch cleanup (RTT: 1 for all cleanup)
-	if len(taskDeletes) > 0 {
-		if err := s.repo.BatchRemoveFromInprogAndClearLease(ctx, taskDeletes); err != nil {
-			s.logger.Error("batch cleanup failed", "error", err)
-			// Don't fail here as tasks are already marked complete
-		}
-	}
+	// inprog removal + lease deletion are part of BatchUpdateTasksOnComplete's
+	// TxPipeline (kept atomic to avoid resurrection by the claim-time requeue probe).
 
 	// Populate successful responses
 	for i := range resultRecords {
