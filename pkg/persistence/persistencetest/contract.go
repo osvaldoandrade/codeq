@@ -246,7 +246,7 @@ func testResultStorage(t *testing.T, plugin persistence.PluginPersistence) {
 	})
 
 	t.Run("UpdateTaskOnComplete", func(t *testing.T) {
-		err := rs.UpdateTaskOnComplete(ctx, claimed.ID, domain.StatusCompleted, "")
+		err := rs.UpdateTaskOnComplete(ctx, claimed.ID, claimed.Command, claimed.TenantID, domain.StatusCompleted, "")
 		if err != nil {
 			t.Fatalf("UpdateTaskOnComplete() error: %v", err)
 		}

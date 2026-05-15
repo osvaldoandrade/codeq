@@ -32,6 +32,10 @@ const (
 
 type TaskRepository interface {
 	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
+	// EnqueueWithReady behaves like Enqueue but also reports whether this insert just
+	// transitioned the immediate pending queue (cmd, priority, tenant, shard) from 0→1.
+	// Callers use this to fire NotifyQueueReady without paying an extra RTT to LLEN the queue.
+	EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
 	Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error)
 	Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error
 	Abandon(ctx context.Context, taskID string, workerID string) error
@@ -242,6 +246,11 @@ func (r *taskRedisRepo) removeTaskFully(ctx context.Context, id string) error {
 // ===== Implementação =====
 
 func (r *taskRedisRepo) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+	return task, err
+}
+
+func (r *taskRedisRepo) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	if strings.TrimSpace(idempotencyKey) != "" {
 		return r.enqueueIdempotent(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 	}
@@ -249,7 +258,7 @@ func (r *taskRedisRepo) Enqueue(ctx context.Context, cmd domain.Command, payload
 	return r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
 }
 
-func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	idKey := r.keyIdempotency(idempotencyKey)
 
 	// Fast path: if the key is definitely not present per local Bloom filter, skip the Redis GET.
@@ -257,16 +266,16 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 		id := uuid.NewString()
 		ok, err := r.rdb.SetNX(ctx, idKey, id, taskRetention).Result()
 		if err != nil {
-			return nil, fmt.Errorf("redis SETNX idempotency: %w", err)
+			return nil, false, fmt.Errorf("redis SETNX idempotency: %w", err)
 		}
 		if ok {
 			r.idempoBloom.Add(idempotencyKey)
-			task, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+			task, ready, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
 			if err != nil {
 				_ = r.rdb.Del(ctx, idKey).Err()
-				return nil, err
+				return nil, false, err
 			}
-			return task, nil
+			return task, ready, nil
 		}
 		// SETNX failed, so the idempotency key already exists in Redis; record it in the Bloom filter
 		// to avoid repeatedly taking the fast path on subsequent requests.
@@ -279,14 +288,14 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 			if r.idempoBloom != nil {
 				r.idempoBloom.Add(idempotencyKey)
 			}
-			return task, nil
+			return task, false, nil
 		}
 		_ = r.rdb.Del(ctx, idKey).Err()
 	}
 	id := uuid.NewString()
 	ok, err := r.rdb.SetNX(ctx, idKey, id, taskRetention).Result()
 	if err != nil {
-		return nil, fmt.Errorf("redis SETNX idempotency: %w", err)
+		return nil, false, fmt.Errorf("redis SETNX idempotency: %w", err)
 	}
 	if !ok {
 		if existingID, err := r.rdb.Get(ctx, idKey).Result(); err == nil && existingID != "" {
@@ -294,23 +303,23 @@ func (r *taskRedisRepo) enqueueIdempotent(ctx context.Context, cmd domain.Comman
 				if r.idempoBloom != nil {
 					r.idempoBloom.Add(idempotencyKey)
 				}
-				return task, nil
+				return task, false, nil
 			}
 		}
-		return nil, fmt.Errorf("idempotency conflict")
+		return nil, false, fmt.Errorf("idempotency conflict")
 	}
-	task, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+	task, ready, err := r.enqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
 	if err != nil {
 		_ = r.rdb.Del(ctx, idKey).Err()
-		return nil, err
+		return nil, false, err
 	}
 	if r.idempoBloom != nil {
 		r.idempoBloom.Add(idempotencyKey)
 	}
-	return task, nil
+	return task, ready, nil
 }
 
-func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	now := r.now()
 	priority = normalizePriority(priority)
 	scheduled := !visibleAt.IsZero() && visibleAt.After(now)
@@ -353,17 +362,18 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 
 	// Add to queue (either pending or delayed)
 	sid := r.currentShard(ctx, cmd, tenantID)
+	var pushCmd *redis.IntCmd
 	if scheduled {
 		visibleAtUnix := visibleAt.UTC().Unix()
 		pipe.ZAdd(ctx, r.keyQueueDelayed(cmd, tenantID, sid), &redis.Z{Score: float64(visibleAtUnix), Member: id})
 	} else {
-		pipe.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID, sid), id)
+		pushCmd = pipe.LPush(ctx, r.keyQueuePending(cmd, priority, tenantID, sid), id)
 	}
 
 	// Execute all operations in a single round-trip
 	cmds, err := pipe.Exec(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("redis pipeline enqueue: %w", err)
+		return nil, false, fmt.Errorf("redis pipeline enqueue: %w", err)
 	}
 
 	// Validate that all three commands succeeded
@@ -371,20 +381,25 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 		if cmd.Err() != nil {
 			switch i {
 			case 0:
-				return nil, fmt.Errorf("redis HSET task: %w", cmd.Err())
+				return nil, false, fmt.Errorf("redis HSET task: %w", cmd.Err())
 			case 1:
-				return nil, fmt.Errorf("redis ZADD ttl-index: %w", cmd.Err())
+				return nil, false, fmt.Errorf("redis ZADD ttl-index: %w", cmd.Err())
 			case 2:
 				if scheduled {
-					return nil, fmt.Errorf("redis ZADD delayed: %w", cmd.Err())
+					return nil, false, fmt.Errorf("redis ZADD delayed: %w", cmd.Err())
 				}
-				return nil, fmt.Errorf("redis LPUSH queue: %w", cmd.Err())
+				return nil, false, fmt.Errorf("redis LPUSH queue: %w", cmd.Err())
 			}
 		}
 	}
 
+	// LPush returns the new length of the list; len==1 means this priority list just
+	// transitioned from empty to non-empty and subscribers should be woken up. This
+	// replaces a separate LLEN/PendingLength round-trip on the create hot path.
+	ready := !scheduled && pushCmd != nil && pushCmd.Val() == 1
+
 	metrics.TaskCreatedTotal.WithLabelValues(string(cmd)).Inc()
-	return &task, nil
+	return &task, ready, nil
 }
 
 // claimMoveScript atomically pops one ID from the pending list and tracks it in the in-progress set.
@@ -491,7 +506,18 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 		// Lease expirou -> requeue via delayed (backoff) or DLQ
 		_, _, err := r.Nack(ctx, id, "", delaySeconds, maxAttemptsDefault, "LEASE_EXPIRED")
 		if err != nil {
-			// fallback to pending if nack fails
+			// If the task has already terminated (Submit raced with the TTL probe and
+			// deleted the lease key before we removed the id from inprog), Nack returns
+			// "not-in-progress" / "not-found". Re-enqueueing those would resurrect a
+			// completed task and trigger an attempts-storm into the DLQ. Just clean up
+			// the inprog set entry and move on.
+			msg := err.Error()
+			if strings.Contains(msg, "not-in-progress") || strings.Contains(msg, "not-found") {
+				_ = r.rdb.SRem(ctx, inprog, id).Err()
+				moved++
+				continue
+			}
+			// Genuine infra error: fall back to pending so the task is not lost.
 			if err := r.rdb.SRem(ctx, inprog, id).Err(); err != nil {
 				return moved, fmt.Errorf("SREM inprog: %w", err)
 			}

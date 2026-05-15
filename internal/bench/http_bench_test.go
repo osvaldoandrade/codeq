@@ -159,6 +159,27 @@ func BenchmarkHTTP_CreateClaimComplete(b *testing.B) {
 	}
 }
 
+func BenchmarkScheduler_CreateOnly(b *testing.B) {
+	a := newBenchApp(b)
+	ctx := context.Background()
+
+	// Keep the priority queue non-empty so the notify side-effect stays a no-op
+	// after the first iteration. This isolates the cost of CreateTask itself
+	// (the put hot path) from the notifier fanout cost.
+	_, err := a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"bench":true}`, 0, "", 0, "", time.Time{}, 0, benchTenant)
+	if err != nil {
+		b.Fatalf("prefill CreateTask: %v", err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"bench":true}`, 0, "", 0, "", time.Time{}, 0, benchTenant)
+		if err != nil {
+			b.Fatalf("CreateTask: %v", err)
+		}
+	}
+}
+
 func BenchmarkScheduler_CreateClaimComplete(b *testing.B) {
 	a := newBenchApp(b)
 	ctx := context.Background()

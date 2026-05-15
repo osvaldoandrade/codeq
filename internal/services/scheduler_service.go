@@ -110,20 +110,18 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 		visibleAt = s.now().Add(time.Duration(delaySeconds) * time.Second)
 	}
 
-	task, err := s.repo.Enqueue(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+	task, ready, err := s.repo.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
 	}
 	span.SetAttributes(attribute.String("codeq.task_id", task.ID))
-	if s.notifier != nil {
-		// Only notify for immediate tasks (scheduled tasks are placed into delayed ZSET).
-		if visibleAt.IsZero() || !visibleAt.After(s.now()) {
-			if depth, err := s.repo.PendingLength(ctx, cmd); err == nil && depth == 1 {
-				s.notifier.NotifyQueueReady(ctx, cmd)
-			}
-		}
+	if s.notifier != nil && ready {
+		// `ready` is true only when this insert transitioned the priority queue from 0→1
+		// (immediate tasks only). The signal comes from the LPush result inside the enqueue
+		// pipeline, so we no longer pay a separate LLEN RTT on the create hot path.
+		s.notifier.NotifyQueueReady(ctx, cmd)
 	}
 	return task, nil
 }

@@ -195,7 +195,7 @@ func TestResultRepositoryUpdateTaskOnComplete(t *testing.T) {
 	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Update task on complete
-	err := repo.UpdateTaskOnComplete(ctx, claimed.ID, domain.StatusCompleted, "")
+	err := repo.UpdateTaskOnComplete(ctx, claimed.ID, claimed.Command, claimed.TenantID, domain.StatusCompleted, "")
 	if err != nil {
 		t.Fatalf("UpdateTaskOnComplete() error = %v", err)
 	}
@@ -215,7 +215,7 @@ func TestResultRepositoryUpdateTaskOnCompleteFailed(t *testing.T) {
 	claimed, _, _ := taskRepo.Claim(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 50, 5, "")
 
 	// Update task on failure
-	err := repo.UpdateTaskOnComplete(ctx, claimed.ID, domain.StatusFailed, "test error")
+	err := repo.UpdateTaskOnComplete(ctx, claimed.ID, claimed.Command, claimed.TenantID, domain.StatusFailed, "test error")
 	if err != nil {
 		t.Fatalf("UpdateTaskOnComplete() error = %v", err)
 	}

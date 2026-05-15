@@ -115,8 +115,8 @@ func (a *resultStorageAdapter) GetResult(ctx context.Context, taskID string) (*d
 	return a.repo.GetResult(ctx, taskID)
 }
 
-func (a *resultStorageAdapter) UpdateTaskOnComplete(ctx context.Context, taskID string, status domain.TaskStatus, errorMsg string) error {
-	return a.repo.UpdateTaskOnComplete(ctx, taskID, status, errorMsg)
+func (a *resultStorageAdapter) UpdateTaskOnComplete(ctx context.Context, taskID string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error {
+	return a.repo.UpdateTaskOnComplete(ctx, taskID, cmd, tenantID, status, errorMsg)
 }
 
 func (a *resultStorageAdapter) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command, tenantID string) error {
