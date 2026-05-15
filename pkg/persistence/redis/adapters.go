@@ -90,8 +90,8 @@ func (a *taskStorageAdapter) QueueLength(ctx context.Context, cmd domain.Command
 	return a.repo.PendingLength(ctx, cmd)
 }
 
-func (a *taskStorageAdapter) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
-	return a.repo.QueueStats(ctx, cmd)
+func (a *taskStorageAdapter) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
+	return a.repo.QueueStats(ctx, cmd, tenantID)
 }
 
 func (a *taskStorageAdapter) AdminQueues(ctx context.Context) (map[string]any, error) {
@@ -119,8 +119,8 @@ func (a *resultStorageAdapter) UpdateTaskOnComplete(ctx context.Context, taskID 
 	return a.repo.UpdateTaskOnComplete(ctx, taskID, status, errorMsg)
 }
 
-func (a *resultStorageAdapter) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command) error {
-	return a.repo.RemoveFromInprogAndClearLease(ctx, taskID, cmd)
+func (a *resultStorageAdapter) RemoveFromInprogAndClearLease(ctx context.Context, taskID string, cmd domain.Command, tenantID string) error {
+	return a.repo.RemoveFromInprogAndClearLease(ctx, taskID, cmd, tenantID)
 }
 
 // subscriptionStorageAdapter adapts repository.SubscriptionRepository to persistence.SubscriptionStorage

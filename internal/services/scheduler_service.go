@@ -27,7 +27,7 @@ type SchedulerService interface {
 	NackTask(ctx context.Context, taskID, workerID string, delaySeconds int, reason string) (int, bool, error)
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
-	QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error)
+	QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error)
 
 	// Novo: limpeza administrativa por índice Z
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
@@ -218,8 +218,8 @@ func (s *schedulerService) AdminQueues(ctx context.Context) (map[string]any, err
 	return s.repo.AdminQueues(ctx)
 }
 
-func (s *schedulerService) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
-	return s.repo.QueueStats(ctx, cmd)
+func (s *schedulerService) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
+	return s.repo.QueueStats(ctx, cmd, tenantID)
 }
 
 func (s *schedulerService) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {

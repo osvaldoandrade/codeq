@@ -40,7 +40,7 @@ type TaskRepository interface {
 	PendingLength(ctx context.Context, cmd domain.Command) (int64, error)
 	Get(ctx context.Context, taskID string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
-	QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error)
+	QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error)
 
 	// Novo: limpeza administrativa por índice Z (sem custo no Claim/Get)
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
@@ -1075,25 +1075,25 @@ func (r *taskRedisRepo) AdminQueues(ctx context.Context) (map[string]any, error)
 	return out, nil
 }
 
-func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
-	sid := r.currentShard(ctx, cmd, "")
+func (r *taskRedisRepo) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
+	sid := r.currentShard(ctx, cmd, tenantID)
 
 	// Build pipeline for all queue size queries
 	pipe := r.rdb.Pipeline()
 
 	// Pending queues for all priorities
 	for p := maxPriority; p >= minPriority; p-- {
-		pipe.LLen(ctx, r.keyQueuePending(cmd, p, "", sid))
+		pipe.LLen(ctx, r.keyQueuePending(cmd, p, tenantID, sid))
 	}
 
 	// In-progress queue
-	pipe.SCard(ctx, r.keyQueueInprog(cmd, "", sid))
+	pipe.SCard(ctx, r.keyQueueInprog(cmd, tenantID, sid))
 
 	// Delayed queue
-	pipe.ZCard(ctx, r.keyQueueDelayed(cmd, "", sid))
+	pipe.ZCard(ctx, r.keyQueueDelayed(cmd, tenantID, sid))
 
 	// DLQ
-	pipe.SCard(ctx, r.keyQueueDLQ(cmd, "", sid))
+	pipe.SCard(ctx, r.keyQueueDLQ(cmd, tenantID, sid))
 
 	// Execute all commands in single RTT
 	results, err := pipe.Exec(ctx)

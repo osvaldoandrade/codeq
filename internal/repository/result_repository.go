@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/internal/shard"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/bytedance/sonic"
@@ -19,7 +20,7 @@ type ResultRepository interface {
 	SaveResult(ctx context.Context, rec domain.ResultRecord) error
 	GetResult(ctx context.Context, id string) (*domain.ResultRecord, error)
 	UpdateTaskOnComplete(ctx context.Context, id string, status domain.TaskStatus, errorMsg string) error
-	RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command) error
+	RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error
 	DecodeBase64(s string) ([]byte, error)
 	GetTasksBatch(ctx context.Context, ids []string) (map[string]*domain.Task, error)
 	BatchUpdateTasksOnComplete(ctx context.Context, updates []domain.TaskCompleteUpdate) error
@@ -27,12 +28,16 @@ type ResultRepository interface {
 }
 
 type resultRedisRepo struct {
-	rdb *redis.Client
-	tz  *time.Location
+	rdb           *redis.Client
+	tz            *time.Location
+	shardSupplier domain.ShardSupplier
 }
 
-func NewResultRepository(rdb *redis.Client, tz *time.Location) ResultRepository {
-	return &resultRedisRepo{rdb: rdb, tz: tz}
+func NewResultRepository(rdb *redis.Client, tz *time.Location, shardSupplier domain.ShardSupplier) ResultRepository {
+	if shardSupplier == nil {
+		shardSupplier = shard.NewDefaultShardSupplier()
+	}
+	return &resultRedisRepo{rdb: rdb, tz: tz, shardSupplier: shardSupplier}
 }
 
 func (r *resultRedisRepo) keyTasksHash() string   { return "codeq:tasks" }
@@ -41,8 +46,9 @@ func (r *resultRedisRepo) keyTTLIndex() string    { return "codeq:tasks:ttl" }
 func (r *resultRedisRepo) keyLease(id string) string {
 	return "codeq:lease:" + id
 }
-func (r *resultRedisRepo) keyQueueInprog(cmd domain.Command) string {
-	return "codeq:q:" + strings.ToLower(string(cmd)) + ":inprog"
+func (r *resultRedisRepo) keyQueueInprog(ctx context.Context, cmd domain.Command, tenantID string) string {
+	sid, _ := r.shardSupplier.CurrentShard(ctx, string(cmd), tenantID)
+	return shard.QueueKeyInProgress(string(cmd), tenantID, sid)
 }
 
 func (r *resultRedisRepo) now() time.Time { return time.Now().In(r.tz) }
@@ -187,8 +193,8 @@ func (r *resultRedisRepo) UpdateTaskOnComplete(ctx context.Context, id string, s
 	return nil
 }
 
-func (r *resultRedisRepo) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command) error {
-	inprog := r.keyQueueInprog(cmd)
+func (r *resultRedisRepo) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error {
+	inprog := r.keyQueueInprog(ctx, cmd, tenantID)
 
 	// Pipeline both cleanup operations in single RTT
 	pipe := r.rdb.Pipeline()
@@ -299,17 +305,23 @@ func (r *resultRedisRepo) BatchRemoveFromInprogAndClearLease(ctx context.Context
 		return nil
 	}
 
-	// Group by command to minimize Redis commands
-	cmdGroups := make(map[domain.Command][]string)
+	// Group by command + tenant to minimize Redis commands while keeping the
+	// in-progress key tenant-scoped (matches the claim path's key layout).
+	type inprogGroup struct {
+		cmd      domain.Command
+		tenantID string
+	}
+	cmdGroups := make(map[inprogGroup][]string)
 	for _, del := range deletes {
-		cmdGroups[del.Command] = append(cmdGroups[del.Command], del.ID)
+		g := inprogGroup{cmd: del.Command, tenantID: del.TenantID}
+		cmdGroups[g] = append(cmdGroups[g], del.ID)
 	}
 
 	// Pipeline all deletions
 	pipe := r.rdb.Pipeline()
-	for cmd, ids := range cmdGroups {
-		inprog := r.keyQueueInprog(cmd)
-		// Remove all IDs from in-progress set for this command
+	for g, ids := range cmdGroups {
+		inprog := r.keyQueueInprog(ctx, g.cmd, g.tenantID)
+		// Remove all IDs from in-progress set for this command + tenant
 		for _, id := range ids {
 			pipe.SRem(ctx, inprog, id)
 			pipe.Del(ctx, r.keyLease(id))

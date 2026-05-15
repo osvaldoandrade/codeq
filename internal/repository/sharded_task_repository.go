@@ -303,8 +303,8 @@ func (s *shardedTaskRepository) AdminQueues(ctx context.Context) (map[string]any
 	return merged, nil
 }
 
-func (s *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
-	shards, err := s.shardSupplier.QueueShards(ctx, string(cmd), "")
+func (s *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
+	shards, err := s.shardSupplier.QueueShards(ctx, string(cmd), tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +322,7 @@ func (s *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Comma
 	for _, sid := range shards {
 		sid := sid
 		go func() {
-			stats, err := s.repoForShard(sid).QueueStats(ctx, cmd)
+			stats, err := s.repoForShard(sid).QueueStats(ctx, cmd, tenantID)
 			resultChan <- statsResult{stats: stats, err: err}
 		}()
 	}

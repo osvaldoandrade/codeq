@@ -445,7 +445,7 @@ func TestQueueStats(t *testing.T) {
 	_, _ = svc.CreateTask(ctx, domain.CmdGenerateMaster, `{"key":"value"}`, 5, "", 3, "", time.Time{}, 0, "")
 
 	// Get stats
-	stats, err := svc.QueueStats(ctx, domain.CmdGenerateMaster)
+	stats, err := svc.QueueStats(ctx, domain.CmdGenerateMaster, "")
 
 	if err != nil {
 		t.Fatalf("QueueStats failed: %v", err)

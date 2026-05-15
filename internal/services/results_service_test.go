@@ -40,7 +40,7 @@ func TestNewResultsService(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
 
-	repo := repository.NewResultRepository(rdb, time.UTC)
+	repo := repository.NewResultRepository(rdb, time.UTC, nil)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
@@ -58,7 +58,7 @@ func TestResultsServiceGetTaskNotFound(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	defer rdb.Close()
 
-	repo := repository.NewResultRepository(rdb, time.UTC)
+	repo := repository.NewResultRepository(rdb, time.UTC, nil)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
@@ -85,7 +85,7 @@ func TestResultsServiceGetResultNotFound(t *testing.T) {
 	taskRepo := repository.NewTaskRepository(rdb, time.UTC, "exp_full_jitter", 1, 10, nil)
 	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", time.Time{}, "")
 
-	repo := repository.NewResultRepository(rdb, time.UTC)
+	repo := repository.NewResultRepository(rdb, time.UTC, nil)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
@@ -122,7 +122,7 @@ func TestResultsServiceBatchSubmit(t *testing.T) {
 	_, _, _ = taskRepo.Claim(context.Background(), "worker1", cmds, 30, 1, 5, "")
 	_, _, _ = taskRepo.Claim(context.Background(), "worker1", cmds, 30, 1, 5, "")
 
-	resultRepo := repository.NewResultRepository(rdb, time.UTC)
+	resultRepo := repository.NewResultRepository(rdb, time.UTC, nil)
 	uploader := &mockResultsUploader{}
 	logger := slog.Default()
 	now := func() time.Time { return time.Now() }
