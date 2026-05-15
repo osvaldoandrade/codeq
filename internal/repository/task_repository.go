@@ -464,7 +464,7 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 
 	// Optimization: Batch HGet all task JSON upfront instead of N sequential HGet calls
 	// This reduces RTTs from N to 1 for fetching task metadata (80%+ improvement for 10+ expired tasks)
-	expiredIDs := make([]string, 0)
+	expiredIDs := make([]string, 0, len(ids))
 	for i, id := range ids {
 		ttl, err := ttlCmds[i].Result()
 		if err != nil && err != redis.Nil {

@@ -66,16 +66,14 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		return nil, fmt.Errorf("not-in-progress")
 	}
 
-	var outs []domain.ArtifactOut
-	var outsMu sync.Mutex
+	// Pre-allocate outs with capacity to avoid lock contention during appends
+	outs := make([]domain.ArtifactOut, 0, len(req.Artifacts))
 
 	// First pass: collect artifacts to upload and existing artifacts with URLs
 	var toUpload []domain.ArtifactIn
 	for _, a := range req.Artifacts {
 		if a.URL != "" {
-			outsMu.Lock()
 			outs = append(outs, domain.ArtifactOut{Name: a.Name, URL: a.URL})
-			outsMu.Unlock()
 			continue
 		}
 		if a.ContentBase64 == "" {
@@ -85,9 +83,11 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 	}
 
 	// Second pass: decode and upload artifacts concurrently (max 5 concurrent uploads)
+	// Use a channel to collect results instead of lock-protected slice append
 	if len(toUpload) > 0 {
 		sem := make(chan struct{}, 5)
 		var wg sync.WaitGroup
+		uploadResults := make(chan domain.ArtifactOut, len(toUpload))
 		var uploadErr error
 		var errMu sync.Mutex
 
@@ -125,16 +125,20 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 					return
 				}
 
-				outsMu.Lock()
-				outs = append(outs, domain.ArtifactOut{Name: artifact.Name, URL: url})
-				outsMu.Unlock()
+				uploadResults <- domain.ArtifactOut{Name: artifact.Name, URL: url}
 			}(a)
 		}
 
 		wg.Wait()
+		close(uploadResults)
 		if uploadErr != nil {
 			span.SetStatus(codes.Error, uploadErr.Error())
 			return nil, uploadErr
+		}
+
+		// Collect results from channel after all goroutines complete
+		for result := range uploadResults {
+			outs = append(outs, result)
 		}
 	}
 
