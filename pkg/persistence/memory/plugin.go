@@ -249,7 +249,7 @@ func (s *taskStorage) QueueLength(ctx context.Context, cmd domain.Command) (int6
 	return int64(len(s.plugin.queues[cmd])), nil
 }
 
-func (s *taskStorage) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
+func (s *taskStorage) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
 	s.plugin.mu.RLock()
 	defer s.plugin.mu.RUnlock()
 

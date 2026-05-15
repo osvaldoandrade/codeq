@@ -601,7 +601,7 @@ func TestDLQMigrationVerificationChecklist(t *testing.T) {
 	}
 
 	// Verification 5: QueueStats reflects in-progress task.
-	stats, err := repo.QueueStats(ctx, cmd)
+	stats, err := repo.QueueStats(ctx, cmd, "")
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}

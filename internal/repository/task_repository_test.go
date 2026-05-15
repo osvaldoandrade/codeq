@@ -504,7 +504,7 @@ func TestQueueStats(t *testing.T) {
 		t.Fatalf("enqueue: %v", err)
 	}
 
-	stats, err := repo.QueueStats(ctx, cmd)
+	stats, err := repo.QueueStats(ctx, cmd, "")
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}

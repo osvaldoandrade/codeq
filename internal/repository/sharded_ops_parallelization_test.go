@@ -94,7 +94,7 @@ func TestShardedOperationsParallelization(t *testing.T) {
 
 	// Test 2: QueueStats should parallelize
 	t.Run("QueueStats parallelization", func(t *testing.T) {
-		stats, err := shardedRepo.QueueStats(ctx, domain.CmdGenerateMaster)
+		stats, err := shardedRepo.QueueStats(ctx, domain.CmdGenerateMaster, "")
 		if err != nil {
 			t.Fatalf("QueueStats failed: %v", err)
 		}
@@ -170,7 +170,7 @@ func TestShardedOperationsPerformance(t *testing.T) {
 	t.Logf("PendingLength across %d shards took %v", numShards, elapsed)
 
 	start = time.Now()
-	stats, err := shardedRepo.QueueStats(ctx, domain.CmdGenerateMaster)
+	stats, err := shardedRepo.QueueStats(ctx, domain.CmdGenerateMaster, "")
 	elapsed = time.Since(start)
 
 	if err != nil {
@@ -282,8 +282,8 @@ func (tr *trackingRepository) AdminQueues(ctx context.Context) (map[string]any, 
 	return tr.repo.AdminQueues(ctx)
 }
 
-func (tr *trackingRepository) QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error) {
-	return tr.repo.QueueStats(ctx, cmd)
+func (tr *trackingRepository) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
+	return tr.repo.QueueStats(ctx, cmd, tenantID)
 }
 
 func (tr *trackingRepository) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {

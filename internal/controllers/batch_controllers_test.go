@@ -51,7 +51,7 @@ func (m *mockSchedulerService) GetTask(context.Context, string) (*domain.Task, e
 func (m *mockSchedulerService) AdminQueues(context.Context) (map[string]any, error) {
 	return nil, nil
 }
-func (m *mockSchedulerService) QueueStats(context.Context, domain.Command) (*domain.QueueStats, error) {
+func (m *mockSchedulerService) QueueStats(context.Context, domain.Command, string) (*domain.QueueStats, error) {
 	return nil, nil
 }
 func (m *mockSchedulerService) CleanupExpired(context.Context, int, time.Time) (int, error) {

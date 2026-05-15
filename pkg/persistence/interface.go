@@ -68,7 +68,7 @@ type TaskStorage interface {
 	QueueLength(ctx context.Context, cmd domain.Command) (int64, error)
 
 	// QueueStats returns detailed statistics for a queue
-	QueueStats(ctx context.Context, cmd domain.Command) (*domain.QueueStats, error)
+	QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error)
 
 	// AdminQueues returns administrative view of all queues
 	AdminQueues(ctx context.Context) (map[string]any, error)

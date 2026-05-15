@@ -146,7 +146,7 @@ func testTaskStorage(t *testing.T, plugin persistence.PluginPersistence) {
 			t.Fatalf("EnqueueTask() error: %v", err)
 		}
 
-		stats, err := ts.QueueStats(ctx, cmd)
+		stats, err := ts.QueueStats(ctx, cmd, "")
 		if err != nil {
 			t.Fatalf("QueueStats() error: %v", err)
 		}

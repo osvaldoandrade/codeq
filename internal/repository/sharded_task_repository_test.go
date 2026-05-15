@@ -281,7 +281,7 @@ func TestShardedTaskRepository_QueueStatsAggregatesAcrossShards(t *testing.T) {
 		}
 	}
 
-	stats, err := repo.QueueStats(ctx, domain.CmdGenerateMaster)
+	stats, err := repo.QueueStats(ctx, domain.CmdGenerateMaster, "")
 	if err != nil {
 		t.Fatalf("queue stats: %v", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
@@ -22,7 +23,7 @@ func (h *queueStatsController) Handle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "command is required"})
 		return
 	}
-	out, err := h.svc.QueueStats(c.Request.Context(), domain.Command(cmd))
+	out, err := h.svc.QueueStats(c.Request.Context(), domain.Command(cmd), middleware.GetTenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
