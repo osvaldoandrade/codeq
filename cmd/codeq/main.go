@@ -1415,9 +1415,13 @@ func renderDockerInstallEnv(opts installOptions, profile installProfile) string 
 		workerIssuer = ""
 		allowProducerAsWorker = "true"
 		producerAuthProvider = "static"
-		producerAuthConfig = `{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN"}}`
+		// Both producer and worker share the same tenantId so the worker can claim
+		// what the producer enqueues. extractTenantID prefers raw.tenantId over
+		// the JWT subject; without this, producer→"producer-dev", worker→"worker-dev"
+		// and claims silently return empty.
+		producerAuthConfig = `{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}`
 		workerAuthProvider = "static"
-		workerAuthConfig = `{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"]}`
+		workerAuthConfig = `{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"],"raw":{"tenantId":"dev-tenant"}}`
 	}
 	redisAddr := opts.RedisAddr
 	if strings.TrimSpace(redisAddr) == "" {
@@ -1481,11 +1485,11 @@ func renderHelmInstallValues(opts installOptions, profile installProfile) (strin
   - name: PRODUCER_AUTH_PROVIDER
     value: static
   - name: PRODUCER_AUTH_CONFIG
-    value: '{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN"}}'
+    value: '{"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}'
   - name: WORKER_AUTH_PROVIDER
     value: static
   - name: WORKER_AUTH_CONFIG
-    value: '{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"]}'
+    value: '{"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"],"raw":{"tenantId":"dev-tenant"}}'
 `
 	}
 
