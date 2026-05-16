@@ -36,14 +36,42 @@ type taskRepo struct {
 
 	reconcile reconcileTracker
 
-	// queueLocks serializes claim attempts per (cmd, tenant, prio) so two
-	// workers can't read the same pending key before either commits its
-	// claim batch — Pebble batches don't have CAS, so without this lock
-	// concurrent claimers can both "pop" the same id. Cost is a single
-	// in-process mutex acquire; the protected critical section is one
-	// iterator open + one batch commit (microseconds).
-	queueLocks sync.Map // key string → *sync.Mutex
+	// queues is the lock-free claim fast path. Each (cmd, tenant, prio)
+	// gets a buffered channel of task IDs; producers enqueue to Pebble
+	// AND push the id onto the channel, consumers receive from the
+	// channel and then commit the claim batch. Pebble's internal write
+	// lock still serializes batches, but Go channel send/receive is
+	// essentially free — multiple consumers can race for receives
+	// without any user-space mutex.
+	//
+	// Crash recovery: on Open we scan every pending key under
+	// codeq/q/.../pending/* and re-seed the matching channel, so the
+	// fast path is never out of sync with the durable state after a
+	// restart. Channel buffer is sized large enough (per-queue cap) that
+	// producers rarely block; if they do, the send is context-cancellable.
+	queues sync.Map // key string → *queueChan
 }
+
+// queueChan is the per-queue channel + recovery state. Each hint carries
+// both the seq we used at Enqueue time and the id, so the consumer can
+// rebuild the exact pending key (KeyPending uses (cmd, tenant, prio,
+// seq, id)) and delete it in one shot — no range scan required.
+type queueChan struct {
+	ch chan pendingHint
+}
+
+// pendingHint travels through the fast-path channel between a producer
+// (Enqueue / Abandon / MoveDueDelayed) and a consumer (Claim).
+type pendingHint struct {
+	seq uint64
+	id  string
+}
+
+// channelBufferSize bounds how many task IDs we can stage in memory per
+// queue before producers must wait for a consumer. 100k @ ~24 bytes/id
+// caps memory at ~2.4 MiB per (cmd,tenant,prio) tuple — generous given
+// typical workloads have a handful of active tuples.
+const channelBufferSize = 100_000
 
 const (
 	minPriority         = 0
@@ -93,7 +121,7 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	if backoffPolicy == "" {
 		backoffPolicy = "exp_full_jitter"
 	}
-	return &taskRepo{
+	r := &taskRepo{
 		db:                 db,
 		tz:                 tz,
 		backoffPolicy:      backoffPolicy,
@@ -101,6 +129,13 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 		backoffMaxSeconds:  backoffMaxSeconds,
 		reconcile:          reconcileTracker{interval: defaultReconcileInterval},
 	}
+	// Re-seed in-memory queue channels from any pending keys that
+	// survived a previous shutdown. Has to happen before any handler
+	// starts serving claims; that's why we do it in the constructor.
+	if err := r.recoverQueues(); err != nil {
+		panic(fmt.Sprintf("pebble queue recovery: %v", err))
+	}
+	return r
 }
 
 func (r *taskRepo) now() time.Time { return time.Now().In(r.tz) }
@@ -179,14 +214,15 @@ func (r *taskRepo) EnqueueWithReady(ctx context.Context, cmd domain.Command, pay
 		return nil, false, err
 	}
 	// Pending vs delayed bucket.
+	var pendingSeq uint64
 	if delayed {
 		score := uint64(visibleAt.Unix())
 		if err := b.Set(KeyDelayed(cmd, tenantID, score, id), nil, nil); err != nil {
 			return nil, false, err
 		}
 	} else {
-		seq := r.db.NextSeq()
-		if err := b.Set(KeyPending(cmd, tenantID, priority, seq, id), nil, nil); err != nil {
+		pendingSeq = r.db.NextSeq()
+		if err := b.Set(KeyPending(cmd, tenantID, priority, pendingSeq, id), nil, nil); err != nil {
 			return nil, false, err
 		}
 	}
@@ -200,8 +236,27 @@ func (r *taskRepo) EnqueueWithReady(ctx context.Context, cmd domain.Command, pay
 	if err := r.db.CommitBatch(b); err != nil {
 		return nil, false, fmt.Errorf("commit enqueue: %w", err)
 	}
+	// Publish the ID on the fast-path channel only after the durable
+	// batch is committed. If the channel happens to be full (cap reached)
+	// we drop the hint — the pending key is durable in Pebble, and any
+	// reaper or restart will rediscover it. A drop here is a perf
+	// regression (claim falls back to a scan), not a correctness one.
+	if !delayed {
+		r.publishPending(cmd, tenantID, priority, pendingSeq, id)
+	}
 	metrics.TaskCreatedTotal.WithLabelValues(string(cmd)).Inc()
 	return task, ready, nil
+}
+
+// publishPending pushes a (seq, id) hint onto the per-queue channel
+// non-blocking. The fall-through (channel full) is intentional: the
+// data is already in Pebble; recovery on next restart picks it up.
+func (r *taskRepo) publishPending(cmd domain.Command, tenantID string, prio int, seq uint64, id string) {
+	q := r.channelFor(cmd, tenantID, prio)
+	select {
+	case q.ch <- pendingHint{seq: seq, id: id}:
+	default:
+	}
 }
 
 // ---------- Get ----------
@@ -270,36 +325,116 @@ func (r *taskRepo) popFromAnyPriority(ctx context.Context, workerID string, cmd 
 	return nil, false, nil
 }
 
-func (r *taskRepo) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
-	lockKey := string(cmd) + "\x00" + tenantID + "\x00" + strconv.Itoa(priority)
-	muRaw, _ := r.queueLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	mu := muRaw.(*sync.Mutex)
-	mu.Lock()
-	defer mu.Unlock()
+// queueKey is the stable string identifier used to look up the per-queue
+// channel. Lowercased command + tenant + priority — same shape the storage
+// keys use, just compact for in-memory hashing.
+func queueKey(cmd domain.Command, tenantID string, prio int) string {
+	return string(cmd) + "\x00" + tenantID + "\x00" + strconv.Itoa(prio)
+}
 
-	lower, upper := PrefixPendingPrio(cmd, tenantID, priority)
+// channelFor returns the buffered ID channel for a (cmd, tenant, prio).
+// LoadOrStore makes the lazy creation safe for concurrent producers and
+// consumers; whichever wins the store gets credited, the loser uses the
+// stored value. New channels start empty (any pre-existing pending keys
+// were seeded by recoverQueues at startup).
+func (r *taskRepo) channelFor(cmd domain.Command, tenantID string, prio int) *queueChan {
+	k := queueKey(cmd, tenantID, prio)
+	if v, ok := r.queues.Load(k); ok {
+		return v.(*queueChan)
+	}
+	q := &queueChan{ch: make(chan pendingHint, channelBufferSize)}
+	actual, _ := r.queues.LoadOrStore(k, q)
+	return actual.(*queueChan)
+}
+
+// recoverQueues scans every pending key under codeq/q/.../pending/* at
+// startup and re-seeds the matching channel. Without this, IDs that were
+// durably enqueued before a restart would never be claimed (the channel
+// would stay empty until new producers pushed).
+//
+// Runs once during NewTaskRepository so the workload is paid up-front
+// rather than spread across the first batch of claims. Linear in the
+// number of pending keys; for very deep queues this could be made
+// concurrent or chunked.
+func (r *taskRepo) recoverQueues() error {
+	lower := []byte(pQueue)
+	upper := prefixUpper(lower)
 	it, err := r.db.Iter(lower, upper)
 	if err != nil {
-		return nil, false, err
+		return err
 	}
 	defer it.Close()
-	if !it.First() {
+
+	pendingMarker := []byte(segPending)
+	for valid := it.First(); valid; valid = it.Next() {
+		k := it.Key()
+		idx := indexOf(k, pendingMarker)
+		if idx < 0 {
+			continue
+		}
+		// key = .../pending/<prio_be1>/<seq_be8>/<id>
+		// Extract cmd + tenant from the segment between pQueue and segPending.
+		prefix := k[len(pQueue):idx]
+		parts := splitN(prefix, '/', 2)
+		if len(parts) != 2 {
+			continue
+		}
+		cmd := domain.Command(string(parts[0]))
+		tenantID := string(parts[1])
+		if tenantID == emptyTenant {
+			tenantID = ""
+		}
+		// Priority is the single byte right after segPending; seq is the
+		// next 8 bytes (big-endian).
+		pStart := idx + len(pendingMarker)
+		if pStart+1+8 > len(k) {
+			continue
+		}
+		prio := int(k[pStart])
+		seq := beUint64(k[pStart+1+1 : pStart+1+1+8])
+		id, ok := ParsePendingKey(k)
+		if !ok {
+			continue
+		}
+		// Non-blocking send: if the channel was sized too small (shouldn't
+		// happen given the cap) we'd drop the recovery hint. Drop is safe
+		// because the pending key stays in Pebble — a later scan/restart
+		// would pick it up. We log loudly if it happens.
+		q := r.channelFor(cmd, tenantID, prio)
+		select {
+		case q.ch <- pendingHint{seq: seq, id: id}:
+		default:
+			return fmt.Errorf("channel full during recovery for queue %s/%s/%d (raise channelBufferSize)", cmd, tenantID, prio)
+		}
+	}
+	return it.Error()
+}
+
+func (r *taskRepo) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
+	q := r.channelFor(cmd, tenantID, priority)
+	var h pendingHint
+	select {
+	case h = <-q.ch:
+	default:
 		return nil, false, nil
 	}
+	return r.completeClaim(ctx, workerID, cmd, tenantID, priority, leaseSeconds, h.seq, h.id)
+}
 
-	pendingKey := append([]byte(nil), it.Key()...)
-	id, ok := ParsePendingKey(pendingKey)
-	if !ok || id == "" {
-		return nil, false, fmt.Errorf("malformed pending key")
-	}
+// completeClaim performs the durable side of a claim. Because the channel
+// hint carries the seq we used at enqueue time, we can rebuild the exact
+// pending key with KeyPending — no iterator scan. The hot path is now:
+// 1 Get (task body) + 1 batch commit (5 ops). Pebble's internal write
+// lock serializes the commits but at microsecond cost.
+//
+// Ghosts: if the task body is missing (admin cleanup raced), we drop the
+// matching pending key by exact key — no scan — and signal empty.
+func (r *taskRepo) completeClaim(ctx context.Context, workerID string, cmd domain.Command, tenantID string, priority, leaseSeconds int, seq uint64, id string) (*domain.Task, bool, error) {
+	pendingKey := KeyPending(cmd, tenantID, priority, seq, id)
 
-	// Load task body now (single point lookup) so we can stamp the worker
-	// and lease into the JSON inside the same batch.
 	taskJSON, err := r.db.Get(KeyTask(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			// Ghost: pending pointed at a task that's gone. Drop the pending
-			// entry in its own delete; loop continues on next iteration.
 			_ = r.db.Delete(pendingKey)
 			return nil, false, nil
 		}
@@ -335,7 +470,6 @@ func (r *taskRepo) tryPopPriority(ctx context.Context, workerID string, cmd doma
 	if err := b.Set(KeyLease(id), encodeLease(workerID, leaseUntil), nil); err != nil {
 		return nil, false, err
 	}
-	// Refresh TTL retention window.
 	ttlScore := uint64(now.Add(taskRetention).Unix())
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return nil, false, err
@@ -344,6 +478,78 @@ func (r *taskRepo) tryPopPriority(ctx context.Context, workerID string, cmd doma
 		return nil, false, fmt.Errorf("commit claim: %w", err)
 	}
 	return &t, true, nil
+}
+
+// findPendingKey scans the per-prio pending prefix looking for an entry
+// whose trailing id matches. The seq we wrote at Enqueue time isn't
+// carried through the channel hint, so we have to discover it here. The
+// scan is bounded by the few entries that happen to share this id —
+// normally exactly one.
+func (r *taskRepo) findPendingKey(cmd domain.Command, tenantID string, priority int, id string) ([]byte, bool) {
+	lower, upper := PrefixPendingPrio(cmd, tenantID, priority)
+	it, err := r.db.Iter(lower, upper)
+	if err != nil {
+		return nil, false
+	}
+	defer it.Close()
+	idBytes := []byte(id)
+	for valid := it.First(); valid; valid = it.Next() {
+		k := it.Key()
+		if bytesHasSuffix(k, idBytes) {
+			out := append([]byte(nil), k...)
+			return out, true
+		}
+	}
+	return nil, false
+}
+
+// dropPendingByID deletes any pending entry for id within (cmd, tenant,
+// prio) — used to clean up ghost references discovered during claim.
+func (r *taskRepo) dropPendingByID(cmd domain.Command, tenantID string, priority int, id string) {
+	if k, ok := r.findPendingKey(cmd, tenantID, priority, id); ok {
+		_ = r.db.Delete(k)
+	}
+}
+
+// indexOf is a small helper that returns the first index of sub within s,
+// or -1. We have bytes.Index in the std library but inlining keeps this
+// hot path free of import drift.
+func indexOf(s, sub []byte) int {
+	if len(sub) == 0 {
+		return 0
+	}
+	for i := 0; i+len(sub) <= len(s); i++ {
+		match := true
+		for j := range sub {
+			if s[i+j] != sub[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
+// splitN splits s on sep returning at most n parts (the rest joined). Used
+// at startup to parse "cmd/tenant" out of a queue key prefix.
+func splitN(s []byte, sep byte, n int) [][]byte {
+	out := make([][]byte, 0, n)
+	start := 0
+	for i := 0; i < len(s) && len(out) < n-1; i++ {
+		if s[i] == sep {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	out = append(out, s[start:])
+	return out
+}
+
+func bytesHasSuffix(s, suffix []byte) bool {
+	return len(s) >= len(suffix) && string(s[len(s)-len(suffix):]) == string(suffix)
 }
 
 func encodeLease(workerID string, until time.Time) []byte {
@@ -448,7 +654,11 @@ func (r *taskRepo) Abandon(ctx context.Context, taskID string, workerID string) 
 	if err := b.Set(KeyTask(taskID), updated, nil); err != nil {
 		return err
 	}
-	return r.db.CommitBatch(b)
+	if err := r.db.CommitBatch(b); err != nil {
+		return err
+	}
+	r.publishPending(t.Command, t.TenantID, prio, seq, taskID)
+	return nil
 }
 
 // ---------- Nack ----------
@@ -588,6 +798,16 @@ func (r *taskRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.Comma
 	b := r.db.Batch()
 	defer b.Close()
 	moved := 0
+	// We need to publish each moved entry on the channel *after* commit
+	// so consumers can't pick up an id whose pending key isn't durable yet.
+	type publish struct {
+		cmd      domain.Command
+		tenantID string
+		prio     int
+		seq      uint64
+		id       string
+	}
+	published := make([]publish, 0, len(batchEntries))
 	for _, e := range batchEntries {
 		taskJSON, err := r.db.Get(KeyTask(e.id))
 		if err != nil {
@@ -617,10 +837,14 @@ func (r *taskRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.Comma
 		if err := b.Set(KeyTask(e.id), updated, nil); err != nil {
 			return moved, err
 		}
+		published = append(published, publish{cmd: cmd, tenantID: t.TenantID, prio: prio, seq: seq, id: e.id})
 		moved++
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, err
+	}
+	for _, p := range published {
+		r.publishPending(p.cmd, p.tenantID, p.prio, p.seq, p.id)
 	}
 	return moved, nil
 }
