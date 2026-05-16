@@ -41,10 +41,14 @@ func decodeResultJSON(raw []byte, out *map[string]any) error {
 type Server struct {
 	clusterpb.UnimplementedTaskNodeServer
 
-	NodeID     string
-	Tasks      repository.TaskRepository
-	Results    repository.ResultRepository
-	BloomReady func() ([]byte, uint32, uint64, uint64) // mBits, k, items, seq
+	NodeID  string
+	Tasks   repository.TaskRepository
+	Results repository.ResultRepository
+	// LocalBloom is the per-node bloom of locally-stored task IDs.
+	// Enqueue (the one path that introduces new IDs to this node) adds
+	// the id here after a successful local write. BloomSnapshot returns
+	// its serialised state for peer gossip.
+	LocalBloom *Bloom
 }
 
 // ---------------- ID-routed methods ----------------
@@ -75,6 +79,9 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 	)
 	if err != nil {
 		return nil, err
+	}
+	if s.LocalBloom != nil && task != nil {
+		s.LocalBloom.Add(task.ID)
 	}
 	return &clusterpb.EnqueueResponse{Task: domainTaskToProto(task), Ready: ready}, nil
 }
@@ -224,10 +231,10 @@ func (s *Server) AdminQueues(ctx context.Context, req *clusterpb.AdminQueuesRequ
 // ---------------- Bloom gossip ----------------
 
 func (s *Server) BloomSnapshot(ctx context.Context, _ *clusterpb.BloomSnapshotRequest) (*clusterpb.BloomSnapshotResponse, error) {
-	if s.BloomReady == nil {
+	if s.LocalBloom == nil {
 		return &clusterpb.BloomSnapshotResponse{NodeId: s.NodeID}, nil
 	}
-	mBits, k, items, seq := s.BloomReady()
+	mBits, k, items, seq := s.LocalBloom.Snapshot()
 	return &clusterpb.BloomSnapshotResponse{
 		MBits:     mBits,
 		NumHashes: k,

@@ -40,6 +40,14 @@ type TaskRouter struct {
 	local *pebblerepo.TaskRepository
 	ring  *LocalRing
 	pool  *ClientPool
+	// cache is optional; when non-nil the router consults the peer
+	// bloom before remote ID-routed RPCs and returns "not-found"
+	// early when the bloom definitively excludes the key.
+	cache *BloomCache
+	// localBloom mirrors what Server.LocalBloom holds; the router calls
+	// Add on it when it enqueues locally so peers eventually learn this
+	// node holds the new id (via gossip).
+	localBloom *Bloom
 }
 
 // NewTaskRouter constructs the router. local must be the same Pebble
@@ -47,6 +55,31 @@ type TaskRouter struct {
 // back to self short-circuit the network path.
 func NewTaskRouter(local *pebblerepo.TaskRepository, ring *LocalRing, pool *ClientPool) *TaskRouter {
 	return &TaskRouter{local: local, ring: ring, pool: pool}
+}
+
+// WithBloomCache attaches a bloom cache used to short-circuit ID-routed
+// RPCs whose peer bloom says "definitely not".
+func (r *TaskRouter) WithBloomCache(c *BloomCache) *TaskRouter {
+	r.cache = c
+	return r
+}
+
+// WithLocalBloom installs the per-node bloom; the router publishes new
+// task IDs into it whenever Enqueue lands on the local shard.
+func (r *TaskRouter) WithLocalBloom(b *Bloom) *TaskRouter {
+	r.localBloom = b
+	return r
+}
+
+// peerHasLikely reports whether the cached bloom for ownerID (if any)
+// considers key plausibly present. Returns true when there is no cache
+// or no entry for the peer — the router then proceeds with the gRPC
+// call, falling back to authoritative storage.
+func (r *TaskRouter) peerHasLikely(ownerID, key string) bool {
+	if r.cache == nil {
+		return true
+	}
+	return r.cache.MaybeHas(ownerID, key)
 }
 
 // ---------------- Enqueue ----------------
@@ -60,7 +93,11 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 	// Pre-pick the ID so the hash → owner decision is deterministic.
 	id := uuid.NewString()
 	if r.ring.IsLocal(id) {
-		return r.local.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+		t, ready, err := r.local.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+		if err == nil && t != nil && r.localBloom != nil {
+			r.localBloom.Add(t.ID)
+		}
+		return t, ready, err
 	}
 	owner := r.ring.Owner(id)
 	c, err := r.pool.Client(owner)
@@ -95,6 +132,10 @@ func (r *TaskRouter) Get(ctx context.Context, taskID string) (*domain.Task, erro
 		return r.local.Get(ctx, taskID)
 	}
 	owner := r.ring.Owner(taskID)
+	if !r.peerHasLikely(owner.ID, taskID) {
+		// Peer bloom said "definitely not" — skip the network call.
+		return nil, errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return nil, err
