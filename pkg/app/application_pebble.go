@@ -332,10 +332,23 @@ func newPebbleApplication(
 		return nil, err
 	}
 
+	producerStream, err := startProducerStreamServer(
+		cfg,
+		scheduler,
+		app.ProducerValidator,
+		logger,
+	)
+	if err != nil {
+		stopGRPCServer(context.Background(), workerStream)
+		cleanupStartupFailure()
+		return nil, err
+	}
+
 	app.TracingShutdown = func(ctx context.Context) error {
 		bgCancel()
 		stopGRPCServer(ctx, &grpcServerHandle{srv: grpcSrv, lis: grpcLis})
 		stopGRPCServer(ctx, workerStream)
+		stopGRPCServer(ctx, producerStream)
 		if clientPool != nil {
 			_ = clientPool.Close()
 		}

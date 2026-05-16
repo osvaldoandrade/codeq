@@ -64,6 +64,13 @@ type Config struct {
 	// every Ready/Result/Heartbeat instead of a fresh HTTP req per call.
 	// Empty value keeps the old REST-only behavior.
 	WorkerStreamAddr string `yaml:"workerStreamAddr"`
+
+	// ProducerStreamAddr enables the bidirectional producer gRPC stream
+	// when non-empty (e.g. ":9092"). Same goal as WorkerStreamAddr but
+	// for POST /tasks — one stream per producer pipelines CreateTask
+	// events, server acks asynchronously by seq. Phase 3 of the
+	// throughput refactor.
+	ProducerStreamAddr string `yaml:"producerStreamAddr"`
 }
 
 // ClusterConfig wires a codeq node into a multi-node cluster. When Enabled
@@ -168,6 +175,9 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if v := os.Getenv("WORKER_STREAM_ADDR"); v != "" {
 		c.WorkerStreamAddr = v
+	}
+	if v := os.Getenv("PRODUCER_STREAM_ADDR"); v != "" {
+		c.ProducerStreamAddr = v
 	}
 	// Cluster overrides. CLUSTER_NODES is "id1=addr1,id2=addr2,..." which
 	// is friendlier in env vars / docker compose than nested YAML.

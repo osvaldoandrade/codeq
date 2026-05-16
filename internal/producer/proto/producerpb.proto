@@ -1,0 +1,100 @@
+// Package producerpb defines the external producer streaming protocol.
+//
+// Goal: replace the per-call HTTP round-trip on the create hot path
+// (POST /v1/codeq/tasks) with a single long-lived bidirectional gRPC
+// stream per producer. Auth and tenant resolution happen exactly once
+// at stream-open; from then on the producer pushes CreateTask events
+// with a monotonically-increasing seq, and the server acks each one
+// with the assigned task id once durable.
+//
+// Pipeline-friendly: the protocol is fully async — a producer may have
+// N requests in flight before the first ack arrives. The seq lets the
+// producer correlate acks back to its own requests without round-tripping.
+// Phase 3 of the throughput refactor relies on this to lift the
+// producer-side ceiling above the ~33k creates/s the REST path tops out
+// at.
+syntax = "proto3";
+
+package producerpb;
+
+option go_package = "github.com/osvaldoandrade/codeq/internal/producer/producerpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ---------------- Producer → Server messages ----------------
+
+// Hello is the FIRST message a producer MUST send on a freshly-opened
+// stream. The server validates the bearer token, resolves the tenant,
+// and replies with HelloAck. Subsequent CreateTask messages inherit
+// the resolved tenant — they cannot override it.
+message Hello {
+  string token = 1;
+}
+
+// CreateTask is one task submission. seq is producer-assigned and must
+// be strictly monotonically increasing per stream; the server echoes
+// it on the matching CreateAck so the producer can pair them up.
+//
+// run_at and delay_seconds mirror the REST API: at most one should be
+// set; if both are absent the task is immediately claimable.
+message CreateTask {
+  uint64 seq = 1;
+  string command = 2;
+  bytes payload = 3;            // opaque JSON, server-side stored as-is
+  int32 priority = 4;
+  string webhook = 5;
+  int32 max_attempts = 6;
+  string idempotency_key = 7;
+  google.protobuf.Timestamp run_at = 8;
+  int32 delay_seconds = 9;
+  string trace_parent = 10;     // W3C trace context (optional)
+  string trace_state = 11;
+}
+
+message ProducerEvent {
+  oneof event {
+    Hello hello = 1;
+    CreateTask create = 2;
+  }
+}
+
+// ---------------- Server → Producer messages ----------------
+
+message HelloAck {
+  string tenant_id = 1;
+  string subject = 2;
+}
+
+// CreateAck pairs with the CreateTask whose seq matches. ok=false means
+// the create was rejected; error_message has the reason. task_id is the
+// server-assigned id (mirrors REST 202 response).
+message CreateAck {
+  uint64 seq = 1;
+  bool ok = 2;
+  string task_id = 3;
+  string error_message = 4;
+}
+
+message ServerError {
+  string code = 1;
+  string message = 2;
+}
+
+message ServerEvent {
+  oneof event {
+    HelloAck hello_ack = 1;
+    CreateAck create_ack = 2;
+    ServerError error = 3;
+  }
+}
+
+// ---------------- Service ----------------
+
+service ProducerStream {
+  // Stream is the single long-lived bidirectional channel. The producer
+  // opens it, sends Hello, then pipelines CreateTask events. The server
+  // acks asynchronously — acks may arrive out of order relative to send
+  // order under high concurrency, but the seq always pairs them with
+  // the originating request.
+  rpc Stream(stream ProducerEvent) returns (stream ServerEvent);
+}
