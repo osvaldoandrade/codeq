@@ -162,7 +162,7 @@ func (s *resultsService) Submit(ctx context.Context, taskID string, req domain.S
 		Artifacts:   outs,
 		CompletedAt: s.now().In(s.loc),
 	}
-	if err := s.repo.SaveResult(taskCtx, rec); err != nil {
+	if err := s.repo.SaveResult(taskCtx, rec, task.Command, task.TenantID); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, err
@@ -298,9 +298,12 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 		indexMap = append(indexMap, i) // Track original index
 	}
 
-	// Batch save all results (RTT: 1 for all results)
+	// Batch save all results. Pass cmd+tenant from the corresponding taskDeletes
+	// entry (built in lockstep with resultRecords) so the sharded wrapper routes
+	// directly to the right shard instead of fanning out per record.
 	for i, rec := range resultRecords {
-		if err := s.repo.SaveResult(ctx, rec); err != nil {
+		td := taskDeletes[i]
+		if err := s.repo.SaveResult(ctx, rec, td.Command, td.TenantID); err != nil {
 			responses[indexMap[i]] = domain.BatchSubmitResponse{TaskID: items[indexMap[i]].TaskID, Error: err.Error()}
 		}
 	}

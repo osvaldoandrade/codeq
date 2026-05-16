@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
@@ -15,8 +17,8 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/bytedance/sonic"
-	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
+	"github.com/go-redis/redis/v8"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -28,7 +30,42 @@ const (
 	maxPriority         = 9
 	taskRetention       = 24 * time.Hour
 	defaultInspectLimit = 200 // Default number of tasks to inspect for lease expiration
+
+	// defaultReconcileInterval throttles per-(cmd,tenant) reconciliation work
+	// (delayed→pending sweep + lease-expiry requeue) so it runs at most once
+	// per interval instead of on every Claim. Worst-case extra latency for a
+	// delayed/expired task to surface is the interval — negligible vs typical
+	// lease (≥60s) and delay budgets. Tests can override via reconcile.interval=0.
+	defaultReconcileInterval = 500 * time.Millisecond
 )
+
+// reconcileTracker coordinates reconciliation throttling across concurrent
+// Claim callers. Only one goroutine per (cmd,tenant) wins the right to run
+// reconciliation per interval; the rest skip the work. interval=0 disables
+// throttling (every claim reconciles), which is useful for tests that assert
+// repair-on-claim behavior.
+type reconcileTracker struct {
+	interval time.Duration
+	last     sync.Map // key: cmd + "\x00" + tenantID → *int64 (last-run unix nano)
+}
+
+func (rt *reconcileTracker) shouldRun(cmd domain.Command, tenantID string) bool {
+	if rt.interval <= 0 {
+		return true
+	}
+	key := string(cmd) + "\x00" + tenantID
+	now := time.Now().UnixNano()
+	threshold := now - int64(rt.interval)
+
+	raw, _ := rt.last.LoadOrStore(key, new(int64))
+	ptr := raw.(*int64)
+
+	last := atomic.LoadInt64(ptr)
+	if last > threshold {
+		return false
+	}
+	return atomic.CompareAndSwapInt64(ptr, last, now)
+}
 
 type TaskRepository interface {
 	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
@@ -61,6 +98,7 @@ type taskRedisRepo struct {
 	idempoBloom        *idempotencyBloom
 	cleanupBloom       *idempotencyBloom
 	ghostBloom         *idempotencyBloom
+	reconcile          reconcileTracker
 }
 
 func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy string, backoffBaseSeconds int, backoffMaxSeconds int, shardSupplier domain.ShardSupplier) TaskRepository {
@@ -93,6 +131,7 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		// Best-effort local filter to short-circuit "ghost" task IDs already known to be deleted.
 		// This reduces Claim-path Redis HGET pressure when admin cleanup leaves stale IDs in queues.
 		ghostBloom: newIdempotencyBloom(2_000_000, 1e-12, 6*time.Hour),
+		reconcile:  reconcileTracker{interval: defaultReconcileInterval},
 	}
 }
 
@@ -351,7 +390,6 @@ func (r *taskRedisRepo) enqueueWithID(ctx context.Context, id string, cmd domain
 	// Batch all three operations into a single pipeline for 67% latency reduction (3 RTTs → 1 RTT).
 	// Operations: HSet task data, ZAdd TTL index, and LPush/ZAdd queue.
 	pipe := r.rdb.Pipeline()
-	defer pipe.Close()
 
 	// Add task to main hash
 	pipe.HSet(ctx, r.keyTasksHash(), id, js)
@@ -417,6 +455,9 @@ func PreloadScripts(ctx context.Context, rdb *redis.Client) error {
 	if err := claimMoveScript.Load(ctx, rdb).Err(); err != nil {
 		return fmt.Errorf("preload claimMoveScript: %w", err)
 	}
+	if err := multiPriorityClaimScript.Load(ctx, rdb).Err(); err != nil {
+		return fmt.Errorf("preload multiPriorityClaimScript: %w", err)
+	}
 	return nil
 }
 
@@ -434,6 +475,38 @@ for i=1,maxIter do
   end
   if redis.call("SADD", dst, id) == 1 then
     return id
+  end
+end
+return false
+`)
+
+// multiPriorityClaimScript walks every pending list for one (cmd,tenant,shard) in
+// priority order, atomically moves the first available id into the in-progress
+// set, and inlines the HGET for the task JSON. Collapses what used to be N+1
+// EVALSHA/HGET round trips (one EVAL per priority + one HGET) into a single RTT.
+//
+// KEYS[1]    = in-progress set key (dst)
+// KEYS[2]    = tasks hash key (for inline HGET)
+// KEYS[3..N] = pending list keys (src), already ordered highest-priority-first by the caller
+// ARGV[1]    = max retries per list when SADD reports a duplicate id
+//
+// Returns: false when every queue is empty; otherwise {id, json_or_false}. json is `false`
+// when the task hash entry was missing (ghost) — caller treats this as a cleanup case.
+var multiPriorityClaimScript = redis.NewScript(`
+local dst = KEYS[1]
+local tasks = KEYS[2]
+local maxIter = tonumber(ARGV[1]) or 1
+for k=3, #KEYS do
+  local src = KEYS[k]
+  for i=1, maxIter do
+    local id = redis.call("RPOP", src)
+    if not id then
+      break
+    end
+    if redis.call("SADD", dst, id) == 1 then
+      local json = redis.call("HGET", tasks, id)
+      return {id, json or false}
+    end
   end
 end
 return false
@@ -562,7 +635,6 @@ func (r *taskRedisRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, 
 		getResults[i] = getPipe.HGet(ctx, r.keyTasksHash(), id)
 	}
 	_, err = getPipe.Exec(ctx)
-	getPipe.Close()
 	if err != nil && err != redis.Nil {
 		return 0, fmt.Errorf("redis pipeline HGET: %w", err)
 	}
@@ -642,7 +714,6 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 		getResults[i] = getPipe.HGet(ctx, r.keyTasksHash(), id)
 	}
 	_, err = getPipe.Exec(ctx)
-	getPipe.Close()
 	if err != nil && err != redis.Nil {
 		return 0, fmt.Errorf("redis pipeline HGET: %w", err)
 	}
@@ -692,69 +763,91 @@ func (r *taskRedisRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.
 }
 
 func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
-	// Move delayed to pending (due tasks) and requeue expired leases
+	// Delayed→pending sweep stays on the hot path: it must run promptly so that
+	// Nack(delaySeconds=0) and just-elapsed delayed tasks become claimable
+	// without waiting for a throttle window. The op is cheap when nothing is
+	// due (ZRANGEBYSCORE returns empty, no follow-up writes).
+	//
+	// Lease-expiry repair (requeueExpired) is throttled because its
+	// SRANDMEMBER inprog 200 + TTL pipeline becomes expensive when inprog
+	// holds thousands of in-flight ids — and lease repair has a 60s+ budget
+	// in production so a ~500ms amortization is invisible.
 	for _, cmd := range commands {
-		// Check legacy queue for backward compatibility
 		if _, err := r.MoveDueDelayed(ctx, cmd, inspectLimit); err != nil {
 			return nil, false, err
 		}
-		// Check tenant-specific queue
 		if tenantID != "" {
 			if _, err := r.moveDueDelayedForTenant(ctx, cmd, inspectLimit, tenantID); err != nil {
 				return nil, false, err
 			}
+		}
+		if !r.reconcile.shouldRun(cmd, tenantID) {
+			continue
 		}
 		if _, err := r.requeueExpired(ctx, cmd, inspectLimit, maxAttemptsDefault, tenantID); err != nil {
 			return nil, false, err
 		}
 	}
 
-	tryPop := func(cmd domain.Command, priority int) (*domain.Task, bool, error) {
+	// tryPopMulti scans every priority list for one command in one Redis RTT using
+	// multiPriorityClaimScript and inlines the HGET for the task JSON. Replaces what
+	// used to be N EVALSHA + 1 HGET (N+1 RTTs) with a single RTT.
+	tryPopMulti := func(cmd domain.Command) (*domain.Task, bool, error) {
 		sid := r.currentShard(ctx, cmd, tenantID)
-		src := r.keyQueuePending(cmd, priority, tenantID, sid)
 		dst := r.keyQueueInprog(cmd, tenantID, sid)
+		tasksHash := r.keyTasksHash()
+		// KEYS layout: [dst, tasksHash, src_p9, src_p8, ..., src_p0].
+		keys := make([]string, 0, 2+(maxPriority-minPriority+1))
+		keys = append(keys, dst, tasksHash)
+		for p := maxPriority; p >= minPriority; p-- {
+			keys = append(keys, r.keyQueuePending(cmd, p, tenantID, sid))
+		}
+
+		// Ghost cleanup needs to LRem an id from whichever pending list still holds duplicates.
+		// We don't know which list the id came from after the multi-priority pop, so we LRem
+		// across all pending lists in a single pipelined RTT. LRem on a non-member is a no-op.
+		ghostCleanup := func(id string) {
+			pipe := r.rdb.Pipeline()
+			pipe.SRem(ctx, dst, id)
+			for i := 2; i < len(keys); i++ {
+				pipe.LRem(ctx, keys[i], 0, id)
+			}
+			_, _ = pipe.Exec(ctx)
+		}
 
 		for i := 0; i < inspectLimit; i++ {
-			res, err := claimMoveScript.Run(ctx, r.rdb, []string{src, dst}, 1).Result()
+			res, err := multiPriorityClaimScript.Run(ctx, r.rdb, keys, 1).Result()
 			if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
 				// kvrocks returns "ERR NOSCRIPT ..." which go-redis v8 does not match
 				// against its HasPrefix("NOSCRIPT ") fallback. Force EVAL to load the script.
-				res, err = claimMoveScript.Eval(ctx, r.rdb, []string{src, dst}, 1).Result()
+				res, err = multiPriorityClaimScript.Eval(ctx, r.rdb, keys, 1).Result()
 			}
 			if err == redis.Nil {
-				return nil, false, nil // empty queue
+				return nil, false, nil // all queues empty
 			}
 			if err != nil {
-				return nil, false, fmt.Errorf("claim move script: %w", err)
+				return nil, false, fmt.Errorf("multi-priority claim script: %w", err)
 			}
-			id, ok := res.(string)
-			if !ok || id == "" {
-				return nil, false, nil // fila vazia / no unique id found
+			arr, ok := res.([]interface{})
+			if !ok || len(arr) < 2 {
+				return nil, false, nil // empty / unexpected
 			}
+			id, _ := arr[0].(string)
+			if id == "" {
+				return nil, false, nil
+			}
+			js, _ := arr[1].(string)
 
-			// If admin cleanup already deleted this task, skip the Redis HGET and just clean up
-			// any queue references. False positives are bounded by the Bloom filter FP rate.
-			if r.ghostBloom != nil && r.ghostBloom.MaybeHas(id) {
-				pipe := r.rdb.Pipeline()
-				pipe.SRem(ctx, dst, id)
-				pipe.LRem(ctx, src, 0, id) // remove any remaining duplicates in this pending list
-				_, _ = pipe.Exec(ctx)
-				continue
-			}
-
-			// Carrega JSON; pode ter sido limpo por admin endpoint
-			js, err := r.rdb.HGet(ctx, r.keyTasksHash(), id).Result()
-			if err == redis.Nil || js == "" {
-				// remove da inprog e tenta novamente
-				_ = r.rdb.SRem(ctx, dst, id).Err()
+			// If admin cleanup already deleted this task, the inline HGET returned empty.
+			// Bloom hit short-circuits before we even inspect arr[1].
+			if (r.ghostBloom != nil && r.ghostBloom.MaybeHas(id)) || js == "" {
 				if r.ghostBloom != nil {
 					r.ghostBloom.Add(id)
 				}
+				ghostCleanup(id)
 				continue
 			}
-			if err != nil {
-				return nil, false, fmt.Errorf("HGET task json: %w", err)
-			}
+
 			t, err := unmarshalTask(js)
 			if err != nil {
 				_ = r.rdb.SRem(ctx, dst, id).Err()
@@ -800,15 +893,16 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 			if err != nil {
 				span.RecordError(err)
 				span.SetStatus(codes.Error, err.Error())
-				// Falha ao setar lease/task → desfaz o move e segue
+				// Falha ao setar lease/task → desfaz o move e segue. We push back into the
+				// task's normalized priority list rather than guessing which list it came from.
 				_ = r.rdb.SRem(taskCtx, dst, id).Err()
-				_ = r.rdb.LPush(taskCtx, src, id).Err()
+				_ = r.rdb.LPush(taskCtx, r.keyQueuePending(cmd, normalizePriority(t.Priority), tenantID, sid), id).Err()
 				return nil, false, fmt.Errorf("pipeline lease/task/ttl update: %w", err)
 			}
 			if len(results) < 3 {
 				span.SetStatus(codes.Error, "incomplete pipeline results")
 				_ = r.rdb.SRem(taskCtx, dst, id).Err()
-				_ = r.rdb.LPush(taskCtx, src, id).Err()
+				_ = r.rdb.LPush(taskCtx, r.keyQueuePending(cmd, normalizePriority(t.Priority), tenantID, sid), id).Err()
 				return nil, false, fmt.Errorf("pipeline lease/task/ttl update: incomplete results")
 			}
 
@@ -818,12 +912,10 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 	}
 
 	for _, cmd := range commands {
-		for p := maxPriority; p >= minPriority; p-- {
-			if task, ok, err := tryPop(cmd, p); err != nil {
-				return nil, false, err
-			} else if ok {
-				return task, true, nil
-			}
+		if task, ok, err := tryPopMulti(cmd); err != nil {
+			return nil, false, err
+		} else if ok {
+			return task, true, nil
 		}
 	}
 	return nil, false, nil

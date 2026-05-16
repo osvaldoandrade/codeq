@@ -17,7 +17,10 @@ import (
 type ResultRepository interface {
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
 	GetTaskAndResult(ctx context.Context, id string) (*domain.Task, *domain.ResultRecord, error)
-	SaveResult(ctx context.Context, rec domain.ResultRecord) error
+	// SaveResult writes a result and updates the task's ResultKey. cmd+tenantID
+	// are optional hints — when both are non-empty the sharded wrapper routes
+	// directly to the correct shard; otherwise it fans out across shards.
+	SaveResult(ctx context.Context, rec domain.ResultRecord, cmd domain.Command, tenantID string) error
 	GetResult(ctx context.Context, id string) (*domain.ResultRecord, error)
 	UpdateTaskOnComplete(ctx context.Context, id string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error
 	RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error
@@ -68,7 +71,7 @@ func (r *resultRedisRepo) GetTask(ctx context.Context, id string) (*domain.Task,
 	return &t, nil
 }
 
-func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
+func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecord, _ domain.Command, _ string) error {
 	b, _ := sonic.Marshal(rec)
 
 	// Fetch task first (required to compute new value with ResultKey)
@@ -77,15 +80,16 @@ func (r *resultRedisRepo) SaveResult(ctx context.Context, rec domain.ResultRecor
 		return fmt.Errorf("redis HGET task: %w", err)
 	}
 
-	// If task not found or unmarshal fails, just save result (non-fatal)
+	// Return not-found when the task is missing on this backend so the sharded
+	// wrapper can fan out across shards (and reject orphan results in the
+	// single-shard case as well).
 	if err == redis.Nil || js == "" {
-		return r.rdb.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b)).Err()
+		return fmt.Errorf("not-found")
 	}
 
 	var t domain.Task
 	if err := sonic.Unmarshal([]byte(js), &t); err != nil {
-		// Task unmarshal failed, but still save result (non-fatal)
-		return r.rdb.HSet(ctx, r.keyResultsHash(), rec.TaskID, string(b)).Err()
+		return fmt.Errorf("unmarshal task: %w", err)
 	}
 
 	// Update task with result reference

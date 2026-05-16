@@ -105,7 +105,7 @@ func TestResultRepositorySaveAndGetResult(t *testing.T) {
 		CompletedAt: time.Now().UTC(),
 	}
 
-	err := repo.SaveResult(ctx, rec)
+	err := repo.SaveResult(ctx, rec, "", "")
 	if err != nil {
 		t.Fatalf("SaveResult() error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestResultRepositoryGetTaskAndResult(t *testing.T) {
 		CompletedAt: time.Now().UTC(),
 	}
 
-	err := repo.SaveResult(ctx, rec)
+	err := repo.SaveResult(ctx, rec, "", "")
 	if err != nil {
 		t.Fatalf("SaveResult() error = %v", err)
 	}

@@ -219,6 +219,9 @@ func TestClaimGhostBloomSkipsHGet(t *testing.T) {
 
 func TestClaimRepairRequeuesExpiredLease(t *testing.T) {
 	ctx, mr, rdb, repo := setupRepoWithBackoff(t, "fixed", 1, 1)
+	// Disable reconciliation throttling so the repair sweep fires on every Claim;
+	// production code amortizes this to once per defaultReconcileInterval.
+	repo.(*taskRedisRepo).reconcile.interval = 0
 	cmd := domain.CmdGenerateMaster
 
 	task, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 0, "", 5, "", time.Time{}, "")
