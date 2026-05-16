@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS build
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -30,6 +30,12 @@ LABEL org.opencontainers.image.source="https://github.com/osvaldoandrade/codeq" 
 
 WORKDIR /app
 COPY --from=build /out/codeq-server /app/codeq-server
+
+# Pre-create writable data dirs owned by nonroot. Distroless has no shell,
+# so we materialize the directory tree by COPYing a placeholder; docker
+# preserves the parent-dir ownership for any volume mounted on top.
+COPY --from=build --chown=nonroot:nonroot /out/codeq-server /var/lib/codeq/pebble/.keep
+COPY --from=build --chown=nonroot:nonroot /out/codeq-server /var/lib/codeq/artifacts/.keep
 
 USER nonroot:nonroot
 EXPOSE 8080

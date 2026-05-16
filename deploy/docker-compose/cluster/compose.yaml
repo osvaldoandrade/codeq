@@ -1,0 +1,152 @@
+# 3-node codeq cluster against embedded Pebble (no Redis).
+#
+# Each node:
+#   - Listens HTTP on its own host port (8080-8082) so k6 / curl can
+#     hit any node.
+#   - Listens gRPC on :9090 inside the container; nodes resolve each
+#     other via the docker bridge DNS (node-a, node-b, node-c).
+#   - Has its own Pebble dir mounted as a named volume so the embedded
+#     LSM state is owned by exactly one node.
+#
+# Routing is automatic: a producer can POST a task to ANY node and the
+# router on that node forwards the create to the owning shard (hash of
+# the task ID). Workers calling /claim trigger scatter-gather across
+# all nodes; bloom gossip skips remote calls when peer bloom says no.
+
+name: codeq-cluster
+
+services:
+  node-a:
+    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    container_name: codeq-cluster-node-a
+    hostname: node-a
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      PORT: "8080"
+      ENV: dev
+      GIN_MODE: release
+      LOG_LEVEL: ${CODEQ_LOG_LEVEL:-warn}
+      LOG_FORMAT: json
+      DEFAULT_LEASE_SECONDS: "60"
+      REQUEUE_INSPECT_LIMIT: "200"
+      MAX_ATTEMPTS_DEFAULT: "5"
+      BACKOFF_POLICY: exp_full_jitter
+      BACKOFF_BASE_SECONDS: "5"
+      BACKOFF_MAX_SECONDS: "900"
+      WEBHOOK_HMAC_SECRET: dev-cluster-secret
+      LOCAL_ARTIFACTS_DIR: /var/lib/codeq/artifacts
+      WORKER_AUDIENCE: codeq-worker
+      PERSISTENCE_PROVIDER: pebble
+      PERSISTENCE_CONFIG: '{"path":"/var/lib/codeq/pebble"}'
+      CLUSTER_ENABLED: "true"
+      CLUSTER_SELF_ID: node-a
+      CLUSTER_GRPC_ADDR: ":9090"
+      CLUSTER_NODES: "node-a=node-a:9090,node-b=node-b:9090,node-c=node-c:9090"
+      PRODUCER_AUTH_PROVIDER: static
+      PRODUCER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}
+      WORKER_AUTH_PROVIDER: static
+      WORKER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"],"raw":{"tenantId":"dev-tenant"}}
+    volumes:
+      - node-a-data:/var/lib/codeq/pebble
+      - node-a-art:/var/lib/codeq/artifacts
+    networks:
+      - cluster
+
+  node-b:
+    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    container_name: codeq-cluster-node-b
+    hostname: node-b
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+      - "9091:9090"
+    environment:
+      PORT: "8080"
+      ENV: dev
+      GIN_MODE: release
+      LOG_LEVEL: ${CODEQ_LOG_LEVEL:-warn}
+      LOG_FORMAT: json
+      DEFAULT_LEASE_SECONDS: "60"
+      REQUEUE_INSPECT_LIMIT: "200"
+      MAX_ATTEMPTS_DEFAULT: "5"
+      BACKOFF_POLICY: exp_full_jitter
+      BACKOFF_BASE_SECONDS: "5"
+      BACKOFF_MAX_SECONDS: "900"
+      WEBHOOK_HMAC_SECRET: dev-cluster-secret
+      LOCAL_ARTIFACTS_DIR: /var/lib/codeq/artifacts
+      WORKER_AUDIENCE: codeq-worker
+      PERSISTENCE_PROVIDER: pebble
+      PERSISTENCE_CONFIG: '{"path":"/var/lib/codeq/pebble"}'
+      CLUSTER_ENABLED: "true"
+      CLUSTER_SELF_ID: node-b
+      CLUSTER_GRPC_ADDR: ":9090"
+      CLUSTER_NODES: "node-a=node-a:9090,node-b=node-b:9090,node-c=node-c:9090"
+      PRODUCER_AUTH_PROVIDER: static
+      PRODUCER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}
+      WORKER_AUTH_PROVIDER: static
+      WORKER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"],"raw":{"tenantId":"dev-tenant"}}
+    volumes:
+      - node-b-data:/var/lib/codeq/pebble
+      - node-b-art:/var/lib/codeq/artifacts
+    networks:
+      - cluster
+
+  node-c:
+    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    container_name: codeq-cluster-node-c
+    hostname: node-c
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+      - "9092:9090"
+    environment:
+      PORT: "8080"
+      ENV: dev
+      GIN_MODE: release
+      LOG_LEVEL: ${CODEQ_LOG_LEVEL:-warn}
+      LOG_FORMAT: json
+      DEFAULT_LEASE_SECONDS: "60"
+      REQUEUE_INSPECT_LIMIT: "200"
+      MAX_ATTEMPTS_DEFAULT: "5"
+      BACKOFF_POLICY: exp_full_jitter
+      BACKOFF_BASE_SECONDS: "5"
+      BACKOFF_MAX_SECONDS: "900"
+      WEBHOOK_HMAC_SECRET: dev-cluster-secret
+      LOCAL_ARTIFACTS_DIR: /var/lib/codeq/artifacts
+      WORKER_AUDIENCE: codeq-worker
+      PERSISTENCE_PROVIDER: pebble
+      PERSISTENCE_CONFIG: '{"path":"/var/lib/codeq/pebble"}'
+      CLUSTER_ENABLED: "true"
+      CLUSTER_SELF_ID: node-c
+      CLUSTER_GRPC_ADDR: ":9090"
+      CLUSTER_NODES: "node-a=node-a:9090,node-b=node-b:9090,node-c=node-c:9090"
+      PRODUCER_AUTH_PROVIDER: static
+      PRODUCER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}
+      WORKER_AUTH_PROVIDER: static
+      WORKER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"],"raw":{"tenantId":"dev-tenant"}}
+    volumes:
+      - node-c-data:/var/lib/codeq/pebble
+      - node-c-art:/var/lib/codeq/artifacts
+    networks:
+      - cluster
+
+volumes:
+  node-a-data:
+  node-a-art:
+  node-b-data:
+  node-b-art:
+  node-c-data:
+  node-c-art:
+
+networks:
+  cluster:
+    driver: bridge
