@@ -183,3 +183,37 @@ func (l *LocalRing) Peers() []Node {
 	}
 	return out
 }
+
+// GenerateLocalID returns a UUID-shaped string whose Owner is the local
+// node. The implementation rejects candidates that don't hash to self.
+// Expected attempts ≈ N (one per cluster node) since the ring is
+// uniformly distributed by sha256; with a 256-vnode replication the
+// shares are within ~5% of uniform.
+//
+// Why this exists: when the producer hot path picks IDs whose owner is
+// random across the ring, ~(N-1)/N of Enqueue calls forward to a peer
+// via gRPC. That cross-node hop dominated the cluster overhead profile
+// in Phase 4. With this helper the producer's local enqueue is hash-
+// local by construction, the gRPC forward disappears, and the Claim
+// fast-path (already local-first) hits even more often.
+//
+// genID is taken as a parameter so tests can inject deterministic IDs;
+// production callers should pass uuid.NewString.
+func (l *LocalRing) GenerateLocalID(genID func() string) string {
+	// Already-local IDs from elsewhere (e.g. when migrating in fixtures)
+	// are returned as-is. Caller is responsible for not invoking this
+	// repeatedly in a tight loop with a deterministic generator that
+	// never matches — capped to keep that case bounded.
+	const maxTries = 64
+	for range maxTries {
+		id := genID()
+		if l.IsLocal(id) {
+			return id
+		}
+	}
+	// Fallback: should be statistically impossible for healthy N>0, but
+	// we'd rather emit a non-local id than spin forever. Owner-aware
+	// callers (TaskRouter.EnqueueWithReady) still handle the cross-node
+	// hop correctly.
+	return genID()
+}

@@ -91,7 +91,12 @@ func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload st
 
 func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	// Pre-pick the ID so the hash → owner decision is deterministic.
-	id := uuid.NewString()
+	// Bias toward local ownership: the producer-side router would
+	// otherwise pay a cross-node gRPC for (N-1)/N of all creates, which
+	// dominated cluster overhead in Phase 4. GenerateLocalID picks a UUID
+	// whose hash falls in this node's vnode arcs — same ID space, same
+	// uniqueness guarantee, just biased toward "stay home".
+	id := r.ring.GenerateLocalID(uuid.NewString)
 	if r.ring.IsLocal(id) {
 		t, ready, err := r.local.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 		if err == nil && t != nil && r.localBloom != nil {
