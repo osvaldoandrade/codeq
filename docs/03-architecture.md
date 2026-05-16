@@ -75,6 +75,15 @@
   - `redis_collector.go`: Custom Prometheus collector for Redis-backed queue metrics
 - **`internal/tracing`**: Distributed tracing
   - `tracing.go`: OpenTelemetry setup with OTLP gRPC exporter, W3C trace context propagation utilities
+- **`internal/cluster`**: Horizontal scaling via consistent-hash ring and gRPC routing
+  - `ring.go`: Consistent hash ring (virtual nodes, ID → owner resolution)
+  - `router.go`: TaskRouter implementing repository.TaskRepository on top of local Pebble + gRPC client pool
+  - `server.go`: gRPC server serving local Pebble shard to peer nodes
+  - `bloom.go`: Per-node Bloom filter tracking stored task IDs
+  - `bloom_cache.go`: Peer Bloom snapshots for negative lookup optimization
+  - `result_router.go`: Route result operations to task owner node
+  - `client.go`: gRPC client pool for inter-node communication
+  - `proto/clusterpb.proto`: Internal inter-node protocol definition
 
 ## Components
 
@@ -89,6 +98,7 @@
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
 - Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+- Clustering: Optional horizontal scaling via consistent-hash ring and gRPC routing across multiple nodes (see [05-cluster-architecture.md](05-cluster-architecture.md)).
 
 ## Pluggable Persistence Layer
 
