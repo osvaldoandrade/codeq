@@ -10,11 +10,16 @@ codeq/
 ├── pkg/                # Public API packages
 │   ├── app/            # Application bootstrap
 │   ├── config/         # Configuration
-│   └── domain/         # Domain entities
+│   ├── domain/         # Domain entities
+│   ├── producerclient/ # Producer streaming gRPC SDK
+│   ├── workerclient/   # Worker streaming gRPC SDK
+│   └── auth/           # Authentication plugin system
 ├── internal/           # Private implementation
 │   ├── backoff/        # Retry logic
 │   ├── controllers/    # HTTP handlers
 │   ├── middleware/     # Auth & middleware
+│   ├── producers/      # gRPC producer server
+│   ├── workers/        # gRPC worker server
 │   ├── providers/      # External services
 │   ├── repository/     # Data access
 │   └── services/       # Business logic
@@ -72,6 +77,116 @@ if err != nil {
 ````
 
 **See**: `docs/14-configuration.md` for full configuration reference
+
+---
+
+### `pkg/producerclient`
+
+**Purpose**: Go SDK for producer streaming gRPC API
+
+**Key types**:
+- `Client`: Manages gRPC connection. Create with `New(cfg)`, reuse for multiple sessions
+- `Session`: One authenticated stream with async pipelining. Safe for concurrent `Produce` calls from many goroutines
+- `Config`: Configuration (Addr, Token required; DialOptions for TLS/mTLS, Logger optional)
+- `CreateRequest`: Task submission params (mirrors REST POST /tasks body)
+
+**Features**:
+- Long-lived bidirectional gRPC stream after one-time auth
+- Async pipelining: many Produces in-flight before first Ack arrives
+- Sequence number correlation for matching Acks to requests
+- TLS/mTLS support via gRPC dial options
+- Structured logging with `slog`
+
+**Usage pattern**:
+1. Create Client: `client, err := producerclient.New(Config{Addr: "localhost:9092", Token: "..."})`
+2. Open Session: `sess, err := client.Connect(ctx)`
+3. Send tasks: `taskID, err := sess.Produce(ctx, CreateRequest{Command: "GENERATE_MASTER", Payload: ...})`
+4. Multiple goroutines can call `Produce` concurrently
+
+**Performance**: Bypasses per-call HTTP middleware; enables ~33k+ creates/sec (vs HTTP REST ceiling of ~33k/sec)
+
+**Example**:
+````go
+import "github.com/osvaldoandrade/codeq/pkg/producerclient"
+
+cli, err := producerclient.New(producerclient.Config{
+    Addr:  "localhost:9092",
+    Token: "bearer-token",
+})
+defer cli.Close()
+
+sess, err := cli.Connect(ctx)
+defer sess.Close()
+
+taskID, err := sess.Produce(ctx, producerclient.CreateRequest{
+    Command:   "GENERATE_MASTER",
+    Payload:   []byte(`{"jobId":"j-123"}`),
+    Priority:  5,
+    Webhook:   "https://example.org/hook",
+})
+````
+
+**See**: `docs/34-streaming-api-guide.md` for streaming API detailed guide
+
+---
+
+### `pkg/workerclient`
+
+**Purpose**: Go SDK for worker streaming gRPC API
+
+**Key types**:
+- `Client`: Manages gRPC connection and task dispatch loop
+- `Config`: Configuration (Addr, Token required; Concurrency, LeaseSeconds, Commands optional)
+- `Handler`: User-provided function to process tasks. Receives context and Task, returns Result. Must be concurrent-safe
+- `Task`: Work item (ID, Command, Payload, Priority, Attempts, MaxAttempts, TenantID, Webhook, LeaseUntil)
+- `Result`: Task disposition (Completed, Failed, Nack, Abandon)
+
+**Features**:
+- Long-lived bidirectional gRPC stream after one-time auth
+- Configurable concurrency (parallel slots for in-flight tasks)
+- Automatic Ready→Task→Result cycles
+- Idle backoff with exponential jitter
+- TLS/mTLS support via gRPC dial options
+- Structured logging with `slog`
+
+**Result constructors**:
+- `Completed(body map[string]any)`: Mark task done with optional result payload
+- `Failed(err string)`: Mark permanently failed (respects MaxAttempts)
+- `Nack(delaySeconds, reason)`: Requeue after delay
+- `Abandon()`: Release lease, return to pending immediately
+
+**Usage pattern**:
+1. Create Client: `client, err := workerclient.New(Config{Addr: "localhost:9091", Token: "..."})`
+2. Define handler: `func myHandler(ctx context.Context, t workerclient.Task) workerclient.Result { ... }`
+3. Run: `client.Run(ctx, myHandler)` (blocks until context cancelled)
+
+**Concurrency control**: Config.Concurrency controls parallel slots (default 1). Each slot independently runs Ready→Task→Result cycle.
+
+**Example**:
+````go
+import "github.com/osvaldoandrade/codeq/pkg/workerclient"
+
+handler := func(ctx context.Context, t workerclient.Task) workerclient.Result {
+    // Process task
+    result := process(t)
+    if err != nil {
+        return workerclient.Failed(err.Error())
+    }
+    return workerclient.Completed(map[string]any{"output": result})
+}
+
+cli, err := workerclient.New(workerclient.Config{
+    Addr:        "localhost:9091",
+    Token:       "bearer-token",
+    Concurrency: 10,
+    Commands:    []string{"GENERATE_MASTER"},
+})
+defer cli.Close()
+
+cli.Run(ctx, handler)
+````
+
+**See**: `docs/34-streaming-api-guide.md` for streaming API detailed guide
 
 ---
 

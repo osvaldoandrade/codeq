@@ -2,6 +2,8 @@
 
 All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 
+> **Note**: For high-throughput producers and workers, consider using the **gRPC Streaming API** instead. Streaming provides better latency and throughput by amortizing auth costs and enabling async pipelining. See `docs/34-streaming-api-guide.md` for details.
+
 ## Common headers
 
 - `Content-Type: application/json`

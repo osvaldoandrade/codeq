@@ -24,6 +24,7 @@ codeQ provides:
 - Result storage and optional callbacks (webhooks).
 - Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
 - **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- **High-throughput gRPC Streaming APIs** for Go producers and workers (Phase 3 — 2-3x faster than REST with async pipelining).
 - **Distributed tracing** with OpenTelemetry support for end-to-end observability.
 - **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
 - **Load testing framework**: Comprehensive k6 scenarios and Go benchmarks for performance validation and regression testing.

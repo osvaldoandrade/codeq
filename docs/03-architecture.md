@@ -7,7 +7,16 @@
 - **`pkg/app`**: Application bootstrap and HTTP server setup
   - `application.go`: Main application struct, server initialization
   - `url_mappings.go`: HTTP route definitions
+  - `producer_stream.go`: gRPC producer streaming server
+  - `worker_stream.go`: gRPC worker streaming server
   - `integration_test.go`: End-to-end integration tests
+- **`pkg/producerclient`**: Go SDK for producer streaming gRPC API
+  - `client.go`: Client connection management and session support
+  - `client_test.go`: Unit tests
+- **`pkg/workerclient`**: Go SDK for worker streaming gRPC API
+  - `client.go`: Client connection management and handler dispatch
+  - `result.go`: Task result types (Completed, Failed, Nack, Abandon)
+  - `client_test.go`: Unit tests
 - **`pkg/auth`**: Authentication plugin system
   - `interface.go`: Plugin interface definitions (Validator, Claims)
   - `jwks/`: Default JWKS-based authentication plugin
@@ -71,17 +80,20 @@
 
 ## Components
 
-- HTTP API: Gin-based router with JSON binding.
-- Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
-- Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
-- Scheduler core: orchestrates queue and task state transitions.
-- Result processor: validates completion payloads and stores results.
-- Storage: KVRocks via Redis API.
-- Artifact storage: local filesystem uploader.
-- Notifier: optional webhook signal dispatcher.
-- Requeue loop: claim-time repair during `Claim`.
-- Metrics: Prometheus instrumentation with custom Redis collector.
-- Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+- **HTTP API**: Gin-based router with JSON binding (traditional REST endpoints)
+- **gRPC Streaming API**: Bidirectional gRPC streams for high-throughput producers and workers (Phase 3)
+  - Producer stream: Long-lived connection for async task pipelining (pk/producerclient)
+  - Worker stream: Long-lived connection for efficient claim-result cycles (pkg/workerclient)
+- **Auth**: Producer and worker token validation via pluggable authentication system (default: JWKS)
+- **Rate limiter**: Optional Redis-backed token bucket rate limiting per bearer token
+- **Scheduler core**: Orchestrates queue and task state transitions
+- **Result processor**: Validates completion payloads and stores results
+- **Storage**: KVRocks via Redis API
+- **Artifact storage**: Local filesystem uploader
+- **Notifier**: Optional webhook signal dispatcher
+- **Requeue loop**: Claim-time repair during `Claim`
+- **Metrics**: Prometheus instrumentation with custom Redis collector
+- **Tracing**: Optional OpenTelemetry distributed tracing with W3C trace context propagation
 
 ## Enqueue flow
 
@@ -185,6 +197,61 @@ For configuration details, see `docs/14-configuration.md` (Tracing section) and 
 2. Service verifies ownership and status.
 3. Service computes backoff delay and moves the task to the delayed queue.
 4. Service clears lease and removes the task from in-progress.
+
+## gRPC Streaming Flows (Phase 3)
+
+codeQ Phase 3 introduces bidirectional gRPC streaming for high-throughput producers and workers.
+
+### Producer Streaming Flow
+
+1. **Connection & Auth**:
+   - Producer opens bidirectional gRPC stream via `client.Connect()`
+   - Sends `Hello` message with bearer token
+   - Receives `HelloAck` with tenant ID and subject
+   - Background reader goroutine starts to receive `CreateAck` messages
+
+2. **Task Pipelining**:
+   - Producer calls `session.Produce(ctx, CreateRequest)` from any goroutine
+   - Client assigns incrementing sequence number
+   - Message sent immediately (async)
+   - Call blocks until matching `CreateAck` arrives
+   - Multiple produces can be in-flight concurrently (true pipelining)
+
+3. **Acknowledgment**:
+   - Server processes `CreateTask` and sends `CreateAck` with matching sequence number
+   - Acks may arrive out-of-order due to concurrency
+   - Reader goroutine routes each ack to waiting produce call
+   - Producer receives task ID and returns
+
+**Performance**: Amortized auth cost (once per stream), async pipelining enables 2-3x throughput vs REST API.
+
+**See**: `docs/34-streaming-api-guide.md` for usage examples.
+
+### Worker Streaming Flow
+
+1. **Connection & Auth**:
+   - Worker opens bidirectional gRPC stream via `client.Run()`
+   - Sends `Hello` message with bearer token
+   - Receives `HelloAck` with tenant ID and subject
+   - Spawns N concurrent slots (N = Concurrency config)
+
+2. **Ready-Claim-Task-Result Cycles** (per slot):
+   - Sends `Ready` message with lease duration and command filter
+   - Waits for `Task` message (or timeout → backoff → retry Ready)
+   - Calls user-provided `Handler` function with task
+   - Handler returns result (`Completed`, `Failed`, `Nack`, or `Abandon`)
+   - Sends corresponding `Result` message back to server
+   - Repeats immediately (no wait between cycles)
+
+3. **Independent Slot Processing**:
+   - All N slots run independently in parallel
+   - Each slot maintains its own Ready-Result cycle
+   - One slot's failure (handler panic, stream error) doesn't block others
+   - Server maintains independent leases per in-flight task
+
+**Concurrency**: Config.Concurrency controls parallelism (default 1). Scales with connection throughput.
+
+**See**: `docs/34-streaming-api-guide.md` for usage examples.
 
 ## Multi-Tenant Architecture
 
