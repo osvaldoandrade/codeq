@@ -1,6 +1,6 @@
 # codeQ
 
-Reactive scheduling and completion system backed by persistent queues in KVRocks.
+Reactive scheduling and completion system backed by persistent queues. Choose your storage: KVRocks (distributed) or Pebble (embedded).
 
 This repository contains the core runtime, HTTP API wiring, and a Helm chart for small clusters.
 The production service wrapper lives at:
@@ -16,7 +16,9 @@ https://github.com/codecompany/codeq-service
 
 codeQ provides:
 
-- Persistent queues on KVRocks (Redis protocol).
+- Persistent queues with pluggable storage backends:
+  - **Redis/KVRocks** (distributed, cluster-capable)
+  - **Pebble** (embedded, zero-dependency, ideal for local development)
 - Pull-based worker claims with leases.
 - **Multi-tenant queue isolation** with automatic tenant ID extraction from JWT claims.
 - **Horizontal scaling with queue sharding**: Optional pluggable `ShardSupplier` interface for routing commands/tenants across multiple KVRocks instances.

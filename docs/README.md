@@ -1,6 +1,6 @@
 # codeQ Specification
 
-This specification defines codeQ, a reactive scheduling and completion system built on persistent queues in KVRocks. The design is inspired by Dyno Queues and its use of Dynomite as a lightweight DynamoDB-like storage layer, but codeQ targets KVRocks and is implemented in Go.
+This specification defines codeQ, a reactive scheduling and completion system built on persistent queues with pluggable storage backends: KVRocks (distributed, Redis protocol) or Pebble (embedded LSM-tree). The design is inspired by Dyno Queues and its use of Dynomite as a lightweight DynamoDB-like storage layer, and is implemented in Go.
 
 > **Note on Documentation Structure**: This `docs/` directory contains the **canonical specification and technical documentation** organized by the [Diátaxis framework](https://diataxis.fr/). The `wiki/` directory contains GitHub Pages content for the project website. When in doubt, refer to `docs/` for the authoritative documentation.
 
@@ -32,6 +32,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 5. `docs/05-queueing-model.md` - Queue semantics and behavior
 6. `docs/06-sharding.md` - Sharding strategy and ShardSupplier interface
 7. `docs/07-storage-kvrocks.md` - KVRocks storage layout
+7b. `docs/07b-storage-pebble.md` - Pebble embedded storage layout and comparison
 8. `docs/08-consistency.md` - Consistency guarantees
 9. `docs/09-security.md` - Authentication and authorization
 10. `docs/10-operations.md` - Operational procedures
@@ -43,7 +44,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 19. `docs/19-testing.md` - Test coverage and testing strategy
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
-27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
+27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Pebble, Memory, and extensibility)
 34. `docs/34-streaming-api-guide.md` - gRPC streaming API protocol reference, throughput characteristics, and concurrency model
 
 ### Integration Guides
@@ -59,7 +60,8 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 - `deploy/docker-compose/` - Local and single-node server Compose templates
 - `deploy/kubernetes/` - Kubernetes example manifests; use Helm for server installs
-- `deploy/config/codeq.example.yml` - Server configuration example
+- `deploy/config/codeq.example.yml` - Server configuration example (Redis backend)
+- `deploy/config/codeq-pebble.example.yml` - Server configuration example (Pebble embedded backend)
 - `helm/codeq/` - Helm chart and size profiles
 
 ### Explanation (Understanding-Oriented)

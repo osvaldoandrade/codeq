@@ -1,0 +1,65 @@
+# codeQ Configuration - Pebble Embedded Storage
+#
+# This example demonstrates a minimal codeQ setup using Pebble, the embedded
+# key-value store. Use this for:
+# - Local development (zero external dependencies)
+# - Testing and CI/CD pipelines
+# - Small single-machine deployments
+#
+# For distributed deployments with multiple codeQ instances, use Redis/KVRocks instead.
+# See codeq.example.yml for a full Redis configuration.
+
+# Core Settings
+port: 8080
+timezone: America/Sao_Paulo
+env: dev  # "dev" or "prod"
+logLevel: info
+logFormat: text
+
+# Persistence: Pebble (Embedded LSM-tree)
+persistenceProvider: pebble
+persistenceConfig:
+  # path: Directory where Pebble database files are stored.
+  # The directory will be created if it doesn't exist.
+  # Only one codeQ process may access this directory at a time (exclusive lock).
+  path: /var/lib/codeq/data
+
+  # fsyncOnCommit: Force filesystem sync on every batch commit.
+  # false (default): Faster throughput, but data may be lost on unclean shutdown
+  # true: Slower, but guaranteed durability (fsync after every commit)
+  fsyncOnCommit: false
+
+# Scheduling
+defaultLeaseSeconds: 300          # 5 minutes (worker task claim duration)
+maxAttemptsDefault: 5             # retry up to 5 times before DLQ
+backoffPolicy: exp_full_jitter    # exponential backoff with jitter
+backoffBaseSeconds: 5             # base delay for backoff calculation
+
+# Retention & Cleanup
+retentionSeconds: 86400           # keep tasks for 24 hours
+cleanupIntervalSeconds: 3600      # run cleanup every hour
+
+# Authentication (optional)
+# Uncomment to enable JWT authentication for workers and producers
+#auth:
+#  jwt:
+#    workerJwksUrl: https://your-issuer.example.com/.well-known/jwks.json
+#    workerIssuer: https://your-issuer.example.com
+#    producerJwksUrl: https://your-issuer.example.com/.well-known/jwks.json
+#    producerIssuer: https://your-issuer.example.com
+
+# Webhooks (optional)
+# webhookHandlers:
+#   - url: https://your-service.example.com/webhooks/codeq
+#     signingKey: your-secret-signing-key
+#     retries: 3
+
+# Tracing (optional - requires Jaeger or Grafana Tempo)
+# tracingEnabled: false
+# tracingServiceName: codeq
+# tracingOtlpEndpoint: localhost:4317
+# tracingOtlpInsecure: true
+# tracingSampleRatio: 1.0
+
+# For detailed configuration reference, see docs/14-configuration.md
+# For Pebble storage architecture and performance details, see docs/07b-storage-pebble.md
