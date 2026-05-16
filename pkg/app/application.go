@@ -57,6 +57,20 @@ func WithWorkerValidator(validator auth.Validator) ApplicationOption {
 	}
 }
 
+// newShardClient builds a per-shard go-redis client with the same connection
+// hygiene as the primary provider (timeouts disabled to skip per-op time.Now()).
+func newShardClient(addr, password string, db, poolSize int) (*redis.Client, error) {
+	return redis.NewClient(&redis.Options{
+		Addr:         addr,
+		Password:     password,
+		DB:           db,
+		PoolSize:     poolSize,
+		ReadTimeout:  -1,
+		WriteTimeout: -1,
+		IdleTimeout:  0,
+	}), nil
+}
+
 func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application, error) {
 	redisClient := providers.NewRedisProvider(cfg.RedisAddr, cfg.RedisPassword)
 	if err := repository.PreloadScripts(context.Background(), redisClient); err != nil {
@@ -130,12 +144,10 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 			if poolSize <= 0 {
 				poolSize = 10
 			}
-			client := redis.NewClient(&redis.Options{
-				Addr:     backend.Address,
-				Password: backend.Password,
-				DB:       backend.DB,
-				PoolSize: poolSize,
-			})
+			client, err := newShardClient(backend.Address, backend.Password, backend.DB, poolSize)
+			if err != nil {
+				return nil, fmt.Errorf("create shard client %s: %w", name, err)
+			}
 			if err := repository.PreloadScripts(context.Background(), client); err != nil {
 				return nil, fmt.Errorf("preload repository scripts on shard %s: %w", name, err)
 			}
@@ -169,7 +181,32 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		cfg.BackoffBaseSeconds,
 		cfg.BackoffMaxSeconds,
 	)
-	resultRepo := repository.NewResultRepository(redisClient, loc, shardSupplier)
+	var resultRepo repository.ResultRepository
+	if cfg.Sharding.Enabled && len(cfg.Sharding.Backends) > 0 {
+		resultClients := make(map[string]*redis.Client, len(cfg.Sharding.Backends))
+		for name, backend := range cfg.Sharding.Backends {
+			poolSize := backend.PoolSize
+			if poolSize <= 0 {
+				poolSize = 10
+			}
+			c, err := newShardClient(backend.Address, backend.Password, backend.DB, poolSize)
+			if err != nil {
+				return nil, fmt.Errorf("create result shard client %s: %w", name, err)
+			}
+			resultClients[name] = c
+		}
+		defaultShard := cfg.Sharding.DefaultShard
+		if defaultShard == "" {
+			defaultShard = shard.DefaultShardID
+		}
+		resultClientMap, err := shard.NewClientMap(resultClients, defaultShard)
+		if err != nil {
+			return nil, fmt.Errorf("create result shard client map: %w", err)
+		}
+		resultRepo = repository.NewShardedResultRepository(resultClientMap, loc, shardSupplier)
+	} else {
+		resultRepo = repository.NewResultRepository(redisClient, loc, shardSupplier)
+	}
 	uploader := providers.NewLocalUploader(cfg.LocalArtifactsDir)
 	resultCallback := services.NewResultCallbackService(
 		logger,

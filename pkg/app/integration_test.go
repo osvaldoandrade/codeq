@@ -31,8 +31,6 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 		t.Fatalf("miniredis start: %v", err)
 	}
 	t.Cleanup(mr.Close)
-	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
-	t.Cleanup(func() { _ = rdb.Close() })
 
 	privKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -153,7 +151,6 @@ func assertMetricsExposed(t *testing.T, baseURL string) {
 	if err != nil {
 		t.Fatalf("metrics request: %v", err)
 	}
-	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("metrics status %d body=%s", resp.StatusCode, string(b))
@@ -362,7 +359,6 @@ func doJSON(t *testing.T, ctx context.Context, method, url, token string, body a
 	if err != nil {
 		t.Fatalf("request error: %v", err)
 	}
-	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	if out != nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		_ = json.Unmarshal(b, out)
@@ -483,9 +479,7 @@ func TestHTTPIntegrationFlow_Sharded(t *testing.T) {
 
 	// Verify task data is on compute shard, NOT primary
 	computeClient := redis.NewClient(&redis.Options{Addr: mrCompute.Addr()})
-	t.Cleanup(func() { _ = computeClient.Close() })
 	primaryClient := redis.NewClient(&redis.Options{Addr: mrPrimary.Addr()})
-	t.Cleanup(func() { _ = primaryClient.Close() })
 
 	taskJSON, err := computeClient.HGet(ctx, "codeq:tasks", taskID).Result()
 	if err != nil || taskJSON == "" {
@@ -496,11 +490,15 @@ func TestHTTPIntegrationFlow_Sharded(t *testing.T) {
 		t.Fatal("task should NOT be on primary shard")
 	}
 
-	// Task operations through sharded repository: claim → heartbeat → nack → claim
+	// Task operations through sharded repository: claim → heartbeat → nack → claim → result.
+	// The trailing submitResult exercises the sharded result path; without
+	// shardedResultRepository this would 4xx because resultRepo would HGet
+	// codeq:tasks on the primary backend (where sharded tasks don't live).
 	claimTask(t, ctx, server.URL, workerToken, taskID)
 	heartbeatTask(t, ctx, server.URL, workerToken, taskID)
 	nackTask(t, ctx, server.URL, workerToken, taskID)
 	claimTask(t, ctx, server.URL, workerToken, taskID)
+	submitResult(t, ctx, server.URL, workerToken, taskID)
 
 	// Verify admin queues endpoint works with sharding (aggregates across shards)
 	adminToken := signAdminJWT(t, privKey, kid, "codeq-test", "codeq-producer", "admin-1")

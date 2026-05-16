@@ -108,7 +108,9 @@ type resultStorageAdapter struct {
 }
 
 func (a *resultStorageAdapter) SaveResult(ctx context.Context, rec domain.ResultRecord) error {
-	return a.repo.SaveResult(ctx, rec)
+	// Persistence-interface callers don't carry cmd/tenant context; pass empty so
+	// the sharded wrapper falls back to fan-out (correct, just an extra HGet hop).
+	return a.repo.SaveResult(ctx, rec, "", "")
 }
 
 func (a *resultStorageAdapter) GetResult(ctx context.Context, taskID string) (*domain.ResultRecord, error) {
