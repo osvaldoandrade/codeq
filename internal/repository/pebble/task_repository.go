@@ -49,6 +49,25 @@ type TaskRepository struct {
 	// restart. Channel buffer is sized large enough (per-queue cap) that
 	// producers rarely block; if they do, the send is context-cancellable.
 	queues sync.Map // key string → *queueChan
+
+	// delayedCount tracks the count of delayed entries per (cmd, tenant).
+	// Incremented when Enqueue/Nack writes to a delayed bucket and
+	// decremented by moveDueDelayedForTenant after each successful sweep.
+	// moveDueDelayedForTenant uses this as a fast-path skip: counter==0
+	// → return without opening the Pebble iter. Under steady-state load
+	// most claims have no delayed work to do, and the iter was responsible
+	// for ~27% of heap allocations in the Phase 0 profile.
+	delayedCount sync.Map // key string (cmd \x00 tenant) → *atomic.Int64
+
+	// delayedMoveFlag single-flights moveDueDelayedForTenant per (cmd,
+	// tenant) via CAS, NOT a mutex. Without it, two concurrent Claims
+	// can read the same delayed range, both write a new KeyPending for
+	// every id, both publish a hint — and the same task ends up
+	// double-claimed by two workers. With it, only the first goroutine
+	// to flip the flag actually sweeps; losers skip the move and fall
+	// through to the channel pop. The active sweeper publishes hints
+	// that the losers can consume, so throughput is preserved.
+	delayedMoveFlag sync.Map // key string (cmd \x00 tenant) → *atomic.Int32
 }
 
 // queueChan is the per-queue channel + recovery state. Each hint carries
@@ -133,6 +152,9 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	// starts serving claims; that's why we do it in the constructor.
 	if err := r.recoverQueues(); err != nil {
 		panic(fmt.Sprintf("pebble queue recovery: %v", err))
+	}
+	if err := r.recoverDelayedCounts(); err != nil {
+		panic(fmt.Sprintf("pebble delayed-count recovery: %v", err))
 	}
 	return r
 }
@@ -249,6 +271,8 @@ func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domai
 	// regression (claim falls back to a scan), not a correctness one.
 	if !delayed {
 		r.publishPending(cmd, tenantID, priority, pendingSeq, id)
+	} else {
+		r.delayedCounter(cmd, tenantID).Add(1)
 	}
 	metrics.TaskCreatedTotal.WithLabelValues(string(cmd)).Inc()
 	return task, ready, nil
@@ -290,9 +314,13 @@ func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []
 	}
 
 	// Delayed→pending sweep on the hot path so Nack(delaySeconds=0) becomes
-	// immediately claimable. Lease-expiry repair is throttled.
+	// immediately claimable. Lease-expiry repair is throttled. We pass the
+	// claimer's tenant explicitly so the iter scope (and the delayed-count
+	// fast-path skip) matches the bucket the producer-side Nack/Enqueue
+	// actually wrote to — the public MoveDueDelayed entry point still
+	// defaults to tenant="" for admin/test paths.
 	for _, cmd := range commands {
-		if _, err := r.MoveDueDelayed(ctx, cmd, inspectLimit); err != nil {
+		if _, err := r.moveDueDelayedForTenant(ctx, cmd, inspectLimit, tenantID); err != nil {
 			return nil, false, err
 		}
 		if r.reconcile.shouldRun(cmd, tenantID) {
@@ -332,10 +360,14 @@ func (r *TaskRepository) popFromAnyPriority(ctx context.Context, workerID string
 }
 
 // queueKey is the stable string identifier used to look up the per-queue
-// channel. Lowercased command + tenant + priority — same shape the storage
-// keys use, just compact for in-memory hashing.
+// channel. Uses the same normalization as the on-disk keys (cmdSeg
+// lowercases, tenantSeg maps "" → "_") so that recoverQueues — which
+// parses the (cmd, tenant) tuple out of disk keys — and producer-side
+// channelFor calls coming in with the raw API cmd resolve to the same
+// channel. Without this, recovered hints land on a different map entry
+// from the one Claim later reads from, stranding the IDs.
 func queueKey(cmd domain.Command, tenantID string, prio int) string {
-	return string(cmd) + "\x00" + tenantID + "\x00" + strconv.Itoa(prio)
+	return cmdSeg(cmd) + "\x00" + tenantSeg(tenantID) + "\x00" + strconv.Itoa(prio)
 }
 
 // channelFor returns the buffered ID channel for a (cmd, tenant, prio).
@@ -351,6 +383,36 @@ func (r *TaskRepository) channelFor(cmd domain.Command, tenantID string, prio in
 	q := &queueChan{ch: make(chan pendingHint, channelBufferSize)}
 	actual, _ := r.queues.LoadOrStore(k, q)
 	return actual.(*queueChan)
+}
+
+// delayedMoveFlagFor returns the per-(cmd, tenantID) CAS flag used to
+// single-flight moveDueDelayedForTenant. Same normalization rules as
+// delayedCounter / channelFor so concurrent callers converge on the
+// same atomic.
+func (r *TaskRepository) delayedMoveFlagFor(cmd domain.Command, tenantID string) *atomic.Int32 {
+	k := cmdSeg(cmd) + "\x00" + tenantSeg(tenantID)
+	if v, ok := r.delayedMoveFlag.Load(k); ok {
+		return v.(*atomic.Int32)
+	}
+	f := new(atomic.Int32)
+	actual, _ := r.delayedMoveFlag.LoadOrStore(k, f)
+	return actual.(*atomic.Int32)
+}
+
+// delayedCounter returns the atomic counter of delayed entries for
+// (cmd, tenantID). Lazy initialized; safe for concurrent producers.
+// Normalizes the lookup key via cmdSeg/tenantSeg so producer-side
+// increments (called with raw API cmd) and recoverDelayedCounts
+// (which parses cmd from the lowercased on-disk key) hit the same
+// counter object.
+func (r *TaskRepository) delayedCounter(cmd domain.Command, tenantID string) *atomic.Int64 {
+	k := cmdSeg(cmd) + "\x00" + tenantSeg(tenantID)
+	if v, ok := r.delayedCount.Load(k); ok {
+		return v.(*atomic.Int64)
+	}
+	n := new(atomic.Int64)
+	actual, _ := r.delayedCount.LoadOrStore(k, n)
+	return actual.(*atomic.Int64)
 }
 
 // recoverQueues scans every pending key under codeq/q/.../pending/* at
@@ -416,6 +478,43 @@ func (r *TaskRepository) recoverQueues() error {
 	return it.Error()
 }
 
+// recoverDelayedCounts seeds the delayed-entry counter map by walking
+// every delayed key once at startup. Parses the (cmd, tenant) tuple out
+// of each key and bumps the matching counter. Without this, a restart
+// would zero the counters and Claim's fast-path skip would let real
+// delayed tasks sit indefinitely until a new Nack or Enqueue bumped
+// the counter back above zero.
+func (r *TaskRepository) recoverDelayedCounts() error {
+	lower := []byte(pQueue)
+	upper := prefixUpper(lower)
+	it, err := r.db.Iter(lower, upper)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+
+	delayedMarker := []byte(segDelayed)
+	for valid := it.First(); valid; valid = it.Next() {
+		k := it.Key()
+		idx := indexOf(k, delayedMarker)
+		if idx < 0 {
+			continue
+		}
+		prefix := k[len(pQueue):idx]
+		parts := splitN(prefix, '/', 2)
+		if len(parts) != 2 {
+			continue
+		}
+		cmd := domain.Command(string(parts[0]))
+		tenantID := string(parts[1])
+		if tenantID == emptyTenant {
+			tenantID = ""
+		}
+		r.delayedCounter(cmd, tenantID).Add(1)
+	}
+	return it.Error()
+}
+
 func (r *TaskRepository) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
 	q := r.channelFor(cmd, tenantID, priority)
 	var h pendingHint
@@ -448,6 +547,17 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	}
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
+		_ = r.db.Delete(pendingKey)
+		return nil, false, nil
+	}
+
+	// Defense in depth: only PENDING tasks may transition to INPROG.
+	// If we got here with the task already INPROG / COMPLETED / FAILED,
+	// a duplicate pending hint reached the channel (recovery race or a
+	// missed single-flight in moveDueDelayedForTenant). Drop the stale
+	// pending key and bail — the rightful claimer is already at work
+	// and we must not steal the worker assignment.
+	if t.Status != domain.StatusPending {
 		_ = r.db.Delete(pendingKey)
 		return nil, false, nil
 	}
@@ -762,6 +872,7 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, false, err
 	}
+	r.delayedCounter(t.Command, t.TenantID).Add(1)
 	return delaySeconds, false, nil
 }
 
@@ -775,6 +886,30 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 	if limit <= 0 {
 		limit = defaultInspectLimit
 	}
+	// Fast path: if no delayed entries exist for this (cmd, tenant), skip
+	// the Pebble iter entirely. Phase 0 profile showed this iter accounted
+	// for ~27% of heap allocs because Claim invokes it on every call even
+	// when there's nothing to move.
+	counter := r.delayedCounter(cmd, tenantID)
+	if counter.Load() == 0 {
+		return 0, nil
+	}
+	// Single-flight concurrent sweeps for the same (cmd, tenant). Two
+	// workers hitting this in parallel would otherwise read the same
+	// delayed range, each write a new KeyPending for every id with a
+	// fresh seq, and each publish a hint on the queue channel — so the
+	// same task gets claimed twice. Only the second claim wins the
+	// in-progress bit, but BOTH workers think they own it, and the
+	// loser's Submit then fails with 409 not-in-progress once the
+	// first worker finalizes the task. The CAS-flag pattern (vs a
+	// mutex) means concurrent Claim callers don't block waiting for
+	// the sweep — they fall through to the channel pop and pick up
+	// the hints the winning sweeper publishes.
+	flag := r.delayedMoveFlagFor(cmd, tenantID)
+	if !flag.CompareAndSwap(0, 1) {
+		return 0, nil
+	}
+	defer flag.Store(0)
 	now := r.now()
 	lower, upper := PrefixDelayedUpTo(cmd, tenantID, uint64(now.Unix()))
 	it, err := r.db.Iter(lower, upper)
@@ -849,6 +984,11 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, err
 	}
+	// Every batchEntries item removed a key from the delayed bucket —
+	// some via successful move (counted in `moved`), some via ghost
+	// drop. Counter must track total deletions so it stays in sync
+	// with the on-disk reality.
+	counter.Add(-int64(len(batchEntries)))
 	for _, p := range published {
 		r.publishPending(p.cmd, p.tenantID, p.prio, p.seq, p.id)
 	}
@@ -989,7 +1129,11 @@ func (r *TaskRepository) AdminQueues(ctx context.Context) (map[string]any, error
 		if bucket == "" {
 			continue
 		}
-		out[bucket] = out[bucket].(int64) + 1
+		// First sighting of bucket: zero value of `any` is nil, so a
+		// blind `.(int64)` panics. The Redis path produces flat int64
+		// counts so we mirror that.
+		prev, _ := out[bucket].(int64)
+		out[bucket] = prev + 1
 	}
 	return out, nil
 }

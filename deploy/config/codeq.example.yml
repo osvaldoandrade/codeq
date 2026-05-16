@@ -40,7 +40,12 @@ workerAuthProvider: static
 workerAuthConfig:
   token: "your-worker-token-here"
   subject: "worker-1"
+  scopes: ["codeq:claim", "codeq:heartbeat", "codeq:abandon", "codeq:nack", "codeq:result", "codeq:subscribe"]
   eventTypes: ["GENERATE_MASTER", "GENERATE_CREATIVE"]
+
+# Optional worker streaming gRPC listener. When set, workers can use a
+# long-lived bidirectional stream instead of the HTTP claim/result hot path.
+# workerStreamAddr: ":9091"
 
 # === Task Scheduling ===
 defaultLeaseSeconds: 300

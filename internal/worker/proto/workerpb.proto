@@ -1,0 +1,171 @@
+// Package workerpb defines the external worker streaming protocol.
+//
+// Goal: replace the per-call HTTP round-trip on the claim+result hot
+// path (one POST /claim → one POST /tasks/<id>/result per task) with a
+// single long-lived bidirectional gRPC stream per worker. Auth and
+// tenant resolution happen exactly once at stream-open; from then on
+// the worker pushes Ready/Result/Nack/Abandon/Heartbeat events and the
+// server pushes Task assignments down the same connection.
+//
+// The producer side (POST /tasks) is unchanged — only the worker hot
+// path is converted, because that's the call pattern that runs in
+// tight loops and dominates the request-rate ceiling per Phase 1 bench.
+syntax = "proto3";
+
+package workerpb;
+
+option go_package = "github.com/osvaldoandrade/codeq/internal/worker/workerpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ---------------- Task model (mirrors clusterpb.Task) ----------------
+
+message Task {
+  string id = 1;
+  string command = 2;
+  bytes payload = 3;
+  int32 priority = 4;
+  string webhook = 5;
+  int32 max_attempts = 6;
+  string status = 7;
+  string worker_id = 8;
+  string lease_until = 9;
+  int32 attempts = 10;
+  string tenant_id = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+// ---------------- Worker → Server messages ----------------
+
+// Hello is the FIRST message a worker MUST send on a freshly-opened
+// stream. The server validates the bearer token, resolves tenant +
+// scopes, and replies with HelloAck. If auth fails the server closes
+// the stream with an Unauthenticated status.
+message Hello {
+  string token = 1;
+  // worker_id identifies this worker for the purposes of lease ownership.
+  // If empty the server falls back to the JWT subject claim.
+  string worker_id = 2;
+}
+
+// Ready is the worker saying "I have capacity for one more task with
+// any of these commands; push me one when available." The server
+// responds with a Task message when a task becomes available; until
+// then no message is sent for this Ready. Each Ready consumes exactly
+// one Task; if the worker wants prefetching, it sends N Readys.
+message Ready {
+  repeated string commands = 1;
+  int32 lease_seconds = 2;
+}
+
+// Result is the worker submitting completion for a previously-assigned
+// task. The server applies it and may respond with a ResultAck. Status
+// is one of COMPLETED / FAILED — the proto uses the same string values
+// as the REST API for parity.
+message Result {
+  string task_id = 1;
+  string status = 2;
+  bytes result_json = 3;     // present when status=COMPLETED
+  string error = 4;           // present when status=FAILED
+}
+
+// Nack returns the task to the queue with a delay before it becomes
+// claimable again. delay_seconds=0 means "immediately re-claimable".
+message Nack {
+  string task_id = 1;
+  int32 delay_seconds = 2;
+  string reason = 3;
+}
+
+// Heartbeat extends the worker's lease on a task it's still processing.
+message Heartbeat {
+  string task_id = 1;
+  int32 extend_seconds = 2;
+}
+
+// Abandon releases the lease without nacking — task goes straight back
+// to pending. Used when the worker shuts down cleanly.
+message Abandon {
+  string task_id = 1;
+}
+
+message WorkerEvent {
+  oneof event {
+    Hello hello = 1;
+    Ready ready = 2;
+    Result result = 3;
+    Nack nack = 4;
+    Heartbeat heartbeat = 5;
+    Abandon abandon = 6;
+  }
+}
+
+// ---------------- Server → Worker messages ----------------
+
+message HelloAck {
+  string worker_id = 1;
+  string tenant_id = 2;
+}
+
+// TaskAssignment is sent exactly once per Ready (one-to-one pairing).
+// If no task is available the server holds the Ready until one is.
+message TaskAssignment {
+  Task task = 1;
+}
+
+message ResultAck {
+  string task_id = 1;
+  // ok=false means the submission was rejected; error_message has the
+  // reason (not-found / not-owner / not-in-progress).
+  bool ok = 2;
+  string error_message = 3;
+}
+
+message HeartbeatAck {
+  string task_id = 1;
+  bool ok = 2;
+  string error_message = 3;
+}
+
+message NackAck {
+  string task_id = 1;
+  bool ok = 2;
+  string error_message = 3;
+  int32 applied_delay_seconds = 4;
+  bool dlq = 5;
+}
+
+message AbandonAck {
+  string task_id = 1;
+  bool ok = 2;
+  string error_message = 3;
+}
+
+message ServerError {
+  string message = 1;
+  string code = 2;
+}
+
+message ServerEvent {
+  oneof event {
+    HelloAck hello_ack = 1;
+    TaskAssignment task = 2;
+    ResultAck result_ack = 3;
+    HeartbeatAck heartbeat_ack = 4;
+    NackAck nack_ack = 5;
+    AbandonAck abandon_ack = 6;
+    ServerError error = 7;
+  }
+}
+
+// ---------------- Service ----------------
+
+service WorkerStream {
+  // Stream is the single long-lived bidirectional channel. The worker
+  // opens it, sends Hello, then loops: send Ready → receive Task →
+  // process → send Result. Multiple Readys can be in flight (the worker
+  // is free to pipeline). The server keeps each Ready in an internal
+  // queue and pairs it with the next claim that wins.
+  rpc Stream(stream WorkerEvent) returns (stream ServerEvent);
+}

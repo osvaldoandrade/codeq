@@ -17,10 +17,42 @@ import (
 //
 // DB is safe for concurrent use; pebble itself is goroutine-safe and the
 // seq counter uses atomics.
+//
+// Group commit: CommitBatch submits to a single coalescer goroutine that
+// merges concurrently-arriving batches into one larger Pebble batch
+// before calling Commit. Phase 0 profiling pinned Pebble's internal
+// commitPipeline mutex at 96% of mutex profile and 44% of block profile
+// at 26k req/s — every Commit() acquires that global lock. Merging N
+// batches into one Commit collapses N lock acquisitions into one, which
+// is the primary throughput lever on the Pebble write path.
 type DB struct {
-	db  *pebbledb.DB
-	seq atomic.Uint64
+	db       *pebbledb.DB
+	seq      atomic.Uint64
+	commitCh chan *commitReq
+	stopCh   chan struct{}
+	stopped  chan struct{}
 }
+
+// commitReq carries a single submitter's batch through the coalescer.
+// done is buffered so the coalescer never blocks on fan-out.
+type commitReq struct {
+	batch *pebbledb.Batch
+	done  chan error
+}
+
+const (
+	// maxMergeBatch caps the number of batches merged into a single
+	// Pebble commit. Higher values amortize the commitPipeline mutex
+	// over more ops but also increase tail latency for late joiners and
+	// the merged batch's memory footprint. 64 is a guess we can tune.
+	maxMergeBatch = 64
+	// commitChanBuf bounds the queue depth between producers and the
+	// coalescer goroutine. Sized to absorb several commit cycles' worth
+	// of in-flight batches at peak load (k6 saturation around 26-30k
+	// req/s × 3 commits/task ≈ ~90k commits/s; the coalescer drains
+	// fast enough that 1024 hasn't blocked in practice).
+	commitChanBuf = 1024
+)
 
 // Options is a thin facade over pebble.Options so callers don't need to
 // import pebble directly for basic open/close.
@@ -51,11 +83,17 @@ func Open(opts Options) (*DB, error) {
 		return nil, fmt.Errorf("pebble open %s: %w", opts.Path, err)
 	}
 
-	wrapper := &DB{db: d}
+	wrapper := &DB{
+		db:       d,
+		commitCh: make(chan *commitReq, commitChanBuf),
+		stopCh:   make(chan struct{}),
+		stopped:  make(chan struct{}),
+	}
 	if err := wrapper.recoverSeq(); err != nil {
 		_ = d.Close()
 		return nil, fmt.Errorf("recover seq: %w", err)
 	}
+	go wrapper.commitLoop()
 	return wrapper, nil
 }
 
@@ -63,6 +101,11 @@ func (d *DB) Close() error {
 	if d == nil || d.db == nil {
 		return nil
 	}
+	// Stop the coalescer first so any in-flight CommitBatch caller gets
+	// its response (or db-closed error) before pebble.Close yanks the DB
+	// out from under it.
+	close(d.stopCh)
+	<-d.stopped
 	return d.db.Close()
 }
 
@@ -168,10 +211,86 @@ func (d *DB) Batch() *pebbledb.Batch {
 	return d.db.NewBatch()
 }
 
-// CommitBatch applies the batch atomically. NoSync is used by default;
-// callers that need durability across crash should pass pebble.Sync.
+// CommitBatch hands the batch to the group-commit coalescer and blocks
+// until the merged commit finishes. From the caller's perspective the
+// contract is identical to before (synchronous, atomic, returns the
+// commit error if any). Under the hood up to maxMergeBatch concurrent
+// callers share a single Pebble Commit, slashing commitPipeline mutex
+// contention.
+//
+// Caller still owns the original batch and MUST Close it after this
+// returns (typical defer b.Close()). Apply() copies the ops out, so
+// closing the caller's batch does not affect the merged commit.
 func (d *DB) CommitBatch(b *pebbledb.Batch) error {
-	return b.Commit(pebbledb.NoSync)
+	req := &commitReq{batch: b, done: make(chan error, 1)}
+	select {
+	case d.commitCh <- req:
+	case <-d.stopCh:
+		return fmt.Errorf("db closed")
+	}
+	return <-req.done
+}
+
+// commitLoop is the single goroutine that owns the Pebble write side.
+// It pops the first queued request (blocking), opportunistically drains
+// additional requests already queued, merges them all into one batch,
+// and issues a single Commit. Errors fan out to every joined submitter.
+//
+// Tail-latency note: a submitter that arrives just after the coalescer
+// committed pays one merge cycle of wait. With maxMergeBatch=64 and a
+// per-commit cost on the order of microseconds, this is the same order
+// of magnitude as the lock wait we were already paying pre-coalescer.
+// We're betting throughput here, not latency.
+func (d *DB) commitLoop() {
+	defer close(d.stopped)
+	for {
+		var first *commitReq
+		select {
+		case <-d.stopCh:
+			// Drain any queued requests with a closed-DB error so
+			// callers don't block forever.
+			for {
+				select {
+				case req := <-d.commitCh:
+					req.done <- fmt.Errorf("db closed")
+				default:
+					return
+				}
+			}
+		case first = <-d.commitCh:
+		}
+
+		merged := d.db.NewBatch()
+		if err := merged.Apply(first.batch, nil); err != nil {
+			first.done <- err
+			_ = merged.Close()
+			continue
+		}
+		reqs := []*commitReq{first}
+
+	drain:
+		for len(reqs) < maxMergeBatch {
+			select {
+			case more := <-d.commitCh:
+				if err := merged.Apply(more.batch, nil); err != nil {
+					// Stop merging on Apply failure; this submitter
+					// gets the error directly, and we commit whatever
+					// merged so far.
+					more.done <- err
+					break drain
+				}
+				reqs = append(reqs, more)
+			default:
+				break drain
+			}
+		}
+
+		err := merged.Commit(pebbledb.NoSync)
+		_ = merged.Close()
+		for _, r := range reqs {
+			r.done <- err
+		}
+	}
 }
 
 // Iter returns a new iterator scoped to [lower, upper). Caller MUST Close.

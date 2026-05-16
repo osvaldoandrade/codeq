@@ -284,5 +284,27 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		app.WorkerValidator = validator
 	}
 
+	workerStream, err := startWorkerStreamServer(
+		cfg,
+		scheduler,
+		results,
+		app.WorkerValidator,
+		app.ProducerValidator,
+		logger,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if workerStream != nil {
+		tracingOnlyShutdown := app.TracingShutdown
+		app.TracingShutdown = func(ctx context.Context) error {
+			stopGRPCServer(ctx, workerStream)
+			if tracingOnlyShutdown == nil {
+				return nil
+			}
+			return tracingOnlyShutdown(ctx)
+		}
+	}
+
 	return app, nil
 }

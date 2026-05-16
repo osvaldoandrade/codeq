@@ -58,6 +58,12 @@ type Config struct {
 	RateLimit                          RateLimitConfig `yaml:"rateLimit"`
 	Sharding                           ShardingConfig  `yaml:"sharding"`
 	Cluster                            ClusterConfig   `yaml:"cluster"`
+	// WorkerStreamAddr enables the bidirectional worker gRPC stream when
+	// non-empty (e.g. ":9091"). Use this to escape the HTTP middleware
+	// tax on the claim+result hot path — one stream per worker carries
+	// every Ready/Result/Heartbeat instead of a fresh HTTP req per call.
+	// Empty value keeps the old REST-only behavior.
+	WorkerStreamAddr string `yaml:"workerStreamAddr"`
 }
 
 // ClusterConfig wires a codeq node into a multi-node cluster. When Enabled
@@ -159,6 +165,9 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if v := os.Getenv("PERSISTENCE_CONFIG"); v != "" {
 		c.PersistenceConfig = json.RawMessage(v)
+	}
+	if v := os.Getenv("WORKER_STREAM_ADDR"); v != "" {
+		c.WorkerStreamAddr = v
 	}
 	// Cluster overrides. CLUSTER_NODES is "id1=addr1,id2=addr2,..." which
 	// is friendlier in env vars / docker compose than nested YAML.

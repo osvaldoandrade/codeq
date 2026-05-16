@@ -163,6 +163,13 @@ The following fields are deprecated in favor of the new plugin-based authenticat
   - Environment variable: `WORKER_AUTH_CONFIG` (JSON string)
   - Format varies by provider (see authentication plugins documentation)
 
+### Worker Streaming gRPC
+
+- `workerStreamAddr` (string, optional): Enables the bidirectional worker gRPC stream on the provided listen address, for example `:9091`
+  - Environment variable: `WORKER_STREAM_ADDR`
+  - Empty by default; REST worker endpoints remain available either way
+  - Uses the same worker auth, scopes, event type authorization, tenant resolution, and `allowProducerAsWorker` behavior as the REST worker path
+
 ## Webhooks
 
 - `webhookHmacSecret` (string): Secret key for HMAC-SHA256 webhook signature generation
