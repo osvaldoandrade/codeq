@@ -15,7 +15,7 @@ import (
 // share connections via gRPC's built-in multiplexing — we don't create
 // a connection per RPC. Pool is goroutine-safe.
 type ClientPool struct {
-	mu   sync.Mutex
+	mu    sync.Mutex
 	dials map[string]*grpc.ClientConn // node ID → conn
 
 	// dialOpts allow tests/embedders to inject credentials, interceptors,

@@ -11,8 +11,8 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
-	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 

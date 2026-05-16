@@ -29,7 +29,7 @@ type Bloom struct {
 
 	count atomic.Uint64 // number of Add calls; advisory
 	seq   atomic.Uint64 // bumped every Add; gossip freshness marker
-	mu    sync.RWMutex   // guards Reset / Restore; Add/MaybeHas are lockless
+	mu    sync.RWMutex  // guards Reset / Restore; Add/MaybeHas are lockless
 }
 
 // NewBloom returns a Bloom sized for n expected items at false-positive

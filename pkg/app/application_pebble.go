@@ -136,6 +136,15 @@ func newPebbleApplication(
 		return nil, fmt.Errorf("open pebble: %w", err)
 	}
 
+	// Validate cluster config before creating background context
+	// to avoid context leak if cluster config is invalid.
+	if cfg.Cluster.Enabled {
+		if err := validateClusterConfig(cfg.Cluster); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+
 	// background goroutines (reaper, gossiper, subscription cleanup) share a
 	// cancellable context that the Application's shutdown hook cancels
 	// BEFORE closing the Pebble DB — otherwise the reaper wakes on its
@@ -161,10 +170,6 @@ func newPebbleApplication(
 		clientPool *cluster.ClientPool
 	)
 	if cfg.Cluster.Enabled {
-		if err := validateClusterConfig(cfg.Cluster); err != nil {
-			_ = db.Close()
-			return nil, err
-		}
 		nodes := make([]cluster.Node, 0, len(cfg.Cluster.Nodes))
 		for _, n := range cfg.Cluster.Nodes {
 			nodes = append(nodes, cluster.Node{ID: n.ID, GRPCAddr: n.GRPCAddr})
@@ -185,6 +190,7 @@ func newPebbleApplication(
 		// SelfID and only talk gRPC for peers.
 		grpcLis, err = net.Listen("tcp", cfg.Cluster.GRPCAddr)
 		if err != nil {
+			bgCancel() // Cancel context before returning due to error
 			_ = db.Close()
 			return nil, fmt.Errorf("cluster gRPC listen %s: %w", cfg.Cluster.GRPCAddr, err)
 		}

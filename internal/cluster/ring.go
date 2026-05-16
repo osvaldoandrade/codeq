@@ -27,10 +27,10 @@ type Node struct {
 // |nodes|). Thread-safe for concurrent Owner / All calls; mutation is
 // not supported after construction (config is static).
 type Ring struct {
-	nodes []Node            // sorted by ID for stable iteration
-	byID  map[string]Node   // O(1) lookup by node ID
+	nodes []Node          // sorted by ID for stable iteration
+	byID  map[string]Node // O(1) lookup by node ID
 
-	vhashes []uint64         // sorted virtual-node hash positions
+	vhashes []uint64          // sorted virtual-node hash positions
 	vowner  map[uint64]string // vhash → node ID
 
 	// vnodes determines load smoothness. 128 virtual nodes per real node

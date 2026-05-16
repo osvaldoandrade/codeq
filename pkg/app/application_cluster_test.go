@@ -102,9 +102,10 @@ func bootClusterNode(t *testing.T, selfID string, allNodes []config.ClusterNodeS
 // TestClusterRouting_TwoNodeRoundtrip: brings up two real codeq nodes
 // (HTTP + gRPC + Pebble each), creates 50 tasks on node A's REST API,
 // and verifies that:
-//   (1) tasks land split across both nodes (router hashed by task ID),
-//   (2) claiming via node A retrieves tasks owned by either node thanks
-//       to the scatter-gather Claim path.
+//
+//	(1) tasks land split across both nodes (router hashed by task ID),
+//	(2) claiming via node A retrieves tasks owned by either node thanks
+//	    to the scatter-gather Claim path.
 func TestClusterRouting_TwoNodeRoundtrip(t *testing.T) {
 	portA := freePort(t)
 	portB := freePort(t)
@@ -228,7 +229,9 @@ func TestClusterGetResult_AnyNode(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer dev-token")
 		req.Header.Set("Content-Type", "application/json")
 		resp, _ := http.DefaultClient.Do(req)
-		var ack struct{ ID string `json:"id"` }
+		var ack struct {
+			ID string `json:"id"`
+		}
 		_ = json.NewDecoder(resp.Body).Decode(&ack)
 		resp.Body.Close()
 		if ack.ID != "" {
@@ -249,7 +252,9 @@ func TestClusterGetResult_AnyNode(t *testing.T) {
 			resp.Body.Close()
 			continue
 		}
-		var task struct{ ID string `json:"id"` }
+		var task struct {
+			ID string `json:"id"`
+		}
 		_ = json.NewDecoder(resp.Body).Decode(&task)
 		resp.Body.Close()
 		if task.ID == "" {

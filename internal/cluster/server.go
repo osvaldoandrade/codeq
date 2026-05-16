@@ -257,9 +257,9 @@ func (s *Server) BloomSnapshot(ctx context.Context, _ *clusterpb.BloomSnapshotRe
 
 // ---------------- helpers ----------------
 
-func isNotFound(err error) bool       { return errMessageHas(err, "not-found") }
-func isNotOwner(err error) bool       { return errMessageHas(err, "not-owner") }
-func isNotInProgress(err error) bool  { return errMessageHas(err, "not-in-progress") }
+func isNotFound(err error) bool      { return errMessageHas(err, "not-found") }
+func isNotOwner(err error) bool      { return errMessageHas(err, "not-owner") }
+func isNotInProgress(err error) bool { return errMessageHas(err, "not-in-progress") }
 
 func errMessageHas(err error, substr string) bool {
 	if err == nil {
