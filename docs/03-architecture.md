@@ -72,6 +72,7 @@
 ## Components
 
 - HTTP API: Gin-based router with JSON binding.
+- gRPC Streaming APIs (optional, Phase 3): High-throughput producer and worker streaming protocols for low-latency task submission and claiming (2-3x throughput vs REST)
 - Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
 - Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
@@ -82,6 +83,45 @@
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
 - Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+
+## gRPC Streaming Flows
+
+codeQ provides optional high-throughput gRPC streaming APIs alongside the HTTP API:
+
+### Producer Streaming Flow
+
+1. Producer opens bidirectional stream to `PRODUCER_STREAM_ADDR`
+2. Producer sends `Hello` with bearer token
+3. Server responds `HelloAck` with tenant_id
+4. Producer pipelines `CreateTask` messages with monotonically-increasing seq numbers
+5. Server acks each with `CreateAck` (seq, task_id, or error)
+6. Multiple goroutines can safely call `Produce` concurrently for true pipelining
+
+**Key benefits:**
+- Single auth round-trip amortized across many requests
+- Async ack model supports request pipelining
+- 2-3x throughput improvement vs REST (REST: ~33k creates/sec, Streaming: ~100k+ creates/sec)
+
+### Worker Streaming Flow
+
+1. Worker opens bidirectional stream to `WORKER_STREAM_ADDR`
+2. Worker sends `Hello` with bearer token
+3. Server responds `HelloAck` with worker_id and tenant_id
+4. Worker spawns N concurrent slots (N = Config.Concurrency)
+5. Each slot independently loops:
+   - Sends `Ready` (declare capacity for commands)
+   - Receives `Task` (server assigns one task when available)
+   - Calls user Handler function
+   - Sends `Result` / `Nack` / `Abandon` / `Heartbeat`
+   - Receives ack and repeats
+6. Slots run in parallel; one failure doesn't block others
+
+**Key benefits:**
+- Single auth round-trip amortized across many operations
+- Concurrent slots enable multi-task processing
+- 2-3x throughput improvement vs REST (REST: ~10k claims/sec, Streaming: ~30k+ claims/sec)
+
+For detailed protocol specifications and client usage, see [gRPC Streaming APIs](34-streaming-api-guide.md).
 
 ## Enqueue flow
 
