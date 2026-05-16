@@ -295,10 +295,21 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	if err != nil {
 		return nil, err
 	}
-	if workerStream != nil {
+	producerStream, err := startProducerStreamServer(
+		cfg,
+		scheduler,
+		app.ProducerValidator,
+		logger,
+	)
+	if err != nil {
+		stopGRPCServer(context.Background(), workerStream)
+		return nil, err
+	}
+	if workerStream != nil || producerStream != nil {
 		tracingOnlyShutdown := app.TracingShutdown
 		app.TracingShutdown = func(ctx context.Context) error {
 			stopGRPCServer(ctx, workerStream)
+			stopGRPCServer(ctx, producerStream)
 			if tracingOnlyShutdown == nil {
 				return nil
 			}
