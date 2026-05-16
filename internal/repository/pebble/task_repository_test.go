@@ -270,3 +270,38 @@ func TestIdempotencyReturnsOriginal(t *testing.T) {
 		t.Fatalf("expected same id for idempotency key, got %s vs %s", a.ID, b.ID)
 	}
 }
+
+// TestAdminQueuesAggregates is a regression for the nil-int64 panic on
+// first sighting of a bucket: out[bucket].(int64) blew up the admin
+// endpoint when the map entry didn't exist yet.
+func TestAdminQueuesAggregates(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
+	cmd := domain.CmdGenerateMaster
+
+	for range 3 {
+		if _, err := repo.Enqueue(ctx, cmd, `{}`, 0, "", 3, "", time.Time{}, ""); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+
+	out, err := repo.AdminQueues(ctx)
+	if err != nil {
+		t.Fatalf("AdminQueues: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("AdminQueues returned no buckets")
+	}
+	var total int64
+	for _, v := range out {
+		n, ok := v.(int64)
+		if !ok {
+			t.Fatalf("bucket value not int64: %T %v", v, v)
+		}
+		total += n
+	}
+	if total != 3 {
+		t.Fatalf("total entries=%d, want 3", total)
+	}
+}

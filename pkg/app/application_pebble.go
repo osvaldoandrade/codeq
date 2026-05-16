@@ -162,6 +162,7 @@ func newPebbleApplication(
 	)
 	if cfg.Cluster.Enabled {
 		if err := validateClusterConfig(cfg.Cluster); err != nil {
+			bgCancel()
 			_ = db.Close()
 			return nil, err
 		}
@@ -185,6 +186,7 @@ func newPebbleApplication(
 		// SelfID and only talk gRPC for peers.
 		grpcLis, err = net.Listen("tcp", cfg.Cluster.GRPCAddr)
 		if err != nil {
+			bgCancel()
 			_ = db.Close()
 			return nil, fmt.Errorf("cluster gRPC listen %s: %w", cfg.Cluster.GRPCAddr, err)
 		}
@@ -276,43 +278,34 @@ func newPebbleApplication(
 		Logger:      logger,
 		TZ:          loc,
 		RateLimiter: limiter,
-		TracingShutdown: func(ctx context.Context) error {
-			// Cancel background workers first; they hold references to db.
-			bgCancel()
-			if grpcSrv != nil {
-				// GracefulStop drains in-flight RPCs first, then exits.
-				done := make(chan struct{})
-				go func() { grpcSrv.GracefulStop(); close(done) }()
-				select {
-				case <-done:
-				case <-ctx.Done():
-					grpcSrv.Stop()
-				}
-			}
-			if clientPool != nil {
-				_ = clientPool.Close()
-			}
-			if grpcLis != nil {
-				_ = grpcLis.Close()
-			}
-			if err := db.Close(); err != nil {
-				logger.Warn("pebble close", "err", err)
-			}
-			if tracingShutdown == nil {
-				return nil
-			}
-			return tracingShutdown(ctx)
-		},
+	}
+
+	cleanupStartupFailure := func() {
+		bgCancel()
+		if grpcSrv != nil {
+			grpcSrv.Stop()
+		}
+		if grpcLis != nil {
+			_ = grpcLis.Close()
+		}
+		if clientPool != nil {
+			_ = clientPool.Close()
+		}
+		if cerr := db.Close(); cerr != nil {
+			logger.Warn("pebble close after startup failure", "err", cerr)
+		}
 	}
 
 	for _, o := range opts {
 		if err := o(app); err != nil {
+			cleanupStartupFailure()
 			return nil, err
 		}
 	}
 	if app.ProducerValidator == nil && cfg.ProducerAuthProvider != "" {
 		v, err := auth.NewValidator(auth.ProviderConfig{Type: cfg.ProducerAuthProvider, Config: cfg.ProducerAuthConfig})
 		if err != nil {
+			cleanupStartupFailure()
 			return nil, err
 		}
 		app.ProducerValidator = v
@@ -320,9 +313,40 @@ func newPebbleApplication(
 	if app.WorkerValidator == nil && cfg.WorkerAuthProvider != "" {
 		v, err := auth.NewValidator(auth.ProviderConfig{Type: cfg.WorkerAuthProvider, Config: cfg.WorkerAuthConfig})
 		if err != nil {
+			cleanupStartupFailure()
 			return nil, err
 		}
 		app.WorkerValidator = v
 	}
+
+	workerStream, err := startWorkerStreamServer(
+		cfg,
+		scheduler,
+		results,
+		app.WorkerValidator,
+		app.ProducerValidator,
+		logger,
+	)
+	if err != nil {
+		cleanupStartupFailure()
+		return nil, err
+	}
+
+	app.TracingShutdown = func(ctx context.Context) error {
+		bgCancel()
+		stopGRPCServer(ctx, &grpcServerHandle{srv: grpcSrv, lis: grpcLis})
+		stopGRPCServer(ctx, workerStream)
+		if clientPool != nil {
+			_ = clientPool.Close()
+		}
+		if err := db.Close(); err != nil {
+			logger.Warn("pebble close", "err", err)
+		}
+		if tracingShutdown == nil {
+			return nil
+		}
+		return tracingShutdown(ctx)
+	}
+
 	return app, nil
 }

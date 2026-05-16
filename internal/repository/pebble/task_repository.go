@@ -58,6 +58,16 @@ type TaskRepository struct {
 	// most claims have no delayed work to do, and the iter was responsible
 	// for ~27% of heap allocations in the Phase 0 profile.
 	delayedCount sync.Map // key string (cmd \x00 tenant) → *atomic.Int64
+
+	// delayedMoveFlag single-flights moveDueDelayedForTenant per (cmd,
+	// tenant) via CAS, NOT a mutex. Without it, two concurrent Claims
+	// can read the same delayed range, both write a new KeyPending for
+	// every id, both publish a hint — and the same task ends up
+	// double-claimed by two workers. With it, only the first goroutine
+	// to flip the flag actually sweeps; losers skip the move and fall
+	// through to the channel pop. The active sweeper publishes hints
+	// that the losers can consume, so throughput is preserved.
+	delayedMoveFlag sync.Map // key string (cmd \x00 tenant) → *atomic.Int32
 }
 
 // queueChan is the per-queue channel + recovery state. Each hint carries
@@ -375,6 +385,20 @@ func (r *TaskRepository) channelFor(cmd domain.Command, tenantID string, prio in
 	return actual.(*queueChan)
 }
 
+// delayedMoveFlagFor returns the per-(cmd, tenantID) CAS flag used to
+// single-flight moveDueDelayedForTenant. Same normalization rules as
+// delayedCounter / channelFor so concurrent callers converge on the
+// same atomic.
+func (r *TaskRepository) delayedMoveFlagFor(cmd domain.Command, tenantID string) *atomic.Int32 {
+	k := cmdSeg(cmd) + "\x00" + tenantSeg(tenantID)
+	if v, ok := r.delayedMoveFlag.Load(k); ok {
+		return v.(*atomic.Int32)
+	}
+	f := new(atomic.Int32)
+	actual, _ := r.delayedMoveFlag.LoadOrStore(k, f)
+	return actual.(*atomic.Int32)
+}
+
 // delayedCounter returns the atomic counter of delayed entries for
 // (cmd, tenantID). Lazy initialized; safe for concurrent producers.
 // Normalizes the lookup key via cmdSeg/tenantSeg so producer-side
@@ -523,6 +547,17 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	}
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
+		_ = r.db.Delete(pendingKey)
+		return nil, false, nil
+	}
+
+	// Defense in depth: only PENDING tasks may transition to INPROG.
+	// If we got here with the task already INPROG / COMPLETED / FAILED,
+	// a duplicate pending hint reached the channel (recovery race or a
+	// missed single-flight in moveDueDelayedForTenant). Drop the stale
+	// pending key and bail — the rightful claimer is already at work
+	// and we must not steal the worker assignment.
+	if t.Status != domain.StatusPending {
 		_ = r.db.Delete(pendingKey)
 		return nil, false, nil
 	}
@@ -859,6 +894,22 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 	if counter.Load() == 0 {
 		return 0, nil
 	}
+	// Single-flight concurrent sweeps for the same (cmd, tenant). Two
+	// workers hitting this in parallel would otherwise read the same
+	// delayed range, each write a new KeyPending for every id with a
+	// fresh seq, and each publish a hint on the queue channel — so the
+	// same task gets claimed twice. Only the second claim wins the
+	// in-progress bit, but BOTH workers think they own it, and the
+	// loser's Submit then fails with 409 not-in-progress once the
+	// first worker finalizes the task. The CAS-flag pattern (vs a
+	// mutex) means concurrent Claim callers don't block waiting for
+	// the sweep — they fall through to the channel pop and pick up
+	// the hints the winning sweeper publishes.
+	flag := r.delayedMoveFlagFor(cmd, tenantID)
+	if !flag.CompareAndSwap(0, 1) {
+		return 0, nil
+	}
+	defer flag.Store(0)
 	now := r.now()
 	lower, upper := PrefixDelayedUpTo(cmd, tenantID, uint64(now.Unix()))
 	it, err := r.db.Iter(lower, upper)
@@ -1078,7 +1129,11 @@ func (r *TaskRepository) AdminQueues(ctx context.Context) (map[string]any, error
 		if bucket == "" {
 			continue
 		}
-		out[bucket] = out[bucket].(int64) + 1
+		// First sighting of bucket: zero value of `any` is nil, so a
+		// blind `.(int64)` panics. The Redis path produces flat int64
+		// counts so we mirror that.
+		prev, _ := out[bucket].(int64)
+		out[bucket] = prev + 1
 	}
 	return out, nil
 }
