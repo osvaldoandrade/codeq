@@ -57,6 +57,24 @@ type Config struct {
 	ResultWebhookMaxBackoffSeconds     int             `yaml:"resultWebhookMaxBackoffSeconds"`
 	RateLimit                          RateLimitConfig `yaml:"rateLimit"`
 	Sharding                           ShardingConfig  `yaml:"sharding"`
+	Cluster                            ClusterConfig   `yaml:"cluster"`
+}
+
+// ClusterConfig wires a codeq node into a multi-node cluster. When Enabled
+// is true the node opens a gRPC listener on GRPCAddr and consults Nodes for
+// routing decisions; SelfID must match one of Nodes[].ID. Persistence must
+// be set to "pebble" — clustering is meaningless against a shared backend.
+type ClusterConfig struct {
+	Enabled  bool              `yaml:"enabled"`
+	SelfID   string            `yaml:"selfId"`
+	GRPCAddr string            `yaml:"grpcAddr"` // local listen, e.g. ":9090"
+	Nodes    []ClusterNodeSpec `yaml:"nodes"`
+}
+
+// ClusterNodeSpec is one entry in the cluster's static node list.
+type ClusterNodeSpec struct {
+	ID       string `yaml:"id"`
+	GRPCAddr string `yaml:"grpcAddr"`
 }
 
 // ShardingConfig holds the sharding configuration for multi-shard deployments.
@@ -141,6 +159,37 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if v := os.Getenv("PERSISTENCE_CONFIG"); v != "" {
 		c.PersistenceConfig = json.RawMessage(v)
+	}
+	// Cluster overrides. CLUSTER_NODES is "id1=addr1,id2=addr2,..." which
+	// is friendlier in env vars / docker compose than nested YAML.
+	if v := os.Getenv("CLUSTER_ENABLED"); v != "" {
+		c.Cluster.Enabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("CLUSTER_SELF_ID"); v != "" {
+		c.Cluster.SelfID = v
+	}
+	if v := os.Getenv("CLUSTER_GRPC_ADDR"); v != "" {
+		c.Cluster.GRPCAddr = v
+	}
+	if v := os.Getenv("CLUSTER_NODES"); v != "" {
+		nodes := make([]ClusterNodeSpec, 0)
+		for _, pair := range strings.Split(v, ",") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			eq := strings.Index(pair, "=")
+			if eq <= 0 || eq == len(pair)-1 {
+				continue
+			}
+			nodes = append(nodes, ClusterNodeSpec{
+				ID:       strings.TrimSpace(pair[:eq]),
+				GRPCAddr: strings.TrimSpace(pair[eq+1:]),
+			})
+		}
+		if len(nodes) > 0 {
+			c.Cluster.Nodes = nodes
+		}
 	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
 		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")

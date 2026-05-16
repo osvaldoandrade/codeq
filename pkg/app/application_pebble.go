@@ -12,15 +12,54 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
 
+	"net"
+
+	"google.golang.org/grpc"
+
+	"github.com/osvaldoandrade/codeq/internal/cluster"
+	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
-	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
+	"github.com/osvaldoandrade/codeq/internal/repository"
+	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
+
+// validateClusterConfig checks the static cluster config is well-formed
+// before any side-effect (listen, dial) so misconfigurations fail fast.
+func validateClusterConfig(c config.ClusterConfig) error {
+	if c.SelfID == "" {
+		return fmt.Errorf("cluster.selfId is required when cluster.enabled=true")
+	}
+	if c.GRPCAddr == "" {
+		return fmt.Errorf("cluster.grpcAddr is required when cluster.enabled=true")
+	}
+	if len(c.Nodes) == 0 {
+		return fmt.Errorf("cluster.nodes is empty")
+	}
+	seen := make(map[string]bool, len(c.Nodes))
+	selfFound := false
+	for _, n := range c.Nodes {
+		if n.ID == "" || n.GRPCAddr == "" {
+			return fmt.Errorf("cluster node missing id/grpcAddr: %+v", n)
+		}
+		if seen[n.ID] {
+			return fmt.Errorf("cluster node id %q listed twice", n.ID)
+		}
+		seen[n.ID] = true
+		if n.ID == c.SelfID {
+			selfFound = true
+		}
+	}
+	if !selfFound {
+		return fmt.Errorf("cluster.selfId %q not present in cluster.nodes", c.SelfID)
+	}
+	return nil
+}
 
 // noopLimiter is the rate-limiter the Pebble path uses: there is no
 // shared bucket across processes (Pebble is single-instance), and the
@@ -97,9 +136,86 @@ func newPebbleApplication(
 		return nil, fmt.Errorf("open pebble: %w", err)
 	}
 
-	taskRepo := pebblerepo.NewTaskRepository(db, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
-	resultRepo := pebblerepo.NewResultRepository(db, loc)
+	// background goroutines (reaper, gossiper, subscription cleanup) share a
+	// cancellable context that the Application's shutdown hook cancels
+	// BEFORE closing the Pebble DB — otherwise the reaper wakes on its
+	// next tick against a closed DB and panics.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
+	localTaskRepo := pebblerepo.NewTaskRepository(db, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
+	localResultRepo := pebblerepo.NewResultRepository(db, loc)
 	subRepo := pebblerepo.NewSubscriptionRepository(db, loc)
+
+	// In cluster mode, wrap the local Pebble repos with routers that:
+	//   - hash-route ID-aware operations to the owning node via gRPC
+	//   - scatter-gather Claim across every node
+	// The service layer above takes plain repository interfaces, so it
+	// doesn't observe whether it's holding the local Pebble repo or the
+	// router. The internal gRPC server delegates to the SAME local repo,
+	// so requests that hash back to this node short-circuit the network.
+	var (
+		taskRepo   repository.TaskRepository   = localTaskRepo
+		resultRepo repository.ResultRepository = localResultRepo
+		grpcSrv    *grpc.Server
+		grpcLis    net.Listener
+		clientPool *cluster.ClientPool
+	)
+	if cfg.Cluster.Enabled {
+		if err := validateClusterConfig(cfg.Cluster); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		nodes := make([]cluster.Node, 0, len(cfg.Cluster.Nodes))
+		for _, n := range cfg.Cluster.Nodes {
+			nodes = append(nodes, cluster.Node{ID: n.ID, GRPCAddr: n.GRPCAddr})
+		}
+		ring := cluster.NewLocalRing(cluster.NewRing(nodes), cfg.Cluster.SelfID)
+		clientPool = cluster.NewClientPool()
+
+		// Bloom of locally-stored task IDs; gossiped to peers so they can
+		// short-circuit ID-routed lookups for ids that definitely aren't
+		// on this node. 1M expected items at 0.1% FP rate sizes the
+		// filter at ~1.7 MiB — cheap to ship across the wire on the 1s
+		// gossip cadence.
+		localBloom := cluster.NewBloom(1_000_000, 0.001)
+		bloomCache := cluster.NewBloomCache(1_000_000, 0.001)
+
+		// Start the internal gRPC server. Local repos serve every RPC;
+		// the router on this node will short-circuit calls that hash to
+		// SelfID and only talk gRPC for peers.
+		grpcLis, err = net.Listen("tcp", cfg.Cluster.GRPCAddr)
+		if err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("cluster gRPC listen %s: %w", cfg.Cluster.GRPCAddr, err)
+		}
+		grpcSrv = grpc.NewServer()
+		clusterpb.RegisterTaskNodeServer(grpcSrv, &cluster.Server{
+			NodeID:     cfg.Cluster.SelfID,
+			Tasks:      localTaskRepo,
+			Results:    localResultRepo,
+			LocalBloom: localBloom,
+		})
+		go func() {
+			if err := grpcSrv.Serve(grpcLis); err != nil && err != grpc.ErrServerStopped {
+				logger.Error("cluster gRPC server stopped", "err", err)
+			}
+		}()
+		logger.Info("cluster mode enabled",
+			"selfID", cfg.Cluster.SelfID,
+			"grpcAddr", cfg.Cluster.GRPCAddr,
+			"peers", len(nodes)-1)
+
+		taskRepo = cluster.NewTaskRouter(localTaskRepo, ring, clientPool).
+			WithBloomCache(bloomCache).
+			WithLocalBloom(localBloom)
+		resultRepo = cluster.NewResultRouter(localResultRepo, ring, clientPool).
+			WithBloomCache(bloomCache)
+
+		// Gossip peer blooms in the background. 1s default cadence; tests
+		// can force a poll via Gossiper but this is enough for production.
+		gossiper := cluster.NewGossiper(ring, clientPool, bloomCache, time.Second, logger)
+		gossiper.Start(bgCtx)
+	}
 
 	// Background reaper: enforces lease expiry + TTL cleanup, which Redis
 	// gives us via key TTL.
@@ -109,7 +225,7 @@ func newPebbleApplication(
 		BackoffMaxSeconds:  cfg.BackoffMaxSeconds,
 		MaxAttemptsDefault: cfg.MaxAttemptsDefault,
 	})
-	reaper.Start(context.Background())
+	reaper.Start(bgCtx)
 
 	subs := services.NewSubscriptionService(subRepo)
 	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
@@ -149,7 +265,7 @@ func newPebbleApplication(
 	engine.Use(middleware.LoggerMiddleware(logger))
 
 	// Subscription cleanup goroutine — same cadence as the redis path.
-	go cleanup.Start(context.Background())
+	go cleanup.Start(bgCtx)
 
 	app := &Application{
 		Config:      cfg,
@@ -161,6 +277,24 @@ func newPebbleApplication(
 		TZ:          loc,
 		RateLimiter: limiter,
 		TracingShutdown: func(ctx context.Context) error {
+			// Cancel background workers first; they hold references to db.
+			bgCancel()
+			if grpcSrv != nil {
+				// GracefulStop drains in-flight RPCs first, then exits.
+				done := make(chan struct{})
+				go func() { grpcSrv.GracefulStop(); close(done) }()
+				select {
+				case <-done:
+				case <-ctx.Done():
+					grpcSrv.Stop()
+				}
+			}
+			if clientPool != nil {
+				_ = clientPool.Close()
+			}
+			if grpcLis != nil {
+				_ = grpcLis.Close()
+			}
 			if err := db.Close(); err != nil {
 				logger.Warn("pebble close", "err", err)
 			}

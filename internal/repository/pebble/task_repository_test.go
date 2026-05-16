@@ -98,7 +98,7 @@ func TestNackDelayedThenReclaim(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	// Make reconcile eager — the test would otherwise wait 500ms.
-	repo.(*taskRepo).reconcile.interval = 0
+	repo.reconcile.interval = 0
 	cmd := domain.CmdGenerateMaster
 
 	enq, _ := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, "")
@@ -132,7 +132,7 @@ func TestNackEventuallyDLQ(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 1)
-	repo.(*taskRepo).reconcile.interval = 0
+	repo.reconcile.interval = 0
 	cmd := domain.CmdGenerateMaster
 
 	// Each Claim and each Nack increment attempts. With maxAttempts=3 the

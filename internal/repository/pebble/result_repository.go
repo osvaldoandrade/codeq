@@ -10,26 +10,25 @@ import (
 
 	"github.com/bytedance/sonic"
 
-	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
-// resultRepo backs repository.ResultRepository against the same Pebble DB
+// ResultRepository backs *ResultRepository against the same Pebble DB
 // that holds the task data. Atomicity for compound operations (finalize +
 // inprog cleanup + lease delete + result write) comes from pebble.Batch.
-type resultRepo struct {
+type ResultRepository struct {
 	db *DB
 	tz *time.Location
 }
 
 // NewResultRepository creates a ResultRepository on top of an open DB.
-func NewResultRepository(db *DB, tz *time.Location) repository.ResultRepository {
-	return &resultRepo{db: db, tz: tz}
+func NewResultRepository(db *DB, tz *time.Location) *ResultRepository {
+	return &ResultRepository{db: db, tz: tz}
 }
 
-func (r *resultRepo) now() time.Time { return time.Now().In(r.tz) }
+func (r *ResultRepository) now() time.Time { return time.Now().In(r.tz) }
 
-func (r *resultRepo) GetTask(ctx context.Context, id string) (*domain.Task, error) {
+func (r *ResultRepository) GetTask(ctx context.Context, id string) (*domain.Task, error) {
 	v, err := r.db.Get(KeyTask(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -48,7 +47,7 @@ func (r *resultRepo) GetTask(ctx context.Context, id string) (*domain.Task, erro
 // pointer in one batch. Returns "not-found" if the task is missing — same
 // contract the redis path uses so the sharded wrapper (irrelevant here
 // since Pebble is single-instance) can detect orphan submits.
-func (r *resultRepo) SaveResult(ctx context.Context, rec domain.ResultRecord, _ domain.Command, _ string) error {
+func (r *ResultRepository) SaveResult(ctx context.Context, rec domain.ResultRecord, _ domain.Command, _ string) error {
 	taskJSON, err := r.db.Get(KeyTask(rec.TaskID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -79,7 +78,7 @@ func (r *resultRepo) SaveResult(ctx context.Context, rec domain.ResultRecord, _ 
 	return r.db.CommitBatch(b)
 }
 
-func (r *resultRepo) GetResult(ctx context.Context, id string) (*domain.ResultRecord, error) {
+func (r *ResultRepository) GetResult(ctx context.Context, id string) (*domain.ResultRecord, error) {
 	v, err := r.db.Get(KeyResult(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -94,7 +93,7 @@ func (r *resultRepo) GetResult(ctx context.Context, id string) (*domain.ResultRe
 	return &rec, nil
 }
 
-func (r *resultRepo) GetTaskAndResult(ctx context.Context, id string) (*domain.Task, *domain.ResultRecord, error) {
+func (r *ResultRepository) GetTaskAndResult(ctx context.Context, id string) (*domain.Task, *domain.ResultRecord, error) {
 	t, terr := r.GetTask(ctx, id)
 	if terr != nil {
 		return nil, nil, fmt.Errorf("task not-found")
@@ -109,7 +108,7 @@ func (r *resultRepo) GetTaskAndResult(ctx context.Context, id string) (*domain.T
 // UpdateTaskOnComplete atomically finalizes a task: status update, inprog
 // removal, lease deletion. All four writes land in one batch so the claim
 // path can't observe a half-completed state.
-func (r *resultRepo) UpdateTaskOnComplete(ctx context.Context, id string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error {
+func (r *ResultRepository) UpdateTaskOnComplete(ctx context.Context, id string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error {
 	taskJSON, err := r.db.Get(KeyTask(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -149,7 +148,7 @@ func (r *resultRepo) UpdateTaskOnComplete(ctx context.Context, id string, cmd do
 	return r.db.CommitBatch(b)
 }
 
-func (r *resultRepo) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error {
+func (r *ResultRepository) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error {
 	b := r.db.Batch()
 	defer b.Close()
 	if err := b.Delete(KeyInprog(cmd, tenantID, id), nil); err != nil {
@@ -163,14 +162,14 @@ func (r *resultRepo) RemoveFromInprogAndClearLease(ctx context.Context, id strin
 
 // DecodeBase64 mirrors the redis-side helper used by the result service
 // when sniffing artifact bodies.
-func (r *resultRepo) DecodeBase64(str string) ([]byte, error) {
+func (r *ResultRepository) DecodeBase64(str string) ([]byte, error) {
 	if m := len(str) % 4; m != 0 {
 		str += strings.Repeat("=", 4-m)
 	}
 	return base64.StdEncoding.DecodeString(str)
 }
 
-func (r *resultRepo) GetTasksBatch(ctx context.Context, ids []string) (map[string]*domain.Task, error) {
+func (r *ResultRepository) GetTasksBatch(ctx context.Context, ids []string) (map[string]*domain.Task, error) {
 	out := make(map[string]*domain.Task, len(ids))
 	for _, id := range ids {
 		v, err := r.db.Get(KeyTask(id))
@@ -191,7 +190,7 @@ func (r *resultRepo) GetTasksBatch(ctx context.Context, ids []string) (map[strin
 
 // BatchUpdateTasksOnComplete finalizes every update in a single batch.
 // Mirrors the redis TxPipeline semantics: all-or-nothing.
-func (r *resultRepo) BatchUpdateTasksOnComplete(ctx context.Context, updates []domain.TaskCompleteUpdate) error {
+func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updates []domain.TaskCompleteUpdate) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -238,7 +237,7 @@ func (r *resultRepo) BatchUpdateTasksOnComplete(ctx context.Context, updates []d
 	return r.db.CommitBatch(b)
 }
 
-func (r *resultRepo) BatchRemoveFromInprogAndClearLease(ctx context.Context, deletes []domain.TaskDeleteInfo) error {
+func (r *ResultRepository) BatchRemoveFromInprogAndClearLease(ctx context.Context, deletes []domain.TaskDeleteInfo) error {
 	if len(deletes) == 0 {
 		return nil
 	}
