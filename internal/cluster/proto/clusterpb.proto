@@ -108,6 +108,12 @@ message SaveResultResponse {
   bool not_found = 1;
 }
 
+message GetResultRequest { string id = 1; }
+message GetResultResponse {
+  ResultRecord record = 1;
+  bool not_found = 2;
+}
+
 message UpdateOnCompleteRequest {
   string task_id = 1;
   string command = 2;
@@ -197,6 +203,7 @@ service TaskNode {
   rpc Abandon(AbandonRequest) returns (AbandonResponse);
   rpc Nack(NackRequest) returns (NackResponse);
   rpc SaveResult(SaveResultRequest) returns (SaveResultResponse);
+  rpc GetResult(GetResultRequest) returns (GetResultResponse);
   rpc UpdateOnComplete(UpdateOnCompleteRequest) returns (UpdateOnCompleteResponse);
 
   // Scatter-gather (caller broadcasts to every node):

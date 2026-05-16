@@ -136,6 +136,12 @@ func newPebbleApplication(
 		return nil, fmt.Errorf("open pebble: %w", err)
 	}
 
+	// background goroutines (reaper, gossiper, subscription cleanup) share a
+	// cancellable context that the Application's shutdown hook cancels
+	// BEFORE closing the Pebble DB — otherwise the reaper wakes on its
+	// next tick against a closed DB and panics.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
 	localTaskRepo := pebblerepo.NewTaskRepository(db, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
 	localResultRepo := pebblerepo.NewResultRepository(db, loc)
 	subRepo := pebblerepo.NewSubscriptionRepository(db, loc)
@@ -202,12 +208,13 @@ func newPebbleApplication(
 		taskRepo = cluster.NewTaskRouter(localTaskRepo, ring, clientPool).
 			WithBloomCache(bloomCache).
 			WithLocalBloom(localBloom)
-		resultRepo = cluster.NewResultRouter(localResultRepo, ring, clientPool)
+		resultRepo = cluster.NewResultRouter(localResultRepo, ring, clientPool).
+			WithBloomCache(bloomCache)
 
 		// Gossip peer blooms in the background. 1s default cadence; tests
 		// can force a poll via Gossiper but this is enough for production.
 		gossiper := cluster.NewGossiper(ring, clientPool, bloomCache, time.Second, logger)
-		gossiper.Start(context.Background())
+		gossiper.Start(bgCtx)
 	}
 
 	// Background reaper: enforces lease expiry + TTL cleanup, which Redis
@@ -218,7 +225,7 @@ func newPebbleApplication(
 		BackoffMaxSeconds:  cfg.BackoffMaxSeconds,
 		MaxAttemptsDefault: cfg.MaxAttemptsDefault,
 	})
-	reaper.Start(context.Background())
+	reaper.Start(bgCtx)
 
 	subs := services.NewSubscriptionService(subRepo)
 	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
@@ -258,7 +265,7 @@ func newPebbleApplication(
 	engine.Use(middleware.LoggerMiddleware(logger))
 
 	// Subscription cleanup goroutine — same cadence as the redis path.
-	go cleanup.Start(context.Background())
+	go cleanup.Start(bgCtx)
 
 	app := &Application{
 		Config:      cfg,
@@ -270,6 +277,8 @@ func newPebbleApplication(
 		TZ:          loc,
 		RateLimiter: limiter,
 		TracingShutdown: func(ctx context.Context) error {
+			// Cancel background workers first; they hold references to db.
+			bgCancel()
 			if grpcSrv != nil {
 				// GracefulStop drains in-flight RPCs first, then exits.
 				done := make(chan struct{})

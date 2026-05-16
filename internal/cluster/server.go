@@ -155,6 +155,17 @@ func (s *Server) SaveResult(ctx context.Context, req *clusterpb.SaveResultReques
 	return &clusterpb.SaveResultResponse{}, nil
 }
 
+func (s *Server) GetResult(ctx context.Context, req *clusterpb.GetResultRequest) (*clusterpb.GetResultResponse, error) {
+	rec, err := s.Results.GetResult(ctx, req.Id)
+	if err != nil {
+		if isNotFound(err) {
+			return &clusterpb.GetResultResponse{NotFound: true}, nil
+		}
+		return nil, err
+	}
+	return &clusterpb.GetResultResponse{Record: domainResultToProto(rec)}, nil
+}
+
 func (s *Server) UpdateOnComplete(ctx context.Context, req *clusterpb.UpdateOnCompleteRequest) (*clusterpb.UpdateOnCompleteResponse, error) {
 	err := s.Results.UpdateTaskOnComplete(ctx, req.TaskId, domain.Command(req.Command), req.TenantId, domain.TaskStatus(req.Status), req.ErrorMsg)
 	if err != nil {
@@ -318,6 +329,34 @@ func protoToDomainTask(p *clusterpb.Task) *domain.Task {
 		t.UpdatedAt = p.UpdatedAt.AsTime()
 	}
 	return t
+}
+
+// domainResultToProto is the inverse of protoToResultRecord; serializes
+// the typed Result map back to JSON bytes for the wire.
+func domainResultToProto(rec *domain.ResultRecord) *clusterpb.ResultRecord {
+	if rec == nil {
+		return nil
+	}
+	p := &clusterpb.ResultRecord{
+		TaskId: rec.TaskID,
+		Status: string(rec.Status),
+		Error:  rec.Error,
+	}
+	if !rec.CompletedAt.IsZero() {
+		p.CompletedAt = timestamppb.New(rec.CompletedAt)
+	}
+	if rec.Result != nil {
+		if b, err := sonic.Marshal(rec.Result); err == nil {
+			p.ResultJson = b
+		}
+	}
+	if len(rec.Artifacts) > 0 {
+		p.Artifacts = make([]string, 0, len(rec.Artifacts))
+		for _, a := range rec.Artifacts {
+			p.Artifacts = append(p.Artifacts, a.Name)
+		}
+	}
+	return p
 }
 
 func protoToResultRecord(p *clusterpb.ResultRecord) domain.ResultRecord {

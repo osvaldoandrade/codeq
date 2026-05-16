@@ -155,6 +155,9 @@ func (r *TaskRouter) Heartbeat(ctx context.Context, taskID string, workerID stri
 		return r.local.Heartbeat(ctx, taskID, workerID, extendSeconds)
 	}
 	owner := r.ring.Owner(taskID)
+	if !r.peerHasLikely(owner.ID, taskID) {
+		return errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return err
@@ -177,6 +180,9 @@ func (r *TaskRouter) Abandon(ctx context.Context, taskID string, workerID string
 		return r.local.Abandon(ctx, taskID, workerID)
 	}
 	owner := r.ring.Owner(taskID)
+	if !r.peerHasLikely(owner.ID, taskID) {
+		return errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return err
@@ -201,6 +207,9 @@ func (r *TaskRouter) Nack(ctx context.Context, taskID string, workerID string, d
 		return r.local.Nack(ctx, taskID, workerID, delaySeconds, maxAttemptsDefault, reason)
 	}
 	owner := r.ring.Owner(taskID)
+	if !r.peerHasLikely(owner.ID, taskID) {
+		return 0, false, errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return 0, false, err

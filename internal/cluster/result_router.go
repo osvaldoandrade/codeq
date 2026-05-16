@@ -21,11 +21,36 @@ type ResultRouter struct {
 	local *pebblerepo.ResultRepository
 	ring  *LocalRing
 	pool  *ClientPool
+	cache *BloomCache
 }
 
 // NewResultRouter wires the router on top of a local ResultRepository.
 func NewResultRouter(local *pebblerepo.ResultRepository, ring *LocalRing, pool *ClientPool) *ResultRouter {
 	return &ResultRouter{local: local, ring: ring, pool: pool}
+}
+
+// WithBloomCache attaches a bloom cache used to short-circuit ID-routed
+// RPCs whose peer bloom says "definitely not".
+// protoToDomainResult wraps protoToResultRecord with a pointer return
+// shape so it lines up with repository.ResultRepository.GetResult.
+func protoToDomainResult(p *clusterpb.ResultRecord) *domain.ResultRecord {
+	if p == nil {
+		return nil
+	}
+	rec := protoToResultRecord(p)
+	return &rec
+}
+
+func (r *ResultRouter) WithBloomCache(c *BloomCache) *ResultRouter {
+	r.cache = c
+	return r
+}
+
+func (r *ResultRouter) peerHasLikely(ownerID, key string) bool {
+	if r.cache == nil {
+		return true
+	}
+	return r.cache.MaybeHas(ownerID, key)
 }
 
 // ---------------- ID-routed methods ----------------
@@ -35,6 +60,9 @@ func (r *ResultRouter) GetTask(ctx context.Context, id string) (*domain.Task, er
 		return r.local.GetTask(ctx, id)
 	}
 	owner := r.ring.Owner(id)
+	if !r.peerHasLikely(owner.ID, id) {
+		return nil, errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return nil, err
@@ -67,6 +95,9 @@ func (r *ResultRouter) SaveResult(ctx context.Context, rec domain.ResultRecord, 
 		return r.local.SaveResult(ctx, rec, cmd, tenantID)
 	}
 	owner := r.ring.Owner(rec.TaskID)
+	if !r.peerHasLikely(owner.ID, rec.TaskID) {
+		return errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return err
@@ -96,12 +127,22 @@ func (r *ResultRouter) GetResult(ctx context.Context, id string) (*domain.Result
 	if r.ring.IsLocal(id) {
 		return r.local.GetResult(ctx, id)
 	}
-	// GetResult isn't in the gRPC surface yet — but every result lives on
-	// the owner of its task ID, so the routing decision is the same. For
-	// now we read the task via GetTask (which IS in gRPC) just to verify
-	// existence, then... we genuinely need a gRPC GetResult. Until that
-	// rpc lands, fall back to local-only reads and document the gap.
-	return r.local.GetResult(ctx, id)
+	owner := r.ring.Owner(id)
+	if !r.peerHasLikely(owner.ID, id) {
+		return nil, errors.New("not-found")
+	}
+	c, err := r.pool.Client(owner)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.GetResult(ctx, &clusterpb.GetResultRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	if resp.NotFound {
+		return nil, errors.New("not-found")
+	}
+	return protoToDomainResult(resp.Record), nil
 }
 
 func (r *ResultRouter) UpdateTaskOnComplete(ctx context.Context, id string, cmd domain.Command, tenantID string, status domain.TaskStatus, errorMsg string) error {
@@ -109,6 +150,9 @@ func (r *ResultRouter) UpdateTaskOnComplete(ctx context.Context, id string, cmd 
 		return r.local.UpdateTaskOnComplete(ctx, id, cmd, tenantID, status, errorMsg)
 	}
 	owner := r.ring.Owner(id)
+	if !r.peerHasLikely(owner.ID, id) {
+		return errors.New("not-found")
+	}
 	c, err := r.pool.Client(owner)
 	if err != nil {
 		return err

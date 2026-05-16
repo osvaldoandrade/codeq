@@ -888,6 +888,102 @@ func (x *SaveResultResponse) GetNotFound() bool {
 	return false
 }
 
+type GetResultRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetResultRequest) Reset() {
+	*x = GetResultRequest{}
+	mi := &file_clusterpb_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetResultRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetResultRequest) ProtoMessage() {}
+
+func (x *GetResultRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_clusterpb_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetResultRequest.ProtoReflect.Descriptor instead.
+func (*GetResultRequest) Descriptor() ([]byte, []int) {
+	return file_clusterpb_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetResultRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+type GetResultResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Record        *ResultRecord          `protobuf:"bytes,1,opt,name=record,proto3" json:"record,omitempty"`
+	NotFound      bool                   `protobuf:"varint,2,opt,name=not_found,json=notFound,proto3" json:"not_found,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetResultResponse) Reset() {
+	*x = GetResultResponse{}
+	mi := &file_clusterpb_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetResultResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetResultResponse) ProtoMessage() {}
+
+func (x *GetResultResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_clusterpb_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetResultResponse.ProtoReflect.Descriptor instead.
+func (*GetResultResponse) Descriptor() ([]byte, []int) {
+	return file_clusterpb_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GetResultResponse) GetRecord() *ResultRecord {
+	if x != nil {
+		return x.Record
+	}
+	return nil
+}
+
+func (x *GetResultResponse) GetNotFound() bool {
+	if x != nil {
+		return x.NotFound
+	}
+	return false
+}
+
 type UpdateOnCompleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
@@ -901,7 +997,7 @@ type UpdateOnCompleteRequest struct {
 
 func (x *UpdateOnCompleteRequest) Reset() {
 	*x = UpdateOnCompleteRequest{}
-	mi := &file_clusterpb_proto_msgTypes[12]
+	mi := &file_clusterpb_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -913,7 +1009,7 @@ func (x *UpdateOnCompleteRequest) String() string {
 func (*UpdateOnCompleteRequest) ProtoMessage() {}
 
 func (x *UpdateOnCompleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[12]
+	mi := &file_clusterpb_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -926,7 +1022,7 @@ func (x *UpdateOnCompleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOnCompleteRequest.ProtoReflect.Descriptor instead.
 func (*UpdateOnCompleteRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{12}
+	return file_clusterpb_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *UpdateOnCompleteRequest) GetTaskId() string {
@@ -973,7 +1069,7 @@ type UpdateOnCompleteResponse struct {
 
 func (x *UpdateOnCompleteResponse) Reset() {
 	*x = UpdateOnCompleteResponse{}
-	mi := &file_clusterpb_proto_msgTypes[13]
+	mi := &file_clusterpb_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -985,7 +1081,7 @@ func (x *UpdateOnCompleteResponse) String() string {
 func (*UpdateOnCompleteResponse) ProtoMessage() {}
 
 func (x *UpdateOnCompleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[13]
+	mi := &file_clusterpb_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -998,7 +1094,7 @@ func (x *UpdateOnCompleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateOnCompleteResponse.ProtoReflect.Descriptor instead.
 func (*UpdateOnCompleteResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{13}
+	return file_clusterpb_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UpdateOnCompleteResponse) GetNotFound() bool {
@@ -1025,7 +1121,7 @@ type LocalClaimRequest struct {
 
 func (x *LocalClaimRequest) Reset() {
 	*x = LocalClaimRequest{}
-	mi := &file_clusterpb_proto_msgTypes[14]
+	mi := &file_clusterpb_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1037,7 +1133,7 @@ func (x *LocalClaimRequest) String() string {
 func (*LocalClaimRequest) ProtoMessage() {}
 
 func (x *LocalClaimRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[14]
+	mi := &file_clusterpb_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1050,7 +1146,7 @@ func (x *LocalClaimRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalClaimRequest.ProtoReflect.Descriptor instead.
 func (*LocalClaimRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{14}
+	return file_clusterpb_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *LocalClaimRequest) GetWorkerId() string {
@@ -1105,7 +1201,7 @@ type LocalClaimResponse struct {
 
 func (x *LocalClaimResponse) Reset() {
 	*x = LocalClaimResponse{}
-	mi := &file_clusterpb_proto_msgTypes[15]
+	mi := &file_clusterpb_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1117,7 +1213,7 @@ func (x *LocalClaimResponse) String() string {
 func (*LocalClaimResponse) ProtoMessage() {}
 
 func (x *LocalClaimResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[15]
+	mi := &file_clusterpb_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1130,7 +1226,7 @@ func (x *LocalClaimResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalClaimResponse.ProtoReflect.Descriptor instead.
 func (*LocalClaimResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{15}
+	return file_clusterpb_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *LocalClaimResponse) GetTask() *Task {
@@ -1156,7 +1252,7 @@ type PendingLengthRequest struct {
 
 func (x *PendingLengthRequest) Reset() {
 	*x = PendingLengthRequest{}
-	mi := &file_clusterpb_proto_msgTypes[16]
+	mi := &file_clusterpb_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1168,7 +1264,7 @@ func (x *PendingLengthRequest) String() string {
 func (*PendingLengthRequest) ProtoMessage() {}
 
 func (x *PendingLengthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[16]
+	mi := &file_clusterpb_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1181,7 +1277,7 @@ func (x *PendingLengthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingLengthRequest.ProtoReflect.Descriptor instead.
 func (*PendingLengthRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{16}
+	return file_clusterpb_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PendingLengthRequest) GetCommand() string {
@@ -1200,7 +1296,7 @@ type PendingLengthResponse struct {
 
 func (x *PendingLengthResponse) Reset() {
 	*x = PendingLengthResponse{}
-	mi := &file_clusterpb_proto_msgTypes[17]
+	mi := &file_clusterpb_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1212,7 +1308,7 @@ func (x *PendingLengthResponse) String() string {
 func (*PendingLengthResponse) ProtoMessage() {}
 
 func (x *PendingLengthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[17]
+	mi := &file_clusterpb_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1225,7 +1321,7 @@ func (x *PendingLengthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingLengthResponse.ProtoReflect.Descriptor instead.
 func (*PendingLengthResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{17}
+	return file_clusterpb_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PendingLengthResponse) GetLength() int64 {
@@ -1245,7 +1341,7 @@ type QueueStatsRequest struct {
 
 func (x *QueueStatsRequest) Reset() {
 	*x = QueueStatsRequest{}
-	mi := &file_clusterpb_proto_msgTypes[18]
+	mi := &file_clusterpb_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1257,7 +1353,7 @@ func (x *QueueStatsRequest) String() string {
 func (*QueueStatsRequest) ProtoMessage() {}
 
 func (x *QueueStatsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[18]
+	mi := &file_clusterpb_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1270,7 +1366,7 @@ func (x *QueueStatsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueStatsRequest.ProtoReflect.Descriptor instead.
 func (*QueueStatsRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{18}
+	return file_clusterpb_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *QueueStatsRequest) GetCommand() string {
@@ -1299,7 +1395,7 @@ type QueueStatsResponse struct {
 
 func (x *QueueStatsResponse) Reset() {
 	*x = QueueStatsResponse{}
-	mi := &file_clusterpb_proto_msgTypes[19]
+	mi := &file_clusterpb_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1311,7 +1407,7 @@ func (x *QueueStatsResponse) String() string {
 func (*QueueStatsResponse) ProtoMessage() {}
 
 func (x *QueueStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[19]
+	mi := &file_clusterpb_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1324,7 +1420,7 @@ func (x *QueueStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use QueueStatsResponse.ProtoReflect.Descriptor instead.
 func (*QueueStatsResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{19}
+	return file_clusterpb_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *QueueStatsResponse) GetReady() int64 {
@@ -1363,7 +1459,7 @@ type AdminQueuesRequest struct {
 
 func (x *AdminQueuesRequest) Reset() {
 	*x = AdminQueuesRequest{}
-	mi := &file_clusterpb_proto_msgTypes[20]
+	mi := &file_clusterpb_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1375,7 +1471,7 @@ func (x *AdminQueuesRequest) String() string {
 func (*AdminQueuesRequest) ProtoMessage() {}
 
 func (x *AdminQueuesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[20]
+	mi := &file_clusterpb_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1388,7 +1484,7 @@ func (x *AdminQueuesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminQueuesRequest.ProtoReflect.Descriptor instead.
 func (*AdminQueuesRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{20}
+	return file_clusterpb_proto_rawDescGZIP(), []int{22}
 }
 
 type AdminQueuesResponse struct {
@@ -1400,7 +1496,7 @@ type AdminQueuesResponse struct {
 
 func (x *AdminQueuesResponse) Reset() {
 	*x = AdminQueuesResponse{}
-	mi := &file_clusterpb_proto_msgTypes[21]
+	mi := &file_clusterpb_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1412,7 +1508,7 @@ func (x *AdminQueuesResponse) String() string {
 func (*AdminQueuesResponse) ProtoMessage() {}
 
 func (x *AdminQueuesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[21]
+	mi := &file_clusterpb_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1425,7 +1521,7 @@ func (x *AdminQueuesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AdminQueuesResponse.ProtoReflect.Descriptor instead.
 func (*AdminQueuesResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{21}
+	return file_clusterpb_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *AdminQueuesResponse) GetCounts() map[string]int64 {
@@ -1447,7 +1543,7 @@ type BloomSnapshotRequest struct {
 
 func (x *BloomSnapshotRequest) Reset() {
 	*x = BloomSnapshotRequest{}
-	mi := &file_clusterpb_proto_msgTypes[22]
+	mi := &file_clusterpb_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1459,7 +1555,7 @@ func (x *BloomSnapshotRequest) String() string {
 func (*BloomSnapshotRequest) ProtoMessage() {}
 
 func (x *BloomSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[22]
+	mi := &file_clusterpb_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1472,7 +1568,7 @@ func (x *BloomSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BloomSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*BloomSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{22}
+	return file_clusterpb_proto_rawDescGZIP(), []int{24}
 }
 
 type BloomSnapshotResponse struct {
@@ -1488,7 +1584,7 @@ type BloomSnapshotResponse struct {
 
 func (x *BloomSnapshotResponse) Reset() {
 	*x = BloomSnapshotResponse{}
-	mi := &file_clusterpb_proto_msgTypes[23]
+	mi := &file_clusterpb_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1500,7 +1596,7 @@ func (x *BloomSnapshotResponse) String() string {
 func (*BloomSnapshotResponse) ProtoMessage() {}
 
 func (x *BloomSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[23]
+	mi := &file_clusterpb_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1513,7 +1609,7 @@ func (x *BloomSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BloomSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*BloomSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{23}
+	return file_clusterpb_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *BloomSnapshotResponse) GetMBits() []byte {
@@ -1572,7 +1668,7 @@ type EnqueueRequest struct {
 
 func (x *EnqueueRequest) Reset() {
 	*x = EnqueueRequest{}
-	mi := &file_clusterpb_proto_msgTypes[24]
+	mi := &file_clusterpb_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1584,7 +1680,7 @@ func (x *EnqueueRequest) String() string {
 func (*EnqueueRequest) ProtoMessage() {}
 
 func (x *EnqueueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[24]
+	mi := &file_clusterpb_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1597,7 +1693,7 @@ func (x *EnqueueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnqueueRequest.ProtoReflect.Descriptor instead.
 func (*EnqueueRequest) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{24}
+	return file_clusterpb_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *EnqueueRequest) GetId() string {
@@ -1673,7 +1769,7 @@ type EnqueueResponse struct {
 
 func (x *EnqueueResponse) Reset() {
 	*x = EnqueueResponse{}
-	mi := &file_clusterpb_proto_msgTypes[25]
+	mi := &file_clusterpb_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1685,7 +1781,7 @@ func (x *EnqueueResponse) String() string {
 func (*EnqueueResponse) ProtoMessage() {}
 
 func (x *EnqueueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_clusterpb_proto_msgTypes[25]
+	mi := &file_clusterpb_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1698,7 +1794,7 @@ func (x *EnqueueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnqueueResponse.ProtoReflect.Descriptor instead.
 func (*EnqueueResponse) Descriptor() ([]byte, []int) {
-	return file_clusterpb_proto_rawDescGZIP(), []int{25}
+	return file_clusterpb_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *EnqueueResponse) GetTask() *Task {
@@ -1790,7 +1886,12 @@ const file_clusterpb_proto_rawDesc = "" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x1b\n" +
 	"\ttenant_id\x18\x03 \x01(\tR\btenantId\"1\n" +
 	"\x12SaveResultResponse\x12\x1b\n" +
-	"\tnot_found\x18\x01 \x01(\bR\bnotFound\"\x9e\x01\n" +
+	"\tnot_found\x18\x01 \x01(\bR\bnotFound\"\"\n" +
+	"\x10GetResultRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"a\n" +
+	"\x11GetResultResponse\x12/\n" +
+	"\x06record\x18\x01 \x01(\v2\x17.clusterpb.ResultRecordR\x06record\x12\x1b\n" +
+	"\tnot_found\x18\x02 \x01(\bR\bnotFound\"\x9e\x01\n" +
 	"\x17UpdateOnCompleteRequest\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x1b\n" +
@@ -1848,7 +1949,7 @@ const file_clusterpb_proto_rawDesc = "" +
 	"\ttenant_id\x18\t \x01(\tR\btenantId\"L\n" +
 	"\x0fEnqueueResponse\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.clusterpb.TaskR\x04task\x12\x14\n" +
-	"\x05ready\x18\x02 \x01(\bR\x05ready2\x85\a\n" +
+	"\x05ready\x18\x02 \x01(\bR\x05ready2\xcd\a\n" +
 	"\bTaskNode\x12@\n" +
 	"\aEnqueue\x12\x19.clusterpb.EnqueueRequest\x1a\x1a.clusterpb.EnqueueResponse\x12@\n" +
 	"\aGetTask\x12\x19.clusterpb.GetTaskRequest\x1a\x1a.clusterpb.GetTaskResponse\x12F\n" +
@@ -1856,7 +1957,8 @@ const file_clusterpb_proto_rawDesc = "" +
 	"\aAbandon\x12\x19.clusterpb.AbandonRequest\x1a\x1a.clusterpb.AbandonResponse\x127\n" +
 	"\x04Nack\x12\x16.clusterpb.NackRequest\x1a\x17.clusterpb.NackResponse\x12I\n" +
 	"\n" +
-	"SaveResult\x12\x1c.clusterpb.SaveResultRequest\x1a\x1d.clusterpb.SaveResultResponse\x12[\n" +
+	"SaveResult\x12\x1c.clusterpb.SaveResultRequest\x1a\x1d.clusterpb.SaveResultResponse\x12F\n" +
+	"\tGetResult\x12\x1b.clusterpb.GetResultRequest\x1a\x1c.clusterpb.GetResultResponse\x12[\n" +
 	"\x10UpdateOnComplete\x12\".clusterpb.UpdateOnCompleteRequest\x1a#.clusterpb.UpdateOnCompleteResponse\x12I\n" +
 	"\n" +
 	"LocalClaim\x12\x1c.clusterpb.LocalClaimRequest\x1a\x1d.clusterpb.LocalClaimResponse\x12R\n" +
@@ -1878,7 +1980,7 @@ func file_clusterpb_proto_rawDescGZIP() []byte {
 	return file_clusterpb_proto_rawDescData
 }
 
-var file_clusterpb_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_clusterpb_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
 var file_clusterpb_proto_goTypes = []any{
 	(*Task)(nil),                     // 0: clusterpb.Task
 	(*ResultRecord)(nil),             // 1: clusterpb.ResultRecord
@@ -1892,61 +1994,66 @@ var file_clusterpb_proto_goTypes = []any{
 	(*NackResponse)(nil),             // 9: clusterpb.NackResponse
 	(*SaveResultRequest)(nil),        // 10: clusterpb.SaveResultRequest
 	(*SaveResultResponse)(nil),       // 11: clusterpb.SaveResultResponse
-	(*UpdateOnCompleteRequest)(nil),  // 12: clusterpb.UpdateOnCompleteRequest
-	(*UpdateOnCompleteResponse)(nil), // 13: clusterpb.UpdateOnCompleteResponse
-	(*LocalClaimRequest)(nil),        // 14: clusterpb.LocalClaimRequest
-	(*LocalClaimResponse)(nil),       // 15: clusterpb.LocalClaimResponse
-	(*PendingLengthRequest)(nil),     // 16: clusterpb.PendingLengthRequest
-	(*PendingLengthResponse)(nil),    // 17: clusterpb.PendingLengthResponse
-	(*QueueStatsRequest)(nil),        // 18: clusterpb.QueueStatsRequest
-	(*QueueStatsResponse)(nil),       // 19: clusterpb.QueueStatsResponse
-	(*AdminQueuesRequest)(nil),       // 20: clusterpb.AdminQueuesRequest
-	(*AdminQueuesResponse)(nil),      // 21: clusterpb.AdminQueuesResponse
-	(*BloomSnapshotRequest)(nil),     // 22: clusterpb.BloomSnapshotRequest
-	(*BloomSnapshotResponse)(nil),    // 23: clusterpb.BloomSnapshotResponse
-	(*EnqueueRequest)(nil),           // 24: clusterpb.EnqueueRequest
-	(*EnqueueResponse)(nil),          // 25: clusterpb.EnqueueResponse
-	nil,                              // 26: clusterpb.AdminQueuesResponse.CountsEntry
-	(*timestamppb.Timestamp)(nil),    // 27: google.protobuf.Timestamp
+	(*GetResultRequest)(nil),         // 12: clusterpb.GetResultRequest
+	(*GetResultResponse)(nil),        // 13: clusterpb.GetResultResponse
+	(*UpdateOnCompleteRequest)(nil),  // 14: clusterpb.UpdateOnCompleteRequest
+	(*UpdateOnCompleteResponse)(nil), // 15: clusterpb.UpdateOnCompleteResponse
+	(*LocalClaimRequest)(nil),        // 16: clusterpb.LocalClaimRequest
+	(*LocalClaimResponse)(nil),       // 17: clusterpb.LocalClaimResponse
+	(*PendingLengthRequest)(nil),     // 18: clusterpb.PendingLengthRequest
+	(*PendingLengthResponse)(nil),    // 19: clusterpb.PendingLengthResponse
+	(*QueueStatsRequest)(nil),        // 20: clusterpb.QueueStatsRequest
+	(*QueueStatsResponse)(nil),       // 21: clusterpb.QueueStatsResponse
+	(*AdminQueuesRequest)(nil),       // 22: clusterpb.AdminQueuesRequest
+	(*AdminQueuesResponse)(nil),      // 23: clusterpb.AdminQueuesResponse
+	(*BloomSnapshotRequest)(nil),     // 24: clusterpb.BloomSnapshotRequest
+	(*BloomSnapshotResponse)(nil),    // 25: clusterpb.BloomSnapshotResponse
+	(*EnqueueRequest)(nil),           // 26: clusterpb.EnqueueRequest
+	(*EnqueueResponse)(nil),          // 27: clusterpb.EnqueueResponse
+	nil,                              // 28: clusterpb.AdminQueuesResponse.CountsEntry
+	(*timestamppb.Timestamp)(nil),    // 29: google.protobuf.Timestamp
 }
 var file_clusterpb_proto_depIdxs = []int32{
-	27, // 0: clusterpb.Task.created_at:type_name -> google.protobuf.Timestamp
-	27, // 1: clusterpb.Task.updated_at:type_name -> google.protobuf.Timestamp
-	27, // 2: clusterpb.ResultRecord.completed_at:type_name -> google.protobuf.Timestamp
+	29, // 0: clusterpb.Task.created_at:type_name -> google.protobuf.Timestamp
+	29, // 1: clusterpb.Task.updated_at:type_name -> google.protobuf.Timestamp
+	29, // 2: clusterpb.ResultRecord.completed_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: clusterpb.GetTaskResponse.task:type_name -> clusterpb.Task
 	1,  // 4: clusterpb.SaveResultRequest.record:type_name -> clusterpb.ResultRecord
-	0,  // 5: clusterpb.LocalClaimResponse.task:type_name -> clusterpb.Task
-	26, // 6: clusterpb.AdminQueuesResponse.counts:type_name -> clusterpb.AdminQueuesResponse.CountsEntry
-	0,  // 7: clusterpb.EnqueueResponse.task:type_name -> clusterpb.Task
-	24, // 8: clusterpb.TaskNode.Enqueue:input_type -> clusterpb.EnqueueRequest
-	2,  // 9: clusterpb.TaskNode.GetTask:input_type -> clusterpb.GetTaskRequest
-	4,  // 10: clusterpb.TaskNode.Heartbeat:input_type -> clusterpb.HeartbeatRequest
-	6,  // 11: clusterpb.TaskNode.Abandon:input_type -> clusterpb.AbandonRequest
-	8,  // 12: clusterpb.TaskNode.Nack:input_type -> clusterpb.NackRequest
-	10, // 13: clusterpb.TaskNode.SaveResult:input_type -> clusterpb.SaveResultRequest
-	12, // 14: clusterpb.TaskNode.UpdateOnComplete:input_type -> clusterpb.UpdateOnCompleteRequest
-	14, // 15: clusterpb.TaskNode.LocalClaim:input_type -> clusterpb.LocalClaimRequest
-	16, // 16: clusterpb.TaskNode.PendingLength:input_type -> clusterpb.PendingLengthRequest
-	18, // 17: clusterpb.TaskNode.QueueStats:input_type -> clusterpb.QueueStatsRequest
-	20, // 18: clusterpb.TaskNode.AdminQueues:input_type -> clusterpb.AdminQueuesRequest
-	22, // 19: clusterpb.TaskNode.BloomSnapshot:input_type -> clusterpb.BloomSnapshotRequest
-	25, // 20: clusterpb.TaskNode.Enqueue:output_type -> clusterpb.EnqueueResponse
-	3,  // 21: clusterpb.TaskNode.GetTask:output_type -> clusterpb.GetTaskResponse
-	5,  // 22: clusterpb.TaskNode.Heartbeat:output_type -> clusterpb.HeartbeatResponse
-	7,  // 23: clusterpb.TaskNode.Abandon:output_type -> clusterpb.AbandonResponse
-	9,  // 24: clusterpb.TaskNode.Nack:output_type -> clusterpb.NackResponse
-	11, // 25: clusterpb.TaskNode.SaveResult:output_type -> clusterpb.SaveResultResponse
-	13, // 26: clusterpb.TaskNode.UpdateOnComplete:output_type -> clusterpb.UpdateOnCompleteResponse
-	15, // 27: clusterpb.TaskNode.LocalClaim:output_type -> clusterpb.LocalClaimResponse
-	17, // 28: clusterpb.TaskNode.PendingLength:output_type -> clusterpb.PendingLengthResponse
-	19, // 29: clusterpb.TaskNode.QueueStats:output_type -> clusterpb.QueueStatsResponse
-	21, // 30: clusterpb.TaskNode.AdminQueues:output_type -> clusterpb.AdminQueuesResponse
-	23, // 31: clusterpb.TaskNode.BloomSnapshot:output_type -> clusterpb.BloomSnapshotResponse
-	20, // [20:32] is the sub-list for method output_type
-	8,  // [8:20] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	1,  // 5: clusterpb.GetResultResponse.record:type_name -> clusterpb.ResultRecord
+	0,  // 6: clusterpb.LocalClaimResponse.task:type_name -> clusterpb.Task
+	28, // 7: clusterpb.AdminQueuesResponse.counts:type_name -> clusterpb.AdminQueuesResponse.CountsEntry
+	0,  // 8: clusterpb.EnqueueResponse.task:type_name -> clusterpb.Task
+	26, // 9: clusterpb.TaskNode.Enqueue:input_type -> clusterpb.EnqueueRequest
+	2,  // 10: clusterpb.TaskNode.GetTask:input_type -> clusterpb.GetTaskRequest
+	4,  // 11: clusterpb.TaskNode.Heartbeat:input_type -> clusterpb.HeartbeatRequest
+	6,  // 12: clusterpb.TaskNode.Abandon:input_type -> clusterpb.AbandonRequest
+	8,  // 13: clusterpb.TaskNode.Nack:input_type -> clusterpb.NackRequest
+	10, // 14: clusterpb.TaskNode.SaveResult:input_type -> clusterpb.SaveResultRequest
+	12, // 15: clusterpb.TaskNode.GetResult:input_type -> clusterpb.GetResultRequest
+	14, // 16: clusterpb.TaskNode.UpdateOnComplete:input_type -> clusterpb.UpdateOnCompleteRequest
+	16, // 17: clusterpb.TaskNode.LocalClaim:input_type -> clusterpb.LocalClaimRequest
+	18, // 18: clusterpb.TaskNode.PendingLength:input_type -> clusterpb.PendingLengthRequest
+	20, // 19: clusterpb.TaskNode.QueueStats:input_type -> clusterpb.QueueStatsRequest
+	22, // 20: clusterpb.TaskNode.AdminQueues:input_type -> clusterpb.AdminQueuesRequest
+	24, // 21: clusterpb.TaskNode.BloomSnapshot:input_type -> clusterpb.BloomSnapshotRequest
+	27, // 22: clusterpb.TaskNode.Enqueue:output_type -> clusterpb.EnqueueResponse
+	3,  // 23: clusterpb.TaskNode.GetTask:output_type -> clusterpb.GetTaskResponse
+	5,  // 24: clusterpb.TaskNode.Heartbeat:output_type -> clusterpb.HeartbeatResponse
+	7,  // 25: clusterpb.TaskNode.Abandon:output_type -> clusterpb.AbandonResponse
+	9,  // 26: clusterpb.TaskNode.Nack:output_type -> clusterpb.NackResponse
+	11, // 27: clusterpb.TaskNode.SaveResult:output_type -> clusterpb.SaveResultResponse
+	13, // 28: clusterpb.TaskNode.GetResult:output_type -> clusterpb.GetResultResponse
+	15, // 29: clusterpb.TaskNode.UpdateOnComplete:output_type -> clusterpb.UpdateOnCompleteResponse
+	17, // 30: clusterpb.TaskNode.LocalClaim:output_type -> clusterpb.LocalClaimResponse
+	19, // 31: clusterpb.TaskNode.PendingLength:output_type -> clusterpb.PendingLengthResponse
+	21, // 32: clusterpb.TaskNode.QueueStats:output_type -> clusterpb.QueueStatsResponse
+	23, // 33: clusterpb.TaskNode.AdminQueues:output_type -> clusterpb.AdminQueuesResponse
+	25, // 34: clusterpb.TaskNode.BloomSnapshot:output_type -> clusterpb.BloomSnapshotResponse
+	22, // [22:35] is the sub-list for method output_type
+	9,  // [9:22] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_clusterpb_proto_init() }
@@ -1960,7 +2067,7 @@ func file_clusterpb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clusterpb_proto_rawDesc), len(file_clusterpb_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   27,
+			NumMessages:   29,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -202,3 +202,85 @@ func TestClusterRouting_TwoNodeRoundtrip(t *testing.T) {
 		t.Fatalf("expected to claim %d tasks total via scatter-gather, got %d", N, claimed)
 	}
 }
+
+// TestClusterGetResult_AnyNode verifies the GetResult gRPC rpc round-trips
+// through the cluster: a task created on node-a is queried via node-b's
+// REST endpoint and the result comes back regardless of which node owns
+// the underlying data. Pre-fix GetResult was local-only and this test
+// would have failed roughly half the time depending on the ID hash.
+func TestClusterGetResult_AnyNode(t *testing.T) {
+	portA := freePort(t)
+	portB := freePort(t)
+	nodes := []config.ClusterNodeSpec{
+		{ID: "node-a", GRPCAddr: fmt.Sprintf("127.0.0.1:%d", portA)},
+		{ID: "node-b", GRPCAddr: fmt.Sprintf("127.0.0.1:%d", portB)},
+	}
+	a := bootClusterNode(t, "node-a", nodes, t.TempDir())
+	b := bootClusterNode(t, "node-b", nodes, t.TempDir())
+	time.Sleep(150 * time.Millisecond)
+
+	// Submit ~30 tasks so we're statistically guaranteed some land on
+	// each node (256-vnode ring + uuid IDs).
+	ids := make([]string, 0, 30)
+	for i := 0; i < 30; i++ {
+		body := fmt.Sprintf(`{"command":"GENERATE_MASTER","payload":{"i":%d},"priority":5}`, i)
+		req, _ := http.NewRequest(http.MethodPost, a.URL+"/v1/codeq/tasks", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer dev-token")
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		var ack struct{ ID string `json:"id"` }
+		_ = json.NewDecoder(resp.Body).Decode(&ack)
+		resp.Body.Close()
+		if ack.ID != "" {
+			ids = append(ids, ack.ID)
+		}
+	}
+
+	// Drain & finalize all of them via node A (so each id has a stored
+	// result record).
+	completed := 0
+	for i := 0; i < len(ids)*2 && completed < len(ids); i++ {
+		req, _ := http.NewRequest(http.MethodPost, a.URL+"/v1/codeq/tasks/claim",
+			strings.NewReader(`{"commands":["GENERATE_MASTER"],"leaseSeconds":60,"waitSeconds":0}`))
+		req.Header.Set("Authorization", "Bearer dev-token")
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := http.DefaultClient.Do(req)
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			continue
+		}
+		var task struct{ ID string `json:"id"` }
+		_ = json.NewDecoder(resp.Body).Decode(&task)
+		resp.Body.Close()
+		if task.ID == "" {
+			continue
+		}
+		rr, _ := http.NewRequest(http.MethodPost, a.URL+"/v1/codeq/tasks/"+task.ID+"/result",
+			strings.NewReader(`{"status":"COMPLETED","result":{"ok":true}}`))
+		rr.Header.Set("Authorization", "Bearer dev-token")
+		rr.Header.Set("Content-Type", "application/json")
+		rrp, _ := http.DefaultClient.Do(rr)
+		rrp.Body.Close()
+		completed++
+	}
+
+	// Now ask node-b's REST for the result of every id we created on
+	// node-a. Without cross-node GetResult routing, ~half would return
+	// not-found (the ids hashed to node-a).
+	missingB := 0
+	for _, id := range ids {
+		req, _ := http.NewRequest(http.MethodGet, b.URL+"/v1/codeq/tasks/"+id+"/result", nil)
+		req.Header.Set("Authorization", "Bearer dev-token")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /result via node-b: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			missingB++
+		}
+		resp.Body.Close()
+	}
+	if missingB > 0 {
+		t.Fatalf("GetResult via node-b: %d/%d ids returned non-OK (expected 0 — GetResult should hash-route to owner)", missingB, len(ids))
+	}
+}

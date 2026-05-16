@@ -43,6 +43,7 @@ const (
 	TaskNode_Abandon_FullMethodName          = "/clusterpb.TaskNode/Abandon"
 	TaskNode_Nack_FullMethodName             = "/clusterpb.TaskNode/Nack"
 	TaskNode_SaveResult_FullMethodName       = "/clusterpb.TaskNode/SaveResult"
+	TaskNode_GetResult_FullMethodName        = "/clusterpb.TaskNode/GetResult"
 	TaskNode_UpdateOnComplete_FullMethodName = "/clusterpb.TaskNode/UpdateOnComplete"
 	TaskNode_LocalClaim_FullMethodName       = "/clusterpb.TaskNode/LocalClaim"
 	TaskNode_PendingLength_FullMethodName    = "/clusterpb.TaskNode/PendingLength"
@@ -62,6 +63,7 @@ type TaskNodeClient interface {
 	Abandon(ctx context.Context, in *AbandonRequest, opts ...grpc.CallOption) (*AbandonResponse, error)
 	Nack(ctx context.Context, in *NackRequest, opts ...grpc.CallOption) (*NackResponse, error)
 	SaveResult(ctx context.Context, in *SaveResultRequest, opts ...grpc.CallOption) (*SaveResultResponse, error)
+	GetResult(ctx context.Context, in *GetResultRequest, opts ...grpc.CallOption) (*GetResultResponse, error)
 	UpdateOnComplete(ctx context.Context, in *UpdateOnCompleteRequest, opts ...grpc.CallOption) (*UpdateOnCompleteResponse, error)
 	// Scatter-gather (caller broadcasts to every node):
 	LocalClaim(ctx context.Context, in *LocalClaimRequest, opts ...grpc.CallOption) (*LocalClaimResponse, error)
@@ -140,6 +142,16 @@ func (c *taskNodeClient) SaveResult(ctx context.Context, in *SaveResultRequest, 
 	return out, nil
 }
 
+func (c *taskNodeClient) GetResult(ctx context.Context, in *GetResultRequest, opts ...grpc.CallOption) (*GetResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetResultResponse)
+	err := c.cc.Invoke(ctx, TaskNode_GetResult_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskNodeClient) UpdateOnComplete(ctx context.Context, in *UpdateOnCompleteRequest, opts ...grpc.CallOption) (*UpdateOnCompleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateOnCompleteResponse)
@@ -211,6 +223,7 @@ type TaskNodeServer interface {
 	Abandon(context.Context, *AbandonRequest) (*AbandonResponse, error)
 	Nack(context.Context, *NackRequest) (*NackResponse, error)
 	SaveResult(context.Context, *SaveResultRequest) (*SaveResultResponse, error)
+	GetResult(context.Context, *GetResultRequest) (*GetResultResponse, error)
 	UpdateOnComplete(context.Context, *UpdateOnCompleteRequest) (*UpdateOnCompleteResponse, error)
 	// Scatter-gather (caller broadcasts to every node):
 	LocalClaim(context.Context, *LocalClaimRequest) (*LocalClaimResponse, error)
@@ -246,6 +259,9 @@ func (UnimplementedTaskNodeServer) Nack(context.Context, *NackRequest) (*NackRes
 }
 func (UnimplementedTaskNodeServer) SaveResult(context.Context, *SaveResultRequest) (*SaveResultResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SaveResult not implemented")
+}
+func (UnimplementedTaskNodeServer) GetResult(context.Context, *GetResultRequest) (*GetResultResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetResult not implemented")
 }
 func (UnimplementedTaskNodeServer) UpdateOnComplete(context.Context, *UpdateOnCompleteRequest) (*UpdateOnCompleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateOnComplete not implemented")
@@ -394,6 +410,24 @@ func _TaskNode_SaveResult_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskNode_GetResult_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetResultRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskNodeServer).GetResult(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskNode_GetResult_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskNodeServer).GetResult(ctx, req.(*GetResultRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskNode_UpdateOnComplete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateOnCompleteRequest)
 	if err := dec(in); err != nil {
@@ -532,6 +566,10 @@ var TaskNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SaveResult",
 			Handler:    _TaskNode_SaveResult_Handler,
+		},
+		{
+			MethodName: "GetResult",
+			Handler:    _TaskNode_GetResult_Handler,
 		},
 		{
 			MethodName: "UpdateOnComplete",
