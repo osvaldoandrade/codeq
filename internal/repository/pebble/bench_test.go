@@ -48,6 +48,64 @@ func BenchmarkClaimNoDelayed(b *testing.B) {
 	}
 }
 
+// BenchmarkBatchSaveAndUpdate measures the result-submission hot path that
+// /v1/codeq/tasks/batch/results drives: GetTasksBatch + N SaveResult +
+// BatchUpdateTasksOnComplete. With the group-commit coalescer in place
+// the N SaveResult commits get merged behind the scenes, so per-batch
+// cost is dominated by the GetTasksBatch reads and the single
+// BatchUpdateTasksOnComplete batch. Keep this benchmark green to catch
+// regressions in either part of the path.
+//
+// Run: go test -bench BenchmarkBatchSaveAndUpdate -benchmem ./internal/repository/pebble/
+func BenchmarkBatchSaveAndUpdate(b *testing.B) {
+	ctx := context.Background()
+	dir := b.TempDir()
+	db, err := Open(Options{Path: dir})
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	taskRepo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
+	resRepo := NewResultRepository(db, time.UTC)
+	cmd := domain.CmdGenerateMaster
+
+	const batchSize = 10
+	taskRepo.reconcile.interval = time.Hour
+	// Pre-fill, claim, and stage one batch's worth of inprog tasks per b.N
+	// so each iteration only measures the save+complete batch.
+	totalTasks := b.N * batchSize
+	ids := make([]string, totalTasks)
+	for i := 0; i < totalTasks; i++ {
+		t, err := taskRepo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, "")
+		if err != nil {
+			b.Fatalf("seed enqueue %d: %v", i, err)
+		}
+		ids[i] = t.ID
+		claimed, _, err := taskRepo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
+		if err != nil || claimed == nil {
+			b.Fatalf("seed claim %d: %v", i, err)
+		}
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		batchIDs := ids[i*batchSize : (i+1)*batchSize]
+		records := make([]domain.ResultRecord, batchSize)
+		updates := make([]domain.TaskCompleteUpdate, batchSize)
+		for j, id := range batchIDs {
+			records[j] = domain.ResultRecord{TaskID: id, Status: domain.StatusCompleted, Artifacts: []domain.ArtifactOut{}}
+			updates[j] = domain.TaskCompleteUpdate{ID: id, Status: domain.StatusCompleted}
+			if err := resRepo.SaveResult(ctx, records[j], cmd, ""); err != nil {
+				b.Fatalf("save: %v", err)
+			}
+		}
+		if err := resRepo.BatchUpdateTasksOnComplete(ctx, updates); err != nil {
+			b.Fatalf("batch update: %v", err)
+		}
+	}
+}
+
 // BenchmarkEnqueueParallel_Direct bypasses the coalescer by calling
 // pebble.Batch.Commit directly. Use it as the control against
 // BenchmarkEnqueueParallel to measure the net throughput swing the
