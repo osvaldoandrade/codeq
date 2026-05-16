@@ -15,7 +15,6 @@ import (
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
-	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
@@ -27,7 +26,7 @@ import (
 // Concurrency: pebble.DB is goroutine-safe. The only mutable state owned
 // here besides the underlying DB is the reconcileTracker (atomic CAS) and
 // the seq counter on DB itself (atomic add).
-type taskRepo struct {
+type TaskRepository struct {
 	db                 *DB
 	tz                 *time.Location
 	backoffPolicy      string
@@ -111,7 +110,7 @@ func (rt *reconcileTracker) shouldRun(cmd domain.Command, tenantID string) bool 
 
 // NewTaskRepository wires an open Pebble DB into the TaskRepository contract.
 // tz is used for the "now" timestamps embedded in task JSON.
-func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffBaseSeconds, backoffMaxSeconds int) repository.TaskRepository {
+func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffBaseSeconds, backoffMaxSeconds int) *TaskRepository {
 	if backoffBaseSeconds <= 0 {
 		backoffBaseSeconds = 5
 	}
@@ -121,7 +120,7 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	if backoffPolicy == "" {
 		backoffPolicy = "exp_full_jitter"
 	}
-	r := &taskRepo{
+	r := &TaskRepository{
 		db:                 db,
 		tz:                 tz,
 		backoffPolicy:      backoffPolicy,
@@ -138,7 +137,7 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	return r
 }
 
-func (r *taskRepo) now() time.Time { return time.Now().In(r.tz) }
+func (r *TaskRepository) now() time.Time { return time.Now().In(r.tz) }
 
 func normalizePriority(p int) int {
 	if p < minPriority {
@@ -152,12 +151,20 @@ func normalizePriority(p int) int {
 
 // ---------- Enqueue ----------
 
-func (r *taskRepo) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+func (r *TaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
 	task, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
 	return task, err
 }
 
-func (r *taskRepo) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	return r.EnqueueWithID(ctx, uuid.NewString(), cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+}
+
+// EnqueueWithID is the cluster-aware variant: callers (cluster.Router) pre-pick
+// the task ID at the routing boundary so the (id → owner shard) mapping
+// resolved by the consistent-hash ring is honoured. Local callers can pass
+// uuid.NewString() and get the original semantics.
+func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	if idempotencyKey != "" {
 		// Look up existing task for this idempotency key. If present, return
 		// the original task (mirrors the Redis behavior so SDKs see the same
@@ -175,7 +182,6 @@ func (r *taskRepo) EnqueueWithReady(ctx context.Context, cmd domain.Command, pay
 	}
 
 	priority = normalizePriority(priority)
-	id := uuid.NewString()
 	now := r.now()
 	task := &domain.Task{
 		ID:          id,
@@ -251,7 +257,7 @@ func (r *taskRepo) EnqueueWithReady(ctx context.Context, cmd domain.Command, pay
 // publishPending pushes a (seq, id) hint onto the per-queue channel
 // non-blocking. The fall-through (channel full) is intentional: the
 // data is already in Pebble; recovery on next restart picks it up.
-func (r *taskRepo) publishPending(cmd domain.Command, tenantID string, prio int, seq uint64, id string) {
+func (r *TaskRepository) publishPending(cmd domain.Command, tenantID string, prio int, seq uint64, id string) {
 	q := r.channelFor(cmd, tenantID, prio)
 	select {
 	case q.ch <- pendingHint{seq: seq, id: id}:
@@ -261,7 +267,7 @@ func (r *taskRepo) publishPending(cmd domain.Command, tenantID string, prio int,
 
 // ---------- Get ----------
 
-func (r *taskRepo) Get(ctx context.Context, taskID string) (*domain.Task, error) {
+func (r *TaskRepository) Get(ctx context.Context, taskID string) (*domain.Task, error) {
 	v, err := r.db.Get(KeyTask(taskID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -278,7 +284,7 @@ func (r *taskRepo) Get(ctx context.Context, taskID string) (*domain.Task, error)
 
 // ---------- Claim ----------
 
-func (r *taskRepo) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
+func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
 	if inspectLimit <= 0 {
 		inspectLimit = defaultInspectLimit
 	}
@@ -312,7 +318,7 @@ func (r *taskRepo) Claim(ctx context.Context, workerID string, commands []domain
 // the lowest-seq pending key (FIFO within bucket), atomically deletes it,
 // adds the id to the inprog set, updates the task body, and writes the
 // lease — all in one batch so we never observe a half-moved task.
-func (r *taskRepo) popFromAnyPriority(ctx context.Context, workerID string, cmd domain.Command, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
+func (r *TaskRepository) popFromAnyPriority(ctx context.Context, workerID string, cmd domain.Command, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
 	for p := maxPriority; p >= minPriority; p-- {
 		t, ok, err := r.tryPopPriority(ctx, workerID, cmd, p, leaseSeconds, tenantID)
 		if err != nil {
@@ -337,7 +343,7 @@ func queueKey(cmd domain.Command, tenantID string, prio int) string {
 // consumers; whichever wins the store gets credited, the loser uses the
 // stored value. New channels start empty (any pre-existing pending keys
 // were seeded by recoverQueues at startup).
-func (r *taskRepo) channelFor(cmd domain.Command, tenantID string, prio int) *queueChan {
+func (r *TaskRepository) channelFor(cmd domain.Command, tenantID string, prio int) *queueChan {
 	k := queueKey(cmd, tenantID, prio)
 	if v, ok := r.queues.Load(k); ok {
 		return v.(*queueChan)
@@ -356,7 +362,7 @@ func (r *taskRepo) channelFor(cmd domain.Command, tenantID string, prio int) *qu
 // rather than spread across the first batch of claims. Linear in the
 // number of pending keys; for very deep queues this could be made
 // concurrent or chunked.
-func (r *taskRepo) recoverQueues() error {
+func (r *TaskRepository) recoverQueues() error {
 	lower := []byte(pQueue)
 	upper := prefixUpper(lower)
 	it, err := r.db.Iter(lower, upper)
@@ -410,7 +416,7 @@ func (r *taskRepo) recoverQueues() error {
 	return it.Error()
 }
 
-func (r *taskRepo) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
+func (r *TaskRepository) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
 	q := r.channelFor(cmd, tenantID, priority)
 	var h pendingHint
 	select {
@@ -429,7 +435,7 @@ func (r *taskRepo) tryPopPriority(ctx context.Context, workerID string, cmd doma
 //
 // Ghosts: if the task body is missing (admin cleanup raced), we drop the
 // matching pending key by exact key — no scan — and signal empty.
-func (r *taskRepo) completeClaim(ctx context.Context, workerID string, cmd domain.Command, tenantID string, priority, leaseSeconds int, seq uint64, id string) (*domain.Task, bool, error) {
+func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd domain.Command, tenantID string, priority, leaseSeconds int, seq uint64, id string) (*domain.Task, bool, error) {
 	pendingKey := KeyPending(cmd, tenantID, priority, seq, id)
 
 	taskJSON, err := r.db.Get(KeyTask(id))
@@ -485,7 +491,7 @@ func (r *taskRepo) completeClaim(ctx context.Context, workerID string, cmd domai
 // carried through the channel hint, so we have to discover it here. The
 // scan is bounded by the few entries that happen to share this id —
 // normally exactly one.
-func (r *taskRepo) findPendingKey(cmd domain.Command, tenantID string, priority int, id string) ([]byte, bool) {
+func (r *TaskRepository) findPendingKey(cmd domain.Command, tenantID string, priority int, id string) ([]byte, bool) {
 	lower, upper := PrefixPendingPrio(cmd, tenantID, priority)
 	it, err := r.db.Iter(lower, upper)
 	if err != nil {
@@ -505,7 +511,7 @@ func (r *taskRepo) findPendingKey(cmd domain.Command, tenantID string, priority 
 
 // dropPendingByID deletes any pending entry for id within (cmd, tenant,
 // prio) — used to clean up ghost references discovered during claim.
-func (r *taskRepo) dropPendingByID(cmd domain.Command, tenantID string, priority int, id string) {
+func (r *TaskRepository) dropPendingByID(cmd domain.Command, tenantID string, priority int, id string) {
 	if k, ok := r.findPendingKey(cmd, tenantID, priority, id); ok {
 		_ = r.db.Delete(k)
 	}
@@ -571,7 +577,7 @@ func parseLease(v []byte) (workerID string, untilUnix int64, ok bool) {
 
 // ---------- Heartbeat ----------
 
-func (r *taskRepo) Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error {
+func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error {
 	taskJSON, err := r.db.Get(KeyTask(taskID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -611,7 +617,7 @@ func (r *taskRepo) Heartbeat(ctx context.Context, taskID string, workerID string
 
 // ---------- Abandon ----------
 
-func (r *taskRepo) Abandon(ctx context.Context, taskID string, workerID string) error {
+func (r *TaskRepository) Abandon(ctx context.Context, taskID string, workerID string) error {
 	taskJSON, err := r.db.Get(KeyTask(taskID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -663,7 +669,7 @@ func (r *taskRepo) Abandon(ctx context.Context, taskID string, workerID string) 
 
 // ---------- Nack ----------
 
-func (r *taskRepo) Nack(ctx context.Context, taskID string, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error) {
+func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error) {
 	taskJSON, err := r.db.Get(KeyTask(taskID))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -761,11 +767,11 @@ func (r *taskRepo) Nack(ctx context.Context, taskID string, workerID string, del
 
 // ---------- MoveDueDelayed ----------
 
-func (r *taskRepo) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
+func (r *TaskRepository) MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error) {
 	return r.moveDueDelayedForTenant(ctx, cmd, limit, "")
 }
 
-func (r *taskRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.Command, limit int, tenantID string) (int, error) {
+func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain.Command, limit int, tenantID string) (int, error) {
 	if limit <= 0 {
 		limit = defaultInspectLimit
 	}
@@ -851,7 +857,7 @@ func (r *taskRepo) moveDueDelayedForTenant(ctx context.Context, cmd domain.Comma
 
 // ---------- requeueExpired ----------
 
-func (r *taskRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit, maxAttemptsDefault int, tenantID string) (int, error) {
+func (r *TaskRepository) requeueExpired(ctx context.Context, cmd domain.Command, inspectLimit, maxAttemptsDefault int, tenantID string) (int, error) {
 	if inspectLimit <= 0 {
 		inspectLimit = defaultInspectLimit
 	}
@@ -929,12 +935,12 @@ func (r *taskRepo) requeueExpired(ctx context.Context, cmd domain.Command, inspe
 
 // ---------- introspection ----------
 
-func (r *taskRepo) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
+func (r *TaskRepository) PendingLength(ctx context.Context, cmd domain.Command) (int64, error) {
 	lower, upper := PrefixPendingAllPrios(cmd, "")
 	return r.countPrefix(lower, upper)
 }
 
-func (r *taskRepo) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
+func (r *TaskRepository) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
 	pendingLow, pendingHigh := PrefixPendingAllPrios(cmd, tenantID)
 	pending, err := r.countPrefix(pendingLow, pendingHigh)
 	if err != nil {
@@ -964,7 +970,7 @@ func (r *taskRepo) QueueStats(ctx context.Context, cmd domain.Command, tenantID 
 	}, nil
 }
 
-func (r *taskRepo) AdminQueues(ctx context.Context) (map[string]any, error) {
+func (r *TaskRepository) AdminQueues(ctx context.Context) (map[string]any, error) {
 	// Walk every queue prefix under codeq/q/ and aggregate counts. Output
 	// shape mirrors the Redis flat-map for compatibility with the admin UI.
 	lower := []byte(pQueue)
@@ -1019,7 +1025,7 @@ func bucketLabel(k string) string {
 	return label
 }
 
-func (r *taskRepo) countPrefix(lower, upper []byte) (int64, error) {
+func (r *TaskRepository) countPrefix(lower, upper []byte) (int64, error) {
 	it, err := r.db.Iter(lower, upper)
 	if err != nil {
 		return 0, err
@@ -1034,7 +1040,7 @@ func (r *taskRepo) countPrefix(lower, upper []byte) (int64, error) {
 
 // CleanupExpired sweeps the ttl_index for entries older than `before`,
 // removing the task and any queue references. Bounded by `limit` per call.
-func (r *taskRepo) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {
+func (r *TaskRepository) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {
 	if limit <= 0 {
 		limit = 100
 	}

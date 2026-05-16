@@ -1,0 +1,210 @@
+// Package clusterpb defines the internal codeq-to-codeq protocol. External
+// (producer/worker) clients still speak REST; this gRPC surface is only
+// reachable on the cluster network.
+//
+// Service shape:
+//   - Operations that know a task ID (Get/Heartbeat/Result/Nack/Abandon)
+//     route directly via consistent hash on the ID.
+//   - Operations that do NOT know a task ID (LocalClaim, PendingLength,
+//     AdminQueues) target a specific node by ID and act on that node's
+//     local shard only — the caller is responsible for scatter-gather.
+//   - BloomSnapshot returns the latest bloom of IDs durably stored on the
+//     responding node. Routers query peer blooms to short-circuit
+//     scatter-gather and outright-404 unknown IDs.
+//
+// Wire types: we keep this intentionally minimal. JSON-friendly fields
+// (task payload, result body) travel as bytes/strings — encoding lives
+// on the codeq side so we don't bake JSON shape choices into the proto.
+syntax = "proto3";
+
+package clusterpb;
+
+option go_package = "github.com/osvaldoandrade/codeq/internal/cluster/clusterpb";
+
+import "google/protobuf/timestamp.proto";
+
+// ---------------- Task model (subset of domain.Task on the wire) ----------------
+
+message Task {
+  string id = 1;
+  string command = 2;
+  bytes payload = 3;          // raw JSON; codeq parses
+  int32 priority = 4;
+  string webhook = 5;
+  int32 max_attempts = 6;
+  string idempotency_key = 7;
+  string status = 8;
+  string last_known_location = 9;
+  string worker_id = 10;
+  string lease_until = 11;    // RFC3339
+  int32 attempts = 12;
+  string tenant_id = 13;
+  string error = 14;
+  string result_key = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+  string trace_parent = 18;
+  string trace_state = 19;
+}
+
+message ResultRecord {
+  string task_id = 1;
+  string status = 2;
+  bytes result_json = 3;       // JSON payload
+  string error = 4;
+  repeated string artifacts = 5;  // each is JSON-encoded ArtifactOut
+  google.protobuf.Timestamp completed_at = 6;
+}
+
+// ---------------- Request/response messages ----------------
+
+message GetTaskRequest { string id = 1; }
+message GetTaskResponse {
+  Task task = 1;
+  bool not_found = 2;
+}
+
+message HeartbeatRequest {
+  string task_id = 1;
+  string worker_id = 2;
+  int32 extend_seconds = 3;
+}
+message HeartbeatResponse {
+  bool not_found = 1;
+  bool not_owner = 2;
+}
+
+message AbandonRequest {
+  string task_id = 1;
+  string worker_id = 2;
+}
+message AbandonResponse {
+  bool not_found = 1;
+  bool not_owner = 2;
+  bool not_in_progress = 3;
+}
+
+message NackRequest {
+  string task_id = 1;
+  string worker_id = 2;
+  int32 delay_seconds = 3;
+  int32 max_attempts_default = 4;
+  string reason = 5;
+}
+message NackResponse {
+  int32 applied_delay_seconds = 1;
+  bool dlq = 2;
+  bool not_found = 3;
+  bool not_owner = 4;
+  bool not_in_progress = 5;
+}
+
+message SaveResultRequest {
+  ResultRecord record = 1;
+  string command = 2;          // optional hint for direct routing on the inner side
+  string tenant_id = 3;
+}
+message SaveResultResponse {
+  bool not_found = 1;
+}
+
+message UpdateOnCompleteRequest {
+  string task_id = 1;
+  string command = 2;
+  string tenant_id = 3;
+  string status = 4;
+  string error_msg = 5;
+}
+message UpdateOnCompleteResponse {
+  bool not_found = 1;
+}
+
+// LocalClaim asks the receiving node to pop from its local Pebble shard
+// only — caller (router) is responsible for fanning out across all nodes
+// and selecting the first non-empty response.
+message LocalClaimRequest {
+  string worker_id = 1;
+  repeated string commands = 2;
+  int32 lease_seconds = 3;
+  int32 inspect_limit = 4;
+  int32 max_attempts_default = 5;
+  string tenant_id = 6;
+}
+message LocalClaimResponse {
+  Task task = 1;
+  bool empty = 2;
+}
+
+message PendingLengthRequest { string command = 1; }
+message PendingLengthResponse { int64 length = 1; }
+
+message QueueStatsRequest {
+  string command = 1;
+  string tenant_id = 2;
+}
+message QueueStatsResponse {
+  int64 ready = 1;
+  int64 delayed = 2;
+  int64 in_progress = 3;
+  int64 dlq = 4;
+}
+
+message AdminQueuesRequest {}
+message AdminQueuesResponse {
+  map<string, int64> counts = 1;
+}
+
+// Bloom snapshot transferred between nodes. m_bits is the bloom's bit
+// array (raw bytes), num_hashes the configured k, num_items the count of
+// items currently inserted, sequence is an incrementing version for
+// freshness comparisons.
+message BloomSnapshotRequest {}
+message BloomSnapshotResponse {
+  bytes m_bits = 1;
+  uint32 num_hashes = 2;
+  uint64 num_items = 3;
+  uint64 sequence = 4;
+  string node_id = 5;
+}
+
+// EnqueueRequest carries every field the local Enqueue needs, with the
+// task ID already chosen by the router so the hash → owner assignment
+// is honored when the call lands on a peer.
+message EnqueueRequest {
+  string id = 1;
+  string command = 2;
+  bytes payload = 3;
+  int32 priority = 4;
+  string webhook = 5;
+  int32 max_attempts = 6;
+  string idempotency_key = 7;
+  // visible_at_unix=0 means "available immediately" (i.e. not delayed).
+  int64 visible_at_unix = 8;
+  string tenant_id = 9;
+}
+message EnqueueResponse {
+  Task task = 1;
+  bool ready = 2;  // mirrors EnqueueWithReady's bool return
+}
+
+// ---------------- Service ----------------
+
+service TaskNode {
+  // ID-routed (caller resolves owner via hash):
+  rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Abandon(AbandonRequest) returns (AbandonResponse);
+  rpc Nack(NackRequest) returns (NackResponse);
+  rpc SaveResult(SaveResultRequest) returns (SaveResultResponse);
+  rpc UpdateOnComplete(UpdateOnCompleteRequest) returns (UpdateOnCompleteResponse);
+
+  // Scatter-gather (caller broadcasts to every node):
+  rpc LocalClaim(LocalClaimRequest) returns (LocalClaimResponse);
+  rpc PendingLength(PendingLengthRequest) returns (PendingLengthResponse);
+  rpc QueueStats(QueueStatsRequest) returns (QueueStatsResponse);
+  rpc AdminQueues(AdminQueuesRequest) returns (AdminQueuesResponse);
+
+  // Bloom gossip (poll-style; a streaming version can be added later):
+  rpc BloomSnapshot(BloomSnapshotRequest) returns (BloomSnapshotResponse);
+}
