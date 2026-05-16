@@ -1,6 +1,6 @@
 # codeQ
 
-Reactive scheduling and completion system backed by persistent queues in KVRocks.
+Reactive scheduling and completion system with pluggable persistent queue storage (Redis, KVRocks, or embedded Pebble).
 
 This repository contains the core runtime, HTTP API wiring, and a Helm chart for small clusters.
 The production service wrapper lives at:
@@ -16,17 +16,19 @@ https://github.com/codecompany/codeq-service
 
 codeQ provides:
 
-- Persistent queues on KVRocks (Redis protocol).
-- Pull-based worker claims with leases.
+- **Pluggable storage backends**: Redis/KVRocks (networked), embedded Pebble (single-node), or in-memory (testing)
+- Persistent queues with pull-based worker claims and automatic leases.
 - **Multi-tenant queue isolation** with automatic tenant ID extraction from JWT claims.
 - NACK + backoff + delayed queues.
 - DLQ for tasks that exceed `maxAttempts`.
 - Result storage and optional callbacks (webhooks).
-- Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
-- **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
+- Worker auth via JWT (JWKS), producer auth via access tokens (JWKS).
+- **Official SDKs** for Go, Java, Node.js/TypeScript with framework integrations.
 - **Distributed tracing** with OpenTelemetry support for end-to-end observability.
-- **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
-- **Load testing framework**: Comprehensive k6 scenarios and Go benchmarks for performance validation and regression testing.
+- **High-performance communication**: REST API (1–5k req/s) or gRPC Worker Stream (5k–50k req/s).
+- **Optimized performance**: O(1) queue operations with pipelined lease repair and batch group commit.
+- **Distributed clustering**: Hash-based task routing across multiple nodes with gRPC backend communication.
+- **Load testing framework**: Comprehensive k6 scenarios and Go benchmarks for performance validation.
 
 ## Get started
 

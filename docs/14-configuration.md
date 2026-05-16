@@ -23,16 +23,18 @@ Docker Compose and Helm examples live under `deploy/docker-compose` and
 
 codeQ uses a pluggable persistence architecture allowing different storage backends. See `docs/27-persistence-plugin-system.md` for detailed information.
 
-- `persistenceProvider` (string): Storage backend type, one of: `redis`, `memory`
+- `persistenceProvider` (string): Storage backend type, one of: `redis`, `memory`, `pebble`
   - Environment variable: `PERSISTENCE_PROVIDER`
   - Default: `redis` (for backward compatibility)
   - `redis`: Production-ready persistence using Redis or KVRocks
   - `memory`: In-memory storage for testing only (data lost on restart)
+  - `pebble`: Embedded local storage (single-node or cluster with gRPC routing)
 - `persistenceConfig` (JSON object): Provider-specific configuration
   - Environment variable: `PERSISTENCE_CONFIG` (JSON string)
   - Format varies by provider:
     - **Redis**: `{"addr":"localhost:6379","password":""}`
     - **Memory**: `{}`
+    - **Pebble**: `{"path":"./codeq-pebble","fsyncOnCommit":false}`
 
 ### Backward Compatibility
 
@@ -59,6 +61,15 @@ persistenceConfig:
 ````yaml
 persistenceProvider: memory
 persistenceConfig: {}
+````
+
+### Example: Pebble Plugin (Embedded)
+
+````yaml
+persistenceProvider: pebble
+persistenceConfig:
+  path: ./codeq-pebble
+  fsyncOnCommit: false
 ````
 
 ## Tracing (OpenTelemetry)

@@ -71,17 +71,84 @@
 
 ## Components
 
-- HTTP API: Gin-based router with JSON binding.
-- Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
-- Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
-- Scheduler core: orchestrates queue and task state transitions.
-- Result processor: validates completion payloads and stores results.
-- Storage: KVRocks via Redis API.
-- Artifact storage: local filesystem uploader.
-- Notifier: optional webhook signal dispatcher.
-- Requeue loop: claim-time repair during `Claim`.
-- Metrics: Prometheus instrumentation with custom Redis collector.
-- Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+- **HTTP API**: Gin-based router with JSON binding for producer and admin endpoints.
+- **Worker Stream (gRPC)**: Low-latency worker communication protocol (optional; use instead of HTTP for high-throughput scenarios).
+- **Auth**: Producer and worker token validation via pluggable authentication system (default: JWKS).
+- **Rate limiter**: Optional Redis-backed token bucket rate limiting per bearer token.
+- **Scheduler core**: orchestrates queue and task state transitions.
+- **Result processor**: validates completion payloads and stores results.
+- **Storage**: Pluggable persistence layer (default: Redis/KVRocks; also: embedded Pebble, in-memory for testing).
+- **Artifact storage**: local filesystem uploader.
+- **Notifier**: optional webhook signal dispatcher.
+- **Requeue loop**: claim-time repair during `Claim`.
+- **Metrics**: Prometheus instrumentation with custom Redis collector.
+- **Tracing**: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+
+## Communication Protocols
+
+### HTTP API (Recommended for most workloads)
+
+The HTTP API provides REST endpoints for all producer, worker, and admin operations. 
+
+**Endpoints:**
+
+- **Producer**: `POST /tasks` (create), `GET /tasks/:id/result` (read result)
+- **Worker**: `POST /claim` (claim task), `POST /tasks/:id/result` (submit result), `POST /tasks/:id/heartbeat` (extend lease), `POST /tasks/:id/nack` (reject task)
+- **Admin**: `POST /cleanup` (retention cleanup), `GET /queues/:command/stats` (queue metrics)
+- **Subscriptions**: `POST /subscriptions` (register webhook), `DELETE /subscriptions/:id` (unregister)
+
+**Characteristics:**
+
+- Stateless request/response model
+- Full JSON payload encoding
+- Suitable for 1–5k req/s per instance
+- Network latency may add 5–10ms per round-trip
+
+### Worker Stream (gRPC) — High-Throughput Alternative
+
+Worker Stream is an optional gRPC-based protocol optimized for scenarios requiring **high throughput and low latency** worker communication.
+
+**When to use Worker Stream:**
+
+- High-throughput worker workloads (5k–50k req/s per instance)
+- Batch claim operations (hundreds of tasks claimed in one RPC)
+- Long-poll scenarios (stream keeps connection open for task delivery)
+- Latency-sensitive applications (sub-5ms p95 RTT)
+
+**Configuration:**
+
+```yaml
+# config.yaml
+workerStreamAddr: "0.0.0.0:8081"  # gRPC listen address
+```
+
+```bash
+# Environment variable
+WORKER_STREAM_ADDR=0.0.0.0:8081
+```
+
+Leave empty or unset to disable Worker Stream (HTTP API remains the default).
+
+**Protocol:**
+
+Worker Stream uses protocol buffers (protobuf) and is defined in `internal/cluster/clusterpb/clusterpb.proto`:
+
+- **`StreamClaim` RPC**: Unary call; worker claims tasks matching commands with optional timeout
+- **`StreamSubmitResult` RPC**: Unary call; worker submits task result
+- **`StreamHeartbeat` RPC**: Unary call; worker extends lease
+
+**Comparison: HTTP vs. gRPC Worker Stream**
+
+| Aspect | HTTP API | Worker Stream (gRPC) |
+|--------|----------|---------------------|
+| **Throughput** | 1–5k req/s | 10k–50k req/s per instance |
+| **Latency (p95)** | 5–15ms | 1–5ms |
+| **Payload encoding** | JSON | Protocol Buffers (binary) |
+| **Connection model** | Stateless request/response | Persistent or request/response |
+| **Batch operations** | Single task per request | Multiple tasks per RPC |
+| **When to use** | Most workloads | High-throughput, latency-critical |
+
+Both protocols implement identical business logic; choice depends on performance requirements and client library availability.
 
 ## Enqueue flow
 
