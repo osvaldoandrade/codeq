@@ -68,6 +68,12 @@ type TaskRepository struct {
 	// through to the channel pop. The active sweeper publishes hints
 	// that the losers can consume, so throughput is preserved.
 	delayedMoveFlag sync.Map // key string (cmd \x00 tenant) → *atomic.Int32
+
+	// leases is an alias for db.Leases — the Phase 6 / M2 in-memory
+	// replacement for KeyLease. Held here so the hot-path callers
+	// don't dereference through r.db on every claim. Initialized in
+	// NewTaskRepository.
+	leases *leaseTable
 }
 
 // queueChan is the per-queue channel + recovery state. Each hint carries
@@ -146,6 +152,7 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 		backoffBaseSeconds: backoffBaseSeconds,
 		backoffMaxSeconds:  backoffMaxSeconds,
 		reconcile:          reconcileTracker{interval: defaultReconcileInterval},
+		leases:             db.Leases,
 	}
 	// Re-seed in-memory queue channels from any pending keys that
 	// survived a previous shutdown. Has to happen before any handler
@@ -155,6 +162,12 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	}
 	if err := r.recoverDelayedCounts(); err != nil {
 		panic(fmt.Sprintf("pebble delayed-count recovery: %v", err))
+	}
+	// Phase 6 / M2: in-memory lease table replaces the on-disk
+	// KeyLease index. Best-effort recovery — if it fails the worst
+	// case is reaper noticing lease expiry one tick later than ideal.
+	if err := r.recoverLeases(); err != nil {
+		panic(fmt.Sprintf("pebble lease recovery: %v", err))
 	}
 	return r
 }
@@ -583,9 +596,8 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	if err := b.Set(KeyTask(id), updatedJSON, nil); err != nil {
 		return nil, false, err
 	}
-	if err := b.Set(KeyLease(id), encodeLease(workerID, leaseUntil), nil); err != nil {
-		return nil, false, err
-	}
+	// Phase 6 / M2: lease lives in memory; task body's LeaseUntil
+	// stays as the durable source of truth for recovery.
 	ttlScore := uint64(now.Add(taskRetention).Unix())
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return nil, false, err
@@ -593,6 +605,7 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	if err := r.db.CommitBatch(b); err != nil {
 		return nil, false, fmt.Errorf("commit claim: %w", err)
 	}
+	r.leases.Set(id, workerID, cmd, tenantID, leaseUntil.Unix())
 	return &t, true, nil
 }
 
@@ -669,8 +682,8 @@ collect:
 	now := r.now()
 	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
 	leaseUntilStr := leaseUntil.Format(time.RFC3339)
+	leaseUntilU := leaseUntil.Unix()
 	ttlScore := uint64(now.Add(taskRetention).Unix())
-	encodedLease := encodeLease(workerID, leaseUntil)
 
 	out := make([]*domain.Task, 0, len(hints))
 	b := r.db.Batch()
@@ -716,9 +729,9 @@ collect:
 		if err := b.Set(KeyTask(h.id), updatedJSON, nil); err != nil {
 			return nil, err
 		}
-		if err := b.Set(KeyLease(h.id), encodedLease, nil); err != nil {
-			return nil, err
-		}
+		// Phase 6 / M2: lease lives in-memory, recovered from task body
+		// on restart. Set deferred until after the durable commit so
+		// failed commits don't strand the in-memory entry ahead of disk.
 		if err := b.Set(KeyTTLIndex(ttlScore, h.id), nil, nil); err != nil {
 			return nil, err
 		}
@@ -729,6 +742,11 @@ collect:
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return nil, fmt.Errorf("commit claim-many: %w", err)
+	}
+	// Lease table updates happen post-commit so a failed Pebble commit
+	// doesn't leave the in-memory state ahead of disk.
+	for _, t := range out {
+		r.leases.Set(t.ID, workerID, t.Command, tenantID, leaseUntilU)
 	}
 	return out, nil
 }
@@ -805,22 +823,8 @@ func bytesHasSuffix(s, suffix []byte) bool {
 	return len(s) >= len(suffix) && string(s[len(s)-len(suffix):]) == string(suffix)
 }
 
-func encodeLease(workerID string, until time.Time) []byte {
-	return []byte(workerID + "|" + strconv.FormatInt(until.Unix(), 10))
-}
-
-func parseLease(v []byte) (workerID string, untilUnix int64, ok bool) {
-	s := string(v)
-	idx := strings.IndexByte(s, '|')
-	if idx < 0 {
-		return "", 0, false
-	}
-	until, err := strconv.ParseInt(s[idx+1:], 10, 64)
-	if err != nil {
-		return "", 0, false
-	}
-	return s[:idx], until, true
-}
+// encodeLease / parseLease / KeyLease retired in Phase 6 / M2 — lease
+// state lives in db.Leases (in-memory). See lease_table.go.
 
 // ---------- Heartbeat ----------
 
@@ -852,14 +856,20 @@ func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID 
 	if err := b.Set(KeyTask(taskID), updated, nil); err != nil {
 		return err
 	}
-	if err := b.Set(KeyLease(taskID), encodeLease(workerID, until), nil); err != nil {
-		return err
-	}
+	// Phase 6 / M2: KeyLease eliminated; lease lives in memory.
 	ttlScore := uint64(now.Add(taskRetention).Unix())
 	if err := b.Set(KeyTTLIndex(ttlScore, taskID), nil, nil); err != nil {
 		return err
 	}
-	return r.db.CommitBatch(b)
+	if err := r.db.CommitBatch(b); err != nil {
+		return err
+	}
+	// Extend in memory only if we still own the lease — Extend
+	// returns false if reaper requeued the task between Get and now.
+	// We tolerate that and let the caller see no error (matches the
+	// pre-M2 behavior where Heartbeat blind-set the lease key).
+	r.leases.Extend(taskID, workerID, until.Unix())
+	return nil
 }
 
 // ---------- Abandon ----------
@@ -898,9 +908,7 @@ func (r *TaskRepository) Abandon(ctx context.Context, taskID string, workerID st
 	if err := b.Delete(KeyInprog(t.Command, t.TenantID, taskID), nil); err != nil {
 		return err
 	}
-	if err := b.Delete(KeyLease(taskID), nil); err != nil {
-		return err
-	}
+	// Phase 6 / M2: no KeyLease delete needed; in-memory drop below.
 	if err := b.Set(KeyPending(t.Command, t.TenantID, prio, seq, taskID), nil, nil); err != nil {
 		return err
 	}
@@ -910,6 +918,7 @@ func (r *TaskRepository) Abandon(ctx context.Context, taskID string, workerID st
 	if err := r.db.CommitBatch(b); err != nil {
 		return err
 	}
+	r.leases.Delete(taskID)
 	r.publishPending(t.Command, t.TenantID, prio, seq, taskID)
 	return nil
 }
@@ -960,9 +969,7 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 		if err := b.Delete(KeyInprog(t.Command, t.TenantID, taskID), nil); err != nil {
 			return 0, false, err
 		}
-		if err := b.Delete(KeyLease(taskID), nil); err != nil {
-			return 0, false, err
-		}
+		// Phase 6 / M2: KeyLease eliminated.
 		if err := b.Set(KeyDLQ(t.Command, t.TenantID, taskID), nil, nil); err != nil {
 			return 0, false, err
 		}
@@ -972,6 +979,7 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 		if err := r.db.CommitBatch(b); err != nil {
 			return 0, false, err
 		}
+		r.leases.Delete(taskID)
 		metrics.TaskCompletedTotal.WithLabelValues(string(t.Command), string(t.Status)).Inc()
 		if d := now.Sub(t.CreatedAt).Seconds(); d >= 0 {
 			metrics.TaskProcessingLatencySeconds.WithLabelValues(string(t.Command), string(t.Status)).Observe(d)
@@ -996,9 +1004,7 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 	if err := b.Delete(KeyInprog(t.Command, t.TenantID, taskID), nil); err != nil {
 		return 0, false, err
 	}
-	if err := b.Delete(KeyLease(taskID), nil); err != nil {
-		return 0, false, err
-	}
+	// Phase 6 / M2: KeyLease eliminated.
 	score := uint64(visibleAt.Unix())
 	if err := b.Set(KeyDelayed(t.Command, t.TenantID, score, taskID), nil, nil); err != nil {
 		return 0, false, err
@@ -1009,6 +1015,7 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, false, err
 	}
+	r.leases.Delete(taskID)
 	r.delayedCounter(t.Command, t.TenantID).Add(1)
 	return delaySeconds, false, nil
 }
@@ -1166,17 +1173,15 @@ func (r *TaskRepository) requeueExpired(ctx context.Context, cmd domain.Command,
 	now := r.now()
 	moved := 0
 	for _, c := range candidates {
-		leaseVal, err := r.db.Get(KeyLease(c.id))
-		if err != nil {
-			if !errors.Is(err, ErrNotFound) {
-				return moved, err
-			}
-			// Lease gone but inprog member lingers — clean up.
+		// Phase 6 / M2: lease lives in memory. If there's no entry the
+		// in-progress key is stale (recovery race or explicit delete) —
+		// clean it up.
+		e, ok := r.db.Leases.Get(c.id)
+		if !ok {
 			_ = r.db.Delete(c.inprog)
 			continue
 		}
-		_, until, ok := parseLease(leaseVal)
-		if !ok || until > now.Unix() {
+		if e.untilU > now.Unix() {
 			continue // still leased
 		}
 
@@ -1370,13 +1375,14 @@ func (r *TaskRepository) CleanupExpired(ctx context.Context, limit int, before t
 		if err := b.Delete(c.ttlKey, nil); err != nil {
 			return deleted, err
 		}
-		if err := b.Delete(KeyLease(c.id), nil); err != nil {
-			return deleted, err
-		}
+		// Phase 6 / M2: KeyLease eliminated.
 		deleted++
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, err
+	}
+	for _, c := range cands {
+		r.db.Leases.Delete(c.id)
 	}
 	return deleted, nil
 }
