@@ -27,6 +27,5 @@ This package may be removed in a future release. All functionality has been migr
 ## Documentation
 
 See:
-- [Authentication Plugins Guide](../../docs/20-authentication-plugins.md) - Current auth system
-- [Migration Guide](../../docs/23-migration-plugin-system.md) - Migration from identity-middleware
+- [Authentication Plugins Guide](../../docs/20-authentication-plugins.md) - Current auth system, includes migration appendix for identity-middleware
 - [Plugin Architecture HLD](../../docs/25-plugin-architecture-hld.md) - Design rationale

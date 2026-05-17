@@ -417,8 +417,97 @@ cfg.ProducerAuthConfig, _ = json.Marshal(map[string]interface{}{
 })
 ```
 
+## Migration appendix: removing the `identity-middleware` private dependency
+
+Earlier versions of codeQ depended on the private Go module
+`github.com/codecompany/identity-middleware`. That dependency was removed and
+the plugin system in `pkg/auth/` is now the only authentication path. The
+notes below cover anything not addressed by the [Migration from Previous
+Version](#migration-from-previous-version) section above.
+
+### Existing tokens and config keep working
+
+All legacy configuration keys (`identityJwksUrl`, `identityIssuer`,
+`identityAudience`, `workerJwksUrl`, `workerIssuer`, `workerAudience`,
+`allowedClockSkewSeconds`) and their `IDENTITY_*` / `WORKER_*` environment
+variable equivalents are still honored. Existing producer and worker JWTs
+validate without changes because `pkg/auth/jwks` implements the same JWKS
+verification logic.
+
+### Building no longer needs `GOPRIVATE` / `GITHUB_TOKEN`
+
+Before:
+
+```bash
+export GOPRIVATE=github.com/codecompany
+git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+go build ./cmd/codeq
+```
+
+After:
+
+```bash
+go build ./cmd/codeq
+```
+
+CI pipelines and local developer setups can drop the `GOPRIVATE` export and
+the `GITHUB_TOKEN` git rewrite — they are no longer required.
+
+### Import and type changes when forking codeQ
+
+If you forked codeQ and referenced the legacy package, swap the imports:
+
+```go
+// Before
+import identitymw "github.com/codecompany/identity-middleware"
+
+// After
+import (
+    "github.com/osvaldoandrade/codeq/pkg/auth"
+    "github.com/osvaldoandrade/codeq/pkg/auth/jwks"
+)
+```
+
+`auth.Claims` is the field-for-field replacement for `identitymw.Claims`.
+Validator construction also keeps the same fields:
+
+```go
+// Before
+validator, err := identitymw.NewValidator(identitymw.Config{
+    JwksURL:     cfg.IdentityJwksURL,
+    Issuer:      cfg.IdentityIssuer,
+    Audience:    cfg.IdentityAudience,
+    ClockSkew:   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+    HTTPTimeout: 5 * time.Second,
+})
+
+// After
+validator, err := jwks.NewValidator(auth.Config{
+    JwksURL:     cfg.IdentityJwksURL,
+    Issuer:      cfg.IdentityIssuer,
+    Audience:    cfg.IdentityAudience,
+    ClockSkew:   time.Duration(cfg.AllowedClockSkewSeconds) * time.Second,
+    HTTPTimeout: 5 * time.Second,
+})
+```
+
+The legacy `internal/identitymw/` package is kept for historical reference
+only and is not wired into the current build — see
+[`internal/identitymw/README.md`](../internal/identitymw/README.md).
+
+### Verifying the migration
+
+```bash
+go test ./internal/middleware/...
+go test ./pkg/auth/jwks/...
+go test ./pkg/app/...
+```
+
+All three packages must pass without any credentials for the old private
+repository.
+
 ## See Also
 
 - [Custom Plugin Examples](../examples/custom-auth-plugin.md) - Complete implementations
-- [Migration Guide](23-migration-plugin-system.md) - Upgrading from identity-middleware
 - [Configuration Reference](14-configuration.md) - All config options
+- [Persistence Plugin System](27-persistence-plugin-system.md) - Pluggable persistence backends

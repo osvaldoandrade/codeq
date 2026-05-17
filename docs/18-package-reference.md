@@ -588,8 +588,7 @@ defer span.End()
 **Why it exists**: This code was copied to remove the private dependency and allow anyone to build codeQ without access to private repositories. It served as a reference implementation during migration.
 
 **See**:
-- `docs/23-migration-plugin-system.md` - Migration guide explaining the transition
-- `docs/20-authentication-plugins.md` - Current authentication system
+- `docs/20-authentication-plugins.md` - Current authentication system, including the migration appendix that replaced `docs/23-migration-plugin-system.md`
 - `internal/identitymw/README.md` - Deprecation notice
 
 ---
