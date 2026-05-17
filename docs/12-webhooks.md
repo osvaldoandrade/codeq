@@ -9,6 +9,37 @@ This document defines two independent webhook paths:
 
 Webhook notifications are advisory signals that work is available. They do not assign tasks and do not change task ownership. Workers must still claim tasks using the pull API.
 
+### Subscription lifecycle
+
+The producer hot path consults an in-memory `activeByCmd` atomic counter (`HasActive`) before scanning the subscription repo. When the counter is zero, `NotifyQueueReady` is a no-op — no Pebble iter, no HTTP fan-out. The diagram below maps the request flow end-to-end:
+
+```mermaid
+sequenceDiagram
+  participant Worker
+  participant Server
+  participant SubRepo as Subscription repo
+  participant Producer
+  participant Notifier
+
+  Worker->>Server: POST /workers/subscriptions (cmd, callbackURL)
+  Server->>SubRepo: Create(sub)
+  SubRepo->>SubRepo: activeByCmd[cmd]++
+  SubRepo-->>Server: subscription
+  Server-->>Worker: 201 Created
+
+  Producer->>Server: enqueue task for cmd
+  Server->>Notifier: NotifyQueueReady(cmd)
+  Notifier->>SubRepo: HasActive(cmd)
+  alt activeByCmd[cmd] > 0
+    SubRepo-->>Notifier: true
+    Notifier->>SubRepo: list subscribers (cmd)
+    Notifier->>Worker: POST callbackURL per delivery mode (fanout / group / hash)
+  else activeByCmd[cmd] == 0
+    SubRepo-->>Notifier: false
+    Notifier-->>Notifier: skip (fast path)
+  end
+```
+
 ### Registration
 
 Workers register a callback URL with an event type list. Registrations are stored with TTL and must be renewed. Registration is ephemeral and does not create a worker registry.
@@ -94,6 +125,52 @@ When OpenTelemetry tracing is enabled, notifications also include W3C trace cont
 
 Result callbacks are used to avoid polling `GET /tasks/:id/result`. They are triggered when a task reaches a terminal state (`COMPLETED` or `FAILED`).
 
+### Callback flow
+
+After the worker submits a result, `resultsService.Submit` persists the record and then invokes `s.callback.Send(task, rec)` — but only if `task.Webhook` is non-empty. The callback service POSTs the JSON payload to the URL with the HMAC signature headers, then retries on transport or non-2xx errors:
+
+```mermaid
+sequenceDiagram
+  participant Worker
+  participant Server
+  participant Results as resultsService
+  participant CB as resultCallbackService
+  participant Endpoint as Producer webhook
+
+  Worker->>Server: SubmitResult(taskID, status, result)
+  Server->>Results: Submit(taskID, req)
+  Results->>Results: persist ResultRecord
+  alt task.Webhook != ""
+    Results->>CB: Send(task, rec)
+    CB->>Endpoint: POST task.Webhook (HMAC-SHA256 sig)
+    alt 2xx
+      Endpoint-->>CB: 200 OK
+      CB-->>Results: delivered
+    else error or non-2xx
+      Endpoint-->>CB: 5xx / timeout
+      CB->>CB: backoff (base, max, attempts)
+      CB->>Endpoint: retry POST
+    end
+  else task.Webhook == ""
+    Results-->>Results: skip callback
+  end
+  Results-->>Server: ResultRecord
+  Server-->>Worker: 200 OK
+```
+
+> **Warning**: the result-callback hook fires only in the single-task `Submit` path
+> ([`internal/services/results_service.go`](../internal/services/results_service.go) — see `s.callback.Send` near line 183).
+> It does **not** fire in:
+>
+> - `BatchSubmit` (the batched results endpoint used by `/tasks/batch/results`),
+> - reaper-driven moves to DLQ after lease expiry,
+> - `Nack` paths that exhaust `maxAttempts`,
+> - TTL-based cleanup of completed/failed tasks.
+>
+> Producers that rely on webhooks for terminal-state notification must still poll
+> `GET /tasks/:id/result` (or use the streaming API) for tasks that may complete
+> via these paths. This is a known coverage gap; tracking issue TBD.
+
 ### Registration
 
 Result callbacks are configured per task at creation time using the `webhook` field. The callback URL is stored in the task record. For applications that require streaming updates, a WebSocket or SSE gateway can consume these callbacks and forward them to clients.
@@ -137,3 +214,41 @@ When OpenTelemetry tracing is enabled, result callbacks also include W3C trace c
 
 - `traceparent`
 - `tracestate` (optional)
+
+## 3) HMAC signature pipeline
+
+Both paths share the same signature scheme. The server is configured with a single `webhookHmacSecret` ([`pkg/config/config.go`](../pkg/config/config.go) — required when webhooks are enabled). For every outbound request, the server takes the raw JSON body, computes HMAC-SHA256 over `timestamp + "." + body`, hex-encodes the digest, and sets it as `X-CodeQ-Signature` alongside `X-CodeQ-Timestamp`. The receiver re-hashes the body with the same shared secret to verify.
+
+```mermaid
+graph LR
+  subgraph Server
+    SECRET[webhookHmacSecret]
+    BODY[request body bytes]
+    TS[X-CodeQ-Timestamp]
+    HMAC[HMAC-SHA256]
+    HEX[hex digest]
+    SIG[X-CodeQ-Signature]
+  end
+  subgraph Receiver
+    RECV[received body + headers]
+    RHMAC[HMAC-SHA256 with shared secret]
+    CMP[constant-time compare]
+  end
+  SECRET --> HMAC
+  TS --> HMAC
+  BODY --> HMAC
+  HMAC --> HEX
+  HEX --> SIG
+  SIG --> RECV
+  RECV --> RHMAC
+  RHMAC --> CMP
+```
+
+The signed message is `timestamp + "." + body`, not the body alone — this prevents replay of a valid signature with a stale timestamp. Receivers must reject requests where `now - X-CodeQ-Timestamp` exceeds their tolerance window (typical: 5 minutes).
+
+## See also
+
+- [Result storage and callbacks](./38-result-storage-callbacks.md) — terminal-state persistence and the callback service in detail.
+- [Security](./09-security.md) — token model, transport security, and signature verification.
+- [HTTP API](./04-http-api.md) — subscription endpoints, task creation with `webhook`, and result submission.
+- [Performance tuning](./17-performance-tuning.md) — rate-limit buckets and notifier fast-path behaviour.
