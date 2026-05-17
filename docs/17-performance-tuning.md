@@ -2,6 +2,66 @@
 
 This guide provides comprehensive tuning recommendations for production codeQ deployments. Follow these guidelines to optimize throughput, reduce latency, and ensure stable operations under load.
 
+codeq went from 26k req/s (Phase 0, KVRocks baseline) to 83.4k tasks/s for the full create → claim → complete cycle (Phase 8, 4 Pebble shards) through a sequence of nine measurable optimizations. The [phase evolution timeline](#phase-evolution-timeline) below maps every milestone to its throughput number; the [optimization-to-path map](#optimization-to-hot-path-map) links each phase to the specific hot path it touched (Pebble write, gRPC stream, producer notifier, mutex, batch claim, ClaimMany RPC, in-memory lease, Pebble shards). Use both diagrams to navigate the sections below — every phase referenced in the diagrams has its own subsection with the harness name, env vars, and measurement window required to reproduce the number.
+
+## Phase evolution timeline
+
+```mermaid
+timeline
+  title codeq throughput evolution (full cycle, single node)
+  Phase 0 baseline : 26k req/s (KVRocks)
+  Phase 1 coalescer : 40.6k req/s (Pebble + group-commit)
+  Phase 5 cluster scale : 0.96x linear scaling
+  Phase 6 Q1 HasActive : 33.5k tasks/s (full cycle)
+  Phase 6 M1 sendCh : 33.4k tasks/s (-51% mutex)
+  Phase 6 Q2 worker batch : 33.7k tasks/s
+  Phase 6 Q3 producer batch : 34.0k tasks/s
+  Phase 7 ClaimMany : 36.4k tasks/s
+  Phase 6 M2 in-mem lease : 40.0k tasks/s
+  F1 producer serial batch : 42.0k tasks/s
+  Phase 8 shards (4) : 83.4k tasks/s
+```
+
+## Optimization-to-hot-path map
+
+```mermaid
+graph TB
+  subgraph Phases[Optimization phases]
+    P1[Phase 1 coalescer]
+    P2[Phase 2 worker stream]
+    P3[Phase 3 producer stream]
+    P6Q1[Phase 6 Q1 HasActive]
+    P6M1[Phase 6 M1 sendCh]
+    P6Q2[Phase 6 Q2 worker batch]
+    P6Q3[Phase 6 Q3 producer batch]
+    P7[Phase 7 ClaimMany]
+    P6M2[Phase 6 M2 in-mem lease]
+    P8[Phase 8 shards]
+  end
+  subgraph Paths[Hot paths]
+    PEB[Pebble write path]
+    WS[Worker gRPC stream]
+    PS[Producer gRPC stream]
+    NQR[NotifyQueueReady notifier]
+    SM[Stream Send mutex]
+    WB[Worker batch claim+result]
+    PB[Producer batch]
+    CM[Server ClaimMany RPC]
+    LEASE[In-memory lease table]
+    SH[Pebble shards parallel write+compact]
+  end
+  P1 --> PEB
+  P2 --> WS
+  P3 --> PS
+  P6Q1 --> NQR
+  P6M1 --> SM
+  P6Q2 --> WB
+  P6Q3 --> PB
+  P7 --> CM
+  P6M2 --> LEASE
+  P8 --> SH
+```
+
 ## Load Testing
 
 For a practical load testing harness (k6 scenarios + Go benchmarks), see:
@@ -2552,3 +2612,10 @@ Real Redis/KVRocks: ~100-300µs per RTT, so the prefill scenario improves from ~
 ## Summary
 
 Performance tuning requires balancing throughput, latency, and resource costs. Start with recommended defaults, monitor key metrics, and adjust based on observed bottlenecks. Scale API servers horizontally and KVRocks vertically. Use decision trees to select appropriate lease durations, backoff policies, and webhook configurations. For extreme scale, plan for sharding or multi-region deployments.
+
+## See also
+
+- [Load testing](./26-load-testing.md)
+- [Performance baselines](./30-performance-baselines.md)
+- [Streaming API guide](./34-streaming-api-guide.md)
+- [Pebble sharding internals](./08b-pebble-sharding-internals.md)
