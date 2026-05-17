@@ -55,6 +55,10 @@ func (m *mockSubscriptionRepo) ListActive(ctx context.Context, cmd domain.Comman
 	return nil, nil
 }
 
+func (m *mockSubscriptionRepo) HasActive(ctx context.Context, cmd domain.Command) bool {
+	return false
+}
+
 func (m *mockSubscriptionRepo) AllowNotify(ctx context.Context, id string, minIntervalSeconds int) (bool, error) {
 	return true, nil
 }

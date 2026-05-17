@@ -19,6 +19,16 @@ type SubscriptionRepository interface {
 	Heartbeat(ctx context.Context, id string, ttlSeconds int) (*domain.Subscription, error)
 	Get(ctx context.Context, id string) (*domain.Subscription, error)
 	ListActive(ctx context.Context, cmd domain.Command, now time.Time) ([]domain.Subscription, error)
+	// HasActive is the producer hot-path fast check: return true only if
+	// there is at least one (possibly stale-but-not-yet-cleaned) active
+	// subscription for cmd. Implementations are free to be conservatively
+	// wrong (return true when no subs are actually active) — the caller
+	// follows up with ListActive which is authoritative. Must be O(1) on
+	// the happy path so NotifyQueueReady can skip the expensive scan when
+	// nothing is registered. Phase 6 profiling showed ListActive
+	// dominated the producer create path with 22% CPU + 27% allocs even
+	// when zero subscriptions existed.
+	HasActive(ctx context.Context, cmd domain.Command) bool
 	AllowNotify(ctx context.Context, id string, minIntervalSeconds int) (bool, error)
 	AllowNotifyBatch(ctx context.Context, subs []domain.Subscription) (map[string]bool, error)
 	NextGroupIndex(ctx context.Context, cmd domain.Command, groupID string, mod int) (int, error)
@@ -117,6 +127,21 @@ func (r *subscriptionRedisRepo) Get(ctx context.Context, id string) (*domain.Sub
 		return nil, fmt.Errorf("unmarshal sub: %w", err)
 	}
 	return &sub, nil
+}
+
+// HasActive returns true iff the event index has at least one entry
+// for cmd, by doing a single ZCARD instead of the full ListActive
+// pipeline. It is intentionally allowed to be conservatively wrong
+// (returning true for entries whose score is already in the past);
+// the caller follows up with ListActive which honors the score filter.
+// 1 RTT and zero allocations on the happy "no subs" path.
+func (r *subscriptionRedisRepo) HasActive(ctx context.Context, cmd domain.Command) bool {
+	n, err := r.rdb.ZCard(ctx, r.keySubsEvent(cmd)).Result()
+	if err != nil && err != redis.Nil {
+		// Fail-open: a transient redis blip shouldn't silently drop notifies.
+		return true
+	}
+	return n > 0
 }
 
 func (r *subscriptionRedisRepo) ListActive(ctx context.Context, cmd domain.Command, now time.Time) ([]domain.Subscription, error) {

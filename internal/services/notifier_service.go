@@ -53,6 +53,16 @@ func NewNotifierService(repo repository.SubscriptionRepository, logger *slog.Log
 }
 
 func (n *notifierService) NotifyQueueReady(ctx context.Context, cmd domain.Command) {
+	// Fast-path: producers running with no subscriptions registered for
+	// this command should pay zero cost here. Profile (Phase 6) showed
+	// ListActive dominating the create hot path with 22% CPU + 27% allocs
+	// even when no subs existed, because Pebble's iter open+scan+close
+	// runs for every Enqueue. HasActive is an O(1) atomic counter check
+	// (Pebble) or single ZCARD RTT (Redis) that lets us bail before
+	// touching the iterator.
+	if !n.repo.HasActive(ctx, cmd) {
+		return
+	}
 	subs, err := n.repo.ListActive(ctx, cmd, time.Now())
 	if err != nil || len(subs) == 0 {
 		return
