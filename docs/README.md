@@ -76,6 +76,8 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 
 ### Migration Guides (Task-Oriented)
 
-23. `docs/23-migration-plugin-system.md` - Migration from identity-middleware to plugin system
 31. `docs/31-persistence-migration-guide.md` - Persistence plugin migration, backward compatibility, and configuration guide
 32. `docs/32-shard-migration-guide.md` - Shard migration tooling for moving tasks between shards
+
+> Note: identity-middleware migration is covered in
+> [`docs/20-authentication-plugins.md`](20-authentication-plugins.md#migration-appendix-removing-the-identity-middleware-private-dependency).
