@@ -21,6 +21,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
 30. `docs/30-performance-baselines.md` - Baseline load test results and regression benchmarks
 33. `docs/33-staging-validation-runbook.md` - Staging performance validation runbook
+34. `docs/34-streaming-api-guide.md` - gRPC streaming API tutorials, how-tos, and protocol reference
 
 ### Technical Reference (Information-Oriented)
 
@@ -43,6 +44,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
 27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
+34. `docs/34-streaming-api-guide.md` - gRPC streaming API protocol reference, throughput characteristics, and concurrency model
 
 ### Integration Guides
 
