@@ -48,14 +48,21 @@
   - `subscription_service.go`: Worker availability subscription management
   - `notifier_service.go`: Worker availability webhook dispatch
   - `subscription_cleanup_service.go`: Expired subscription removal
-- **`internal/repository`**: Data access layer (Redis operations)
-  - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
-  - `idempotency_bloom.go`: In-process Bloom filters for optimization
-    - **Idempotency Bloom**: Skips negative Redis GET on fresh idempotency keys (Enqueue fast-path)
-    - **Cleanup Bloom**: Skips redundant removal work for already-deleted tasks (CleanupExpired fast-path)
-    - **Ghost Bloom**: Skips Redis HGET for administratively deleted tasks (Claim fast-path)
-  - `result_repository.go`: Result storage and retrieval
-  - `subscription_repository.go`: Subscription storage
+- **`internal/repository`**: Data access layer (pluggable persistence backends)
+  - **Redis implementation** (`internal/repository/`):
+    - `task_repository.go`: Task CRUD, queue operations (Lua claim move, delayed queue)
+    - `result_repository.go`: Result storage and retrieval
+    - `subscription_repository.go`: Subscription storage
+  - **Pebble implementation** (`internal/repository/pebble/`):
+    - `task_repository.go`: Task CRUD, queue operations (LSM-tree optimized)
+    - `result_repository.go`: Result storage and retrieval
+    - `subscription_repository.go`: Subscription storage
+    - `reaper.go`: Background TTL and cleanup management
+  - **Shared utilities**:
+    - `idempotency_bloom.go`: In-process Bloom filters for optimization
+      - **Idempotency Bloom**: Skips negative Redis GET on fresh idempotency keys (Enqueue fast-path)
+      - **Cleanup Bloom**: Skips redundant removal work for already-deleted tasks (CleanupExpired fast-path)
+      - **Ghost Bloom**: Skips Redis HGET for administratively deleted tasks (Claim fast-path)
 - **`internal/providers`**: External integrations
   - `redis_provider.go`: Redis client initialization
   - `uploader.go`: Artifact storage (local filesystem)
@@ -76,7 +83,7 @@
 - Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
 - Result processor: validates completion payloads and stores results.
-- Storage: Pluggable persistence (Redis/KVRocks or embedded Pebble).
+- Storage: Pluggable persistence backends (Redis/KVRocks for distributed, Pebble for embedded single-machine).
 - Artifact storage: local filesystem uploader.
 - Notifier: optional webhook signal dispatcher.
 - Requeue loop: claim-time repair during `Claim`.

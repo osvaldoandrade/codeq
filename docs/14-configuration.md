@@ -26,8 +26,8 @@ codeQ uses a pluggable persistence architecture allowing different storage backe
 - `persistenceProvider` (string): Storage backend type, one of: `redis`, `pebble`, `memory`
   - Environment variable: `PERSISTENCE_PROVIDER`
   - Default: `redis` (for backward compatibility)
-  - `redis`: Production-ready persistence using Redis or KVRocks (distributed, HA-capable)
-  - `pebble`: Embedded key-value store with intra-process sharding (single-node, high throughput)
+  - `redis`: Production-ready persistence using Redis or KVRocks (distributed, HA-capable, cluster-capable)
+  - `pebble`: Embedded key-value store with intra-process sharding (CockroachDB LSM engine, single-node, high throughput, no external dependencies)
   - `memory`: In-memory storage for testing only (data lost on restart)
 - `persistenceConfig` (JSON object): Provider-specific configuration
   - Environment variable: `PERSISTENCE_CONFIG` (JSON string)
@@ -100,13 +100,18 @@ persistenceConfig:
   - `8+`: Diminishing returns; scheduling overhead may exceed parallelism gains
   - Best practice: Set to CPU core count (e.g., 4 cores → `numShards: 4`)
 
+**Pebble notes:**
+
+- **Single-machine only**: Pebble uses an exclusive lock on the data directory. Only one codeQ process can run at a time per `path`.
+- **Data persistence**: Data persists in `{path}` across restarts. This directory must exist and be writable.
+
 **Use cases:**
 
 - **`numShards: 1, fsyncOnCommit: false`**: Development, testing, evaluation
 - **`numShards: 4, fsyncOnCommit: false`**: Single-node production, throughput-optimized (45k–83k tasks/sec)
 - **`numShards: 4, fsyncOnCommit: true`**: Single-node production, durability-critical (~67k tasks/sec)
 
-See `docs/30-performance-baselines.md` (section "Phase 8: Pebble Intra-Process Sharding") for detailed performance characteristics and benchmarks.
+See `docs/30-performance-baselines.md` (section "Phase 8: Pebble Intra-Process Sharding") for detailed performance characteristics and benchmarks. See `docs/07b-storage-pebble.md` for storage layout and additional details.
 
 ### Example: Memory Plugin (Testing)
 

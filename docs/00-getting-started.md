@@ -89,9 +89,9 @@ docker compose \
 
 For more details on local development with Docker Compose, including hot reload and observability stack, see [Local Development Guide](22-local-development.md).
 
-### Alternative: Manual Setup
+### Alternative: Manual Setup with Redis/KVRocks
 
-If you prefer manual setup or need more control:
+If you prefer manual setup or need more control with Redis/KVRocks:
 
 #### Step 1: Start a Local KVRocks Instance
 
@@ -115,6 +115,45 @@ go run ./cmd/server
 ````
 
 The server will start on port 8080 by default.
+
+### Alternative: Manual Setup with Pebble (Embedded)
+
+For the simplest possible setup with zero external dependencies, use the embedded Pebble storage backend:
+
+#### Step 1: Create a Configuration File
+
+````bash
+# Create config directory and file
+mkdir -p ~/.codeq
+cat > ~/.codeq/codeq.yml << EOF
+port: 8080
+persistenceProvider: pebble
+persistenceConfig:
+  path: /tmp/codeq-data
+  fsyncOnCommit: false
+EOF
+````
+
+#### Step 2: Start the codeQ Server
+
+````bash
+# From the repository root
+CODEQ_CONFIG_PATH=~/.codeq/codeq.yml go run ./cmd/server
+````
+
+The server will start on port 8080 and create the Pebble database in `/tmp/codeq-data`.
+
+**Advantages of Pebble for local development:**
+- ✅ Zero dependencies (no Docker required)
+- ✅ Instant startup (microseconds vs seconds)
+- ✅ Automatic cleanup (data cleared when process exits)
+- ✅ Isolated per-developer (data in home directory)
+
+**Limitations:**
+- Single-machine only (not suitable for distributed deployments)
+- Data lost on process exit (unless saved manually)
+
+See [Storage Layout: Pebble](07b-storage-pebble.md) for technical details and performance considerations.
 
 ## Your First Task Workflow
 
