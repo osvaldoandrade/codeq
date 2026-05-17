@@ -82,12 +82,16 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 - Tasks fail repeatedly and exhaust retry attempts.
 - Worker bugs cause consistent processing failures.
 - Malformed task payloads.
+- **Rare, under load:** Task resurrection due to result submission race condition (see note below).
 
 **Resolution:**
 1. Inspect DLQ tasks via `GET /v1/codeq/admin/tasks?status=FAILED`.
 2. Check the `resultCode` and `resultPayload` for error details.
 3. Review worker logs at the time tasks failed.
-4. After fixing the root cause, requeue tasks from the DLQ.
+4. If DLQ grows under sustained high load (100+ rps), verify you are running the latest version with the atomic finalization fix ([Performance Tuning § Result Submission Race Condition](17-performance-tuning.md#15-result-submission-race-condition-atomic-finalization)). The fix reduces DLQ depth by ~43% under load.
+5. After fixing the root cause, requeue tasks from the DLQ.
+
+**Note on task resurrection:** In pre-fix versions under heavy load (~6% failure rate), a race condition in result submission could cause completed tasks to be resurrected and eventually land in the DLQ. This has been mitigated via atomic MULTI/EXEC finalization in UpdateTaskOnComplete.
 
 ### 6. High end-to-end latency
 
