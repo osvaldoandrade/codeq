@@ -1,10 +1,11 @@
 # Usage Examples
 
-This document provides practical examples of using CodeQ via HTTP API, CLI, and official SDKs.
+This document provides practical examples of using CodeQ via HTTP API, CLI, and official SDKs. For **high-throughput workloads**, see the [Streaming API Guide](34-streaming-api-guide.md) for gRPC examples.
 
 ## Table of Contents
 
 - [HTTP API Examples](#http-api-examples)
+- [Streaming API Examples](#streaming-api-examples)
 - [CLI Examples](#cli-examples)
 - [SDK Examples](#sdk-examples)
 - [Framework Examples](#framework-examples)
@@ -87,6 +88,117 @@ curl -X POST http://localhost:8080/v1/codeq/workers/subscriptions \
 curl -X GET http://localhost:8080/v1/codeq/admin/queue/stats \
   -H 'Authorization: Bearer <admin-token>'
 ```
+
+---
+
+## Streaming API Examples
+
+The **gRPC streaming APIs** provide 2–3× higher throughput than REST by pipelining requests and amortizing authentication. See the [Streaming API Guide](34-streaming-api-guide.md) for comprehensive documentation.
+
+### Producer Streaming (Go)
+
+Submit multiple tasks concurrently with pipelining:
+
+````go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/osvaldoandrade/codeq/pkg/producerclient"
+)
+
+func main() {
+	session, err := producerclient.Connect(context.Background(), producerclient.Config{
+		Addr:  "localhost:9092",
+		Token: "your-producer-token",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer session.Close()
+
+	// Submit 100 tasks concurrently; each Produce returns immediately
+	// once the CreateAck arrives (not when the task is processed).
+	for i := 0; i < 100; i++ {
+		go func(taskNum int) {
+			taskID, err := session.Produce(context.Background(),
+				producerclient.CreateTaskRequest{
+					Command:  "GENERATE_REPORT",
+					Payload:  []byte(`{"reportID":"r-123"}`),
+					Priority: 5,
+				},
+			)
+			if err != nil {
+				log.Printf("task %d failed: %v", taskNum, err)
+			} else {
+				log.Printf("task %d created: %s", taskNum, taskID)
+			}
+		}(i)
+	}
+
+	// Wait for all acks to arrive
+	session.Wait(context.Background())
+}
+````
+
+**Throughput:** ~33k tasks/sec per stream (vs ~2k–5k for REST).
+
+### Worker Streaming (Go)
+
+Claim and process tasks with 10 concurrent slots:
+
+````go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+
+	"github.com/osvaldoandrade/codeq/pkg/workerclient"
+)
+
+func main() {
+	cfg := workerclient.Config{
+		Addr:        "localhost:9091",
+		Token:       "your-worker-token",
+		WorkerID:    "worker-1",
+		Commands:    []string{"GENERATE_REPORT", "SEND_EMAIL"},
+		Concurrency: 10,  // 10 tasks in parallel
+		LeaseSeconds: 300,
+	}
+
+	client, err := workerclient.NewClient(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = client.Run(context.Background(), func(ctx context.Context, task workerclient.Task) workerclient.Result {
+		var payload map[string]any
+		json.Unmarshal(task.Payload, &payload)
+
+		log.Printf("Processing %s (attempt %d/%d)", task.ID, task.Attempts, task.MaxAttempts)
+
+		// Simulate work
+		if task.Command == "GENERATE_REPORT" {
+			return workerclient.Completed(map[string]any{"status": "generated"})
+		}
+
+		return workerclient.Failed("unknown command")
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+````
+
+**Throughput:** ~33k tasks/sec per worker at concurrency=1; scales linearly with concurrency.
+
+**See:** [Streaming API Guide](34-streaming-api-guide.md) for TLS, error handling, performance tuning, and migration from REST.
+
+---
 
 ## CLI Examples
 
