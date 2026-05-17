@@ -138,6 +138,66 @@ See `docs/27-persistence-plugin-system.md` for configuration details, performanc
 4. Service removes the task from the in-progress set.
 5. Service posts webhook if the task contains a webhook URL.
 
+## gRPC Streaming Flows
+
+codeQ provides high-throughput gRPC streaming alternatives to the HTTP API, achieving 2-3x higher throughput by eliminating per-call HTTP middleware overhead and enabling request pipelining.
+
+### Producer Streaming
+
+1. **Connection & Authentication**:
+   - Client opens bidirectional gRPC stream
+   - Sends `Hello` message with bearer token
+   - Server validates token and responds with `HelloAck` (includes tenant ID)
+   - Stream remains open for the lifetime of the producer session
+
+2. **Task Submission & Pipelining**:
+   - Client sends `CreateTask` messages with monotonically-increasing sequence numbers
+   - Multiple `CreateTask` messages can be in flight before first acknowledgment arrives
+   - Server processes each request and sends `CreateAck` (echoing seq number, task ID, or error)
+   - Producer blocks only until its specific `CreateAck` arrives, not until all prior messages are acknowledged
+   - Enables concurrent submission from multiple goroutines (true pipelining)
+
+3. **Performance**:
+   - Single stream: ~33k tasks/sec
+   - Amortized authentication overhead across all requests
+   - Reduced GC pressure compared to HTTP (fewer allocations per request)
+
+For detailed protocol specification and usage examples, see `docs/34-streaming-api-guide.md`.
+
+### Worker Streaming
+
+1. **Connection & Authentication**:
+   - Client opens bidirectional gRPC stream
+   - Sends `Hello` message with bearer token
+   - Server validates token and responds with `HelloAck`
+   - Stream remains open for the lifetime of the worker session
+
+2. **Concurrency Model**:
+   - Client spawns N independent concurrent "slots" (configurable via `Config.Concurrency`)
+   - Each slot runs an independent cycle: `Ready` → receive task(s) → call handler → send result
+   - Slots are independent; failure in one slot doesn't block others
+   - Worker handler function runs synchronously in slot's goroutine
+
+3. **Task Delivery**:
+   - Each slot sends `Ready` message declaring capacity
+   - Server responds with `TaskAssignment` (single task) or `TaskBatch` (multiple tasks for batch mode)
+   - Client calls user-provided handler function
+   - Handler returns `Result` (one of: `Completed`, `Failed`, `Nack`, `Abandon`)
+   - Slot repeats cycle immediately after sending result
+
+4. **Result Types**:
+   - **Completed**: Task succeeded; optional payload stored as result
+   - **Failed**: Task failed permanently (respects `MaxAttempts`)
+   - **Nack**: Transient failure; task requeued after optional delay
+   - **Abandon**: Release lease without result; task remains in queue
+
+5. **Performance**:
+   - Concurrent processing with configurable parallelism (typically 1-10 slots per worker)
+   - Amortized authentication and connection setup across all tasks
+   - Suitable for both CPU-bound (semaphore-controlled concurrency) and I/O-bound (high concurrency) workloads
+
+For detailed protocol specification, error handling, and usage examples, see `docs/34-streaming-api-guide.md`.
+
 ## Distributed Tracing Flow
 
 codeQ implements OpenTelemetry distributed tracing to enable end-to-end observability across task lifecycles:
