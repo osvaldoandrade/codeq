@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -58,18 +59,80 @@ func New(scheduler services.SchedulerService, results services.ResultsService, v
 	}
 }
 
-// streamSession holds per-connection state. The send mutex serializes
-// every Send call on the stream — gRPC's generated server stream type
-// is not safe for concurrent writes, so all the per-event handler
-// goroutines funnel through this lock.
+// streamSession holds per-connection state. Sends are serialized via a
+// dedicated writer goroutine reading from sendCh rather than a mutex
+// around stream.Send: profile (Phase 6) showed the sendMu mutex
+// accounting for ~74% of the mutex profile under load. The channel
+// approach avoids the cache-line ping-pong that mutex contention
+// produces across the many per-event handler goroutines.
 type streamSession struct {
 	stream   workerpb.WorkerStream_StreamServer
-	sendMu   sync.Mutex
 	workerID string
 	tenantID string
 	claims   *auth.Claims
 	commands []domain.Command // resolved from scope/eventTypes claim
 	hasWild  bool
+
+	// sendCh is the writer's inbox. Buffered so per-event goroutines
+	// pushing acks don't block during transient Send latency; on
+	// overflow the producer falls through to ctx-cancelled or the
+	// channel close path.
+	sendCh chan *workerpb.ServerEvent
+	// sendErr captures the first Send failure so subsequent senders bail
+	// fast instead of queuing into a dead stream. atomic.Pointer for
+	// lock-free read on the hot path.
+	sendErr atomic.Pointer[error]
+	// writerDone closes when the writer goroutine has fully drained and
+	// stopped. Used by Stream() to ensure no in-flight Send races the
+	// rpc handler return.
+	writerDone chan struct{}
+	// ctx mirrors stream.Context() so send() can fall through on
+	// cancellation without consulting stream.Context() each call.
+	ctx context.Context
+}
+
+// sendChanBuffer bounds how many ServerEvents we'll queue ahead of the
+// writer. Sized large enough to absorb a burst of acks from a worker
+// with N concurrent Ready/Result slots without blocking, small enough
+// that pathological backpressure surfaces quickly as ctx cancellation.
+const sendChanBuffer = 256
+
+// newStreamSession wires the writer goroutine. Caller is responsible
+// for invoking sess.close() before Stream() returns so the writer
+// exits cleanly.
+func newStreamSession(ctx context.Context, stream workerpb.WorkerStream_StreamServer) *streamSession {
+	s := &streamSession{
+		stream:     stream,
+		sendCh:     make(chan *workerpb.ServerEvent, sendChanBuffer),
+		writerDone: make(chan struct{}),
+		ctx:        ctx,
+	}
+	go s.writeLoop()
+	return s
+}
+
+// writeLoop owns the stream's Send side. It drains sendCh until the
+// channel is closed, marking the first Send failure on sendErr so
+// readers can short-circuit.
+func (s *streamSession) writeLoop() {
+	defer close(s.writerDone)
+	for ev := range s.sendCh {
+		if s.sendErr.Load() != nil {
+			// Already failed; drain remaining events without sending so
+			// the producers' channel sends don't block.
+			continue
+		}
+		if err := s.stream.Send(ev); err != nil {
+			cp := err
+			s.sendErr.Store(&cp)
+		}
+	}
+}
+
+// closeWriter signals the writer to drain and exit, then waits.
+func (s *streamSession) closeWriter() {
+	close(s.sendCh)
+	<-s.writerDone
 }
 
 // Stream is the bidirectional rpc. First message MUST be Hello; the
@@ -82,6 +145,10 @@ func (s *Server) Stream(stream workerpb.WorkerStream_StreamServer) error {
 	if err != nil {
 		return err
 	}
+	// Ensure the writer goroutine drains and exits before we return,
+	// otherwise the gRPC runtime can reap the stream while a final Send
+	// is still in flight.
+	defer sess.closeWriter()
 
 	var wg sync.WaitGroup
 	// Read loop runs in the caller goroutine; per-event work spawns child
@@ -179,12 +246,10 @@ func (s *Server) handleHello(stream workerpb.WorkerStream_StreamServer) (*stream
 	}
 	tenantID := tenantIDFromClaims(claims)
 
-	sess := &streamSession{
-		stream:   stream,
-		workerID: workerID,
-		tenantID: tenantID,
-		claims:   claims,
-	}
+	sess := newStreamSession(stream.Context(), stream)
+	sess.workerID = workerID
+	sess.tenantID = tenantID
+	sess.claims = claims
 	for _, ev := range claims.EventTypes {
 		if ev == "*" {
 			sess.hasWild = true
@@ -198,6 +263,7 @@ func (s *Server) handleHello(stream workerpb.WorkerStream_StreamServer) (*stream
 			HelloAck: &workerpb.HelloAck{WorkerId: workerID, TenantId: tenantID},
 		},
 	}); err != nil {
+		sess.closeWriter()
 		return nil, err
 	}
 	return sess, nil
@@ -419,9 +485,15 @@ func (s *Server) resolveCommands(sess *streamSession, requested []string) ([]dom
 }
 
 func (s *streamSession) send(ev *workerpb.ServerEvent) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	return s.stream.Send(ev)
+	if errPtr := s.sendErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+	select {
+	case s.sendCh <- ev:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
 }
 
 func (s *streamSession) sendError(code codes.Code, msg string) error {
