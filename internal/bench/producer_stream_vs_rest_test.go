@@ -31,6 +31,10 @@ const (
 )
 
 func newPebbleAppForProducer(tb testing.TB, streamAddr string) *httptest.Server {
+	return newPebbleAppForProducerWithWorker(tb, streamAddr, "")
+}
+
+func newPebbleAppForProducerWithWorker(tb testing.TB, producerStreamAddr, workerStreamAddr string) *httptest.Server {
 	tb.Helper()
 	gin.SetMode(gin.ReleaseMode)
 
@@ -77,7 +81,8 @@ func newPebbleAppForProducer(tb testing.TB, streamAddr string) *httptest.Server 
 		PersistenceProvider:                "pebble",
 		PersistenceConfig:                  pebbleCfg,
 		RedisAddr:                          "127.0.0.1:0",
-		ProducerStreamAddr:                 streamAddr,
+		ProducerStreamAddr:                 producerStreamAddr,
+		WorkerStreamAddr:                   workerStreamAddr,
 		RateLimit:                          config.RateLimitConfig{},
 	}
 	if err := cfg.Validate(); err != nil {
@@ -95,7 +100,7 @@ func newPebbleAppForProducer(tb testing.TB, streamAddr string) *httptest.Server 
 		defer cancel()
 		_ = a.TracingShutdown(ctx)
 	})
-	if streamAddr != "" {
+	if producerStreamAddr != "" || workerStreamAddr != "" {
 		time.Sleep(150 * time.Millisecond)
 	}
 	return srv

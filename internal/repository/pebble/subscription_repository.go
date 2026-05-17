@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -73,6 +74,31 @@ func parseSubEventKey(cmd domain.Command, k []byte) (expiresAtUnix uint64, id st
 	return expiresAtUnix, string(rest[9:]), true
 }
 
+// parseSubEventKeyAny is the cmd-agnostic variant used by recovery and
+// cleanup paths where the cmd is unknown up front. Key layout:
+//
+//	codeq/subevt/<cmd>/<expires_be8>/<id>
+func parseSubEventKeyAny(k []byte) (cmd domain.Command, expiresAtUnix uint64, ok bool) {
+	if !strings.HasPrefix(string(k), pSubEvent) {
+		return "", 0, false
+	}
+	rest := k[len(pSubEvent):]
+	sep := strings.IndexByte(string(rest), '/')
+	if sep <= 0 {
+		return "", 0, false
+	}
+	cmd = domain.Command(string(rest[:sep]))
+	tail := rest[sep+1:]
+	if len(tail) < 9 {
+		return "", 0, false
+	}
+	expiresAtUnix = beUint64(tail[:8])
+	if tail[8] != '/' {
+		return "", 0, false
+	}
+	return cmd, expiresAtUnix, true
+}
+
 // subscriptionRepo implements repository.SubscriptionRepository.
 // Notify throttling and round-robin counters are persisted to survive
 // restart; the rr counter increments via Get→Set since Pebble has no
@@ -83,10 +109,61 @@ type subscriptionRepo struct {
 	tz *time.Location
 
 	rrMu sync.Map // key string → *sync.Mutex
+
+	// activeByCmd is the per-command active-subscription counter that
+	// backs HasActive. Maintained by Create (++) and CleanupExpired (--).
+	// Heartbeat is a net no-op (delete+insert under different score).
+	// Producer NotifyQueueReady consults this to skip the Pebble iter
+	// when no subs exist. Recovered at Open() by recoverActiveCounts so
+	// a restart doesn't strand the counter at zero while live subs sit
+	// on disk.
+	activeByCmd sync.Map // key string (cmd) → *atomic.Int64
 }
 
 func NewSubscriptionRepository(db *DB, tz *time.Location) repository.SubscriptionRepository {
-	return &subscriptionRepo{db: db, tz: tz}
+	r := &subscriptionRepo{db: db, tz: tz}
+	// Best-effort recover: failures here only mean HasActive may return
+	// false when subs exist, in which case the next Create call brings
+	// the counter back up. The NotifyQueueReady fast-path stays correct
+	// because ListActive runs against on-disk truth either way.
+	_ = r.recoverActiveCounts()
+	return r
+}
+
+// activeCounter returns the atomic counter for cmd, lazy-initialized.
+func (r *subscriptionRepo) activeCounter(cmd domain.Command) *atomic.Int64 {
+	if v, ok := r.activeByCmd.Load(string(cmd)); ok {
+		return v.(*atomic.Int64)
+	}
+	c := new(atomic.Int64)
+	actual, _ := r.activeByCmd.LoadOrStore(string(cmd), c)
+	return actual.(*atomic.Int64)
+}
+
+// recoverActiveCounts scans every subscription event entry at startup
+// and seeds the active counter. Cost is O(N) over all subs once at
+// Open; later writes maintain the counter incrementally.
+func (r *subscriptionRepo) recoverActiveCounts() error {
+	lower := []byte(pSubEvent)
+	upper := prefixUpper(lower)
+	it, err := r.db.Iter(lower, upper)
+	if err != nil {
+		return err
+	}
+	defer it.Close()
+	now := uint64(time.Now().Unix())
+	for valid := it.First(); valid; valid = it.Next() {
+		k := it.Key()
+		cmd, expires, ok := parseSubEventKeyAny(k)
+		if !ok {
+			continue
+		}
+		if expires < now {
+			continue
+		}
+		r.activeCounter(cmd).Add(1)
+	}
+	return it.Error()
 }
 
 func (r *subscriptionRepo) now() time.Time { return time.Now().In(r.tz) }
@@ -116,6 +193,11 @@ func (r *subscriptionRepo) Create(ctx context.Context, sub domain.Subscription, 
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return nil, err
+	}
+	// Bump the per-cmd active counter after the durable commit so a
+	// failed commit doesn't leave the counter ahead of disk truth.
+	for _, evt := range sub.EventTypes {
+		r.activeCounter(evt).Add(1)
 	}
 	return &sub, nil
 }
@@ -170,6 +252,21 @@ func (r *subscriptionRepo) Get(ctx context.Context, id string) (*domain.Subscrip
 		return nil, fmt.Errorf("unmarshal subscription: %w", err)
 	}
 	return &s, nil
+}
+
+// HasActive is the in-memory fast path consulted by NotifyQueueReady
+// to skip the expensive Pebble iter when no subscriptions exist. The
+// counter can lag actual disk truth by a few ms (Create bumps it after
+// CommitBatch, CleanupExpired decrements after delete), and a crash
+// loses the value entirely — recoverActiveCounts at Open() rebuilds it.
+// Caller MUST still treat ListActive as authoritative; this is purely
+// an optimization to make zero-subscription configurations free.
+func (r *subscriptionRepo) HasActive(ctx context.Context, cmd domain.Command) bool {
+	c, ok := r.activeByCmd.Load(string(cmd))
+	if !ok {
+		return false
+	}
+	return c.(*atomic.Int64).Load() > 0
 }
 
 func (r *subscriptionRepo) ListActive(ctx context.Context, cmd domain.Command, now time.Time) ([]domain.Subscription, error) {
@@ -291,22 +388,23 @@ func (r *subscriptionRepo) CleanupExpired(ctx context.Context, limit int, before
 	type expired struct {
 		eventKey []byte
 		subID    string
+		cmd      domain.Command
 	}
 	bucket := make([]expired, 0, limit)
 	for valid := it.First(); valid && len(bucket) < limit; valid = it.Next() {
 		k := append([]byte(nil), it.Key()...)
-		// Parse the score (big-endian 8 bytes immediately after the cmd
-		// separator). For cleanup we don't need the cmd back — just the id.
-		idx := strings.LastIndexByte(string(k), '/')
-		if idx < 0 || idx < 8 {
+		cmd, score, ok := parseSubEventKeyAny(k)
+		if !ok {
 			continue
 		}
-		scoreStart := idx - 8
-		score := beUint64(k[scoreStart:idx])
 		if score >= beforeUnix {
 			continue
 		}
-		bucket = append(bucket, expired{eventKey: k, subID: string(k[idx+1:])})
+		idx := strings.LastIndexByte(string(k), '/')
+		if idx < 0 {
+			continue
+		}
+		bucket = append(bucket, expired{eventKey: k, subID: string(k[idx+1:]), cmd: cmd})
 	}
 	if len(bucket) == 0 {
 		return 0, nil
@@ -330,6 +428,11 @@ func (r *subscriptionRepo) CleanupExpired(ctx context.Context, limit int, before
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, err
+	}
+	// Decrement active counter for each cleaned event entry. After the
+	// commit so a failed commit doesn't drive the counter below zero.
+	for _, e := range bucket {
+		r.activeCounter(e.cmd).Add(-1)
 	}
 	return cleaned, nil
 }
