@@ -2,6 +2,55 @@
 
 All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 
+> **Note**: REST API is the legacy/portable path. For high-throughput,
+> use gRPC streaming — see [34-streaming-api-guide](./34-streaming-api-guide.md).
+
+## Lifecycles at a glance
+
+### Create task lifecycle (producer)
+
+The producer authenticates, creates the task, and either polls for the
+result or receives a webhook callback.
+
+```mermaid
+sequenceDiagram
+  participant Producer
+  participant Server as codeq HTTP API
+  participant Storage as Pebble
+  participant Webhook as Producer webhook
+  Producer->>Server: POST /v1/codeq/tasks (Bearer producer token)
+  Server->>Storage: persist task (PENDING)
+  Server-->>Producer: 202 { id, status: PENDING }
+  alt poll
+    Producer->>Server: GET /v1/codeq/tasks/:id/result
+    Server-->>Producer: 200 { task, result } (or 404 until ready)
+  else webhook
+    Server-->>Webhook: POST callbackUrl { taskId, status, result }
+  end
+```
+
+### Worker REST lifecycle
+
+The worker claims a task, optionally heartbeats while it runs long, and
+submits the result.
+
+```mermaid
+sequenceDiagram
+  participant Worker
+  participant Server as codeq HTTP API
+  participant Storage as Pebble
+  Worker->>Server: POST /v1/codeq/tasks/claim (Bearer worker token)
+  Server->>Storage: lease task (CLAIMED, expiresAt)
+  Server-->>Worker: 200 task (or 204 no content)
+  loop while processing (optional)
+    Worker->>Server: POST /v1/codeq/tasks/:id/heartbeat (extendSeconds)
+    Server-->>Worker: 200 { ok: true }
+  end
+  Worker->>Server: POST /v1/codeq/tasks/:id/result { status, result }
+  Server->>Storage: persist result (COMPLETED or FAILED)
+  Server-->>Worker: 200 { taskId, status, completedAt }
+```
+
 ## Common headers
 
 - `Content-Type: application/json`
@@ -525,3 +574,10 @@ scrape_configs:
 ````
 
 See [Operations Guide](10-operations.md#monitoring) for full metrics reference and Grafana dashboard setup.
+
+## See also
+
+- [Security](./09-security.md) — JWT claims, scopes, and tenant isolation for the Bearer tokens used above.
+- [Webhooks](./12-webhooks.md) — payload schema and signing for the producer result callback.
+- [Streaming API guide](./34-streaming-api-guide.md) — gRPC bidirectional streaming, the high-throughput path.
+- [Result storage and callbacks](./38-result-storage-callbacks.md) — where results live after submission and how callbacks are dispatched.
