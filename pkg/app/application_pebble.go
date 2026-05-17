@@ -78,6 +78,12 @@ func (noopLimiter) Allow(_ context.Context, _ string, _ string, _ ratelimit.Buck
 type pebbleConfig struct {
 	Path          string `json:"path"`
 	FsyncOnCommit bool   `json:"fsyncOnCommit"`
+	// NumShards enables Phase 8 single-node sharding. 0/1 keeps the
+	// historical single-DB behaviour. N>1 opens N independent Pebble
+	// instances under Path/shard<i>/ and routes every task's keys by
+	// hash(task_id) % N. Compaction, commit pipeline, and write
+	// concurrency all parallelise across shards.
+	NumShards int `json:"numShards"`
 }
 
 // newPebbleApplication constructs the full Application stack against an
@@ -131,10 +137,42 @@ func newPebbleApplication(
 		return nil, fmt.Errorf("ensure pebble dir %s: %w", pc.Path, err)
 	}
 
-	db, err := pebblerepo.Open(pebblerepo.Options{Path: pc.Path, FsyncOnCommit: pc.FsyncOnCommit})
-	if err != nil {
-		return nil, fmt.Errorf("open pebble: %w", err)
+	// Phase 8: shard the Pebble write side per-shard so commit pipelines
+	// + compaction run in parallel within a single process. NumShards=0
+	// or 1 keeps the historical single-DB layout (and skips the subdir
+	// indirection). N>1 opens Path/shard<i>/ for each shard.
+	numShards := pc.NumShards
+	if numShards <= 0 {
+		numShards = 1
 	}
+	dbs := make([]*pebblerepo.DB, 0, numShards)
+	openShard := func(idx int) error {
+		shardPath := pc.Path
+		if numShards > 1 {
+			shardPath = fmt.Sprintf("%s/shard%d", pc.Path, idx)
+			if err := os.MkdirAll(shardPath, 0o755); err != nil {
+				return fmt.Errorf("ensure pebble shard dir %s: %w", shardPath, err)
+			}
+		}
+		shardDB, err := pebblerepo.Open(pebblerepo.Options{Path: shardPath, FsyncOnCommit: pc.FsyncOnCommit})
+		if err != nil {
+			return fmt.Errorf("open pebble shard %d: %w", idx, err)
+		}
+		dbs = append(dbs, shardDB)
+		return nil
+	}
+	for i := range numShards {
+		if err := openShard(i); err != nil {
+			for _, d := range dbs {
+				_ = d.Close()
+			}
+			return nil, err
+		}
+	}
+	// db remains as the first shard for any code path that still expects
+	// a single *DB (cluster.Server, subscription repo). Subscription
+	// data stays unsharded for now; it's never the bottleneck.
+	db := dbs[0]
 
 	// background goroutines (reaper, gossiper, subscription cleanup) share a
 	// cancellable context that the Application's shutdown hook cancels
@@ -142,8 +180,14 @@ func newPebbleApplication(
 	// next tick against a closed DB and panics.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
-	localTaskRepo := pebblerepo.NewTaskRepository(db, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
-	localResultRepo := pebblerepo.NewResultRepository(db, loc)
+	taskShards := make([]*pebblerepo.TaskRepository, len(dbs))
+	resultShards := make([]*pebblerepo.ResultRepository, len(dbs))
+	for i, d := range dbs {
+		taskShards[i] = pebblerepo.NewTaskRepository(d, loc, cfg.BackoffPolicy, cfg.BackoffBaseSeconds, cfg.BackoffMaxSeconds)
+		resultShards[i] = pebblerepo.NewResultRepository(d, loc)
+	}
+	localTaskRepo := taskShards[0]
+	localResultRepo := resultShards[0]
 	subRepo := pebblerepo.NewSubscriptionRepository(db, loc)
 
 	// In cluster mode, wrap the local Pebble repos with routers that:
@@ -160,6 +204,22 @@ func newPebbleApplication(
 		grpcLis    net.Listener
 		clientPool *cluster.ClientPool
 	)
+	if numShards > 1 {
+		// Cluster mode + intra-process sharding is not supported in this
+		// first cut — cluster.Server expects a single concrete
+		// *TaskRepository, and a sharded wrapper would need its own
+		// cluster bridge. Single-node sharded is fine; multi-node
+		// sharded is a follow-up.
+		if cfg.Cluster.Enabled {
+			for _, d := range dbs {
+				_ = d.Close()
+			}
+			return nil, fmt.Errorf("pebble: cluster mode + intra-process shards not supported (pick one)")
+		}
+		taskRepo = pebblerepo.NewShardedTaskRepository(taskShards)
+		resultRepo = pebblerepo.NewShardedResultRepository(resultShards)
+		logger.Info("pebble shards enabled", "shards", numShards)
+	}
 	if cfg.Cluster.Enabled {
 		if err := validateClusterConfig(cfg.Cluster); err != nil {
 			bgCancel()
@@ -184,6 +244,7 @@ func newPebbleApplication(
 		// Start the internal gRPC server. Local repos serve every RPC;
 		// the router on this node will short-circuit calls that hash to
 		// SelfID and only talk gRPC for peers.
+		var err error
 		grpcLis, err = net.Listen("tcp", cfg.Cluster.GRPCAddr)
 		if err != nil {
 			bgCancel()
@@ -220,14 +281,15 @@ func newPebbleApplication(
 	}
 
 	// Background reaper: enforces lease expiry + TTL cleanup, which Redis
-	// gives us via key TTL.
-	reaper := pebblerepo.NewReaper(db, loc, logger, pebblerepo.ReaperOptions{
+	// gives us via key TTL. Phase 8: one reaper per Pebble shard so the
+	// sweeps run in parallel and the per-shard commit pipelines stay
+	// independent.
+	pebblerepo.StartReapersForShards(bgCtx, dbs, loc, logger, pebblerepo.ReaperOptions{
 		BackoffPolicy:      cfg.BackoffPolicy,
 		BackoffBaseSeconds: cfg.BackoffBaseSeconds,
 		BackoffMaxSeconds:  cfg.BackoffMaxSeconds,
 		MaxAttemptsDefault: cfg.MaxAttemptsDefault,
 	})
-	reaper.Start(bgCtx)
 
 	subs := services.NewSubscriptionService(subRepo)
 	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
@@ -291,8 +353,10 @@ func newPebbleApplication(
 		if clientPool != nil {
 			_ = clientPool.Close()
 		}
-		if cerr := db.Close(); cerr != nil {
-			logger.Warn("pebble close after startup failure", "err", cerr)
+		for _, d := range dbs {
+			if cerr := d.Close(); cerr != nil {
+				logger.Warn("pebble close after startup failure", "err", cerr)
+			}
 		}
 	}
 
@@ -352,8 +416,10 @@ func newPebbleApplication(
 		if clientPool != nil {
 			_ = clientPool.Close()
 		}
-		if err := db.Close(); err != nil {
-			logger.Warn("pebble close", "err", err)
+		for _, d := range dbs {
+			if err := d.Close(); err != nil {
+				logger.Warn("pebble close", "err", err)
+			}
 		}
 		if tracingShutdown == nil {
 			return nil

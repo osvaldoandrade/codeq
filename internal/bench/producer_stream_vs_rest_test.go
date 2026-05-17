@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,9 +52,11 @@ func newPebbleAppForProducerWithWorker(tb testing.TB, producerStreamAddr, worker
 		"eventTypes": []string{"*"},
 		"raw":        map[string]any{"tenantId": phase2Tenant},
 	})
+	numShards, _ := strconv.Atoi(os.Getenv("PHASE8_SHARDS"))
 	pebbleCfg, _ := json.Marshal(map[string]any{
 		"path":          tb.TempDir(),
 		"fsyncOnCommit": false,
+		"numShards":     numShards,
 	})
 
 	cfg := &config.Config{

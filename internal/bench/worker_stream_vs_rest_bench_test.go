@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,9 +70,11 @@ func newPebbleAppForBench(tb testing.TB, streamAddr string) *httptest.Server {
 		"eventTypes": []string{"*"},
 		"raw":        map[string]any{"tenantId": phase2Tenant},
 	})
+	numShards, _ := strconv.Atoi(os.Getenv("PHASE8_SHARDS"))
 	pebbleCfg, _ := json.Marshal(map[string]any{
 		"path":          tb.TempDir(),
 		"fsyncOnCommit": false,
+		"numShards":     numShards,
 	})
 
 	cfg := &config.Config{
