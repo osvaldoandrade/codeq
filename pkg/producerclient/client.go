@@ -103,7 +103,10 @@ type CreateRequest struct {
 
 // Session is one authenticated stream. Produce on it is safe to call
 // from many goroutines concurrently. Close to release reader goroutine
-// and stream resources.
+// and stream resources. Sends go through a dedicated writer goroutine
+// reading from sendCh — Phase 6 / M1 profile showed sendMu contention
+// across pipelined Produce callers was a meaningful chunk of total
+// delay.
 type Session struct {
 	cli     *Client
 	stream  producerpb.ProducerStream_StreamClient
@@ -114,7 +117,11 @@ type Session struct {
 	tenantID string
 	subject  string
 
-	sendMu  sync.Mutex // serializes stream.Send
+	streamCtx  context.Context
+	sendCh     chan *producerpb.ProducerEvent
+	sendErr    atomic.Pointer[error]
+	writerDone chan struct{}
+
 	seq     atomic.Uint64
 	pending sync.Map // seq → chan ackResult
 
@@ -122,6 +129,11 @@ type Session struct {
 	readErrMu sync.Mutex
 	readDone  chan struct{}
 }
+
+// sendChanBufferClient is sized to absorb N pipelined CreateTask events
+// from many goroutines. 256 keeps the writer's queue shallow while
+// avoiding ctx-cancelled errors during transient gRPC flush latency.
+const sendChanBufferClient = 256
 
 // ackResult is what slot goroutines receive from the reader.
 type ackResult struct {
@@ -142,12 +154,18 @@ func (c *Client) Connect(ctx context.Context) (*Session, error) {
 		return nil, fmt.Errorf("producerclient: open stream: %w", err)
 	}
 	sess := &Session{
-		cli:      c,
-		stream:   stream,
-		cancel:   cancel,
-		readDone: make(chan struct{}),
+		cli:        c,
+		stream:     stream,
+		cancel:     cancel,
+		readDone:   make(chan struct{}),
+		streamCtx:  streamCtx,
+		sendCh:     make(chan *producerpb.ProducerEvent, sendChanBufferClient),
+		writerDone: make(chan struct{}),
 	}
+	go sess.writeLoop()
 	if err := sess.handshake(); err != nil {
+		close(sess.sendCh)
+		<-sess.writerDone
 		cancel()
 		return nil, err
 	}
@@ -155,10 +173,29 @@ func (c *Client) Connect(ctx context.Context) (*Session, error) {
 	return sess, nil
 }
 
+func (s *Session) writeLoop() {
+	defer close(s.writerDone)
+	for ev := range s.sendCh {
+		if s.sendErr.Load() != nil {
+			continue
+		}
+		if err := s.stream.Send(ev); err != nil {
+			cp := err
+			s.sendErr.Store(&cp)
+		}
+	}
+}
+
 func (s *Session) send(ev *producerpb.ProducerEvent) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	return s.stream.Send(ev)
+	if errPtr := s.sendErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+	select {
+	case s.sendCh <- ev:
+		return nil
+	case <-s.streamCtx.Done():
+		return s.streamCtx.Err()
+	}
 }
 
 func (s *Session) handshake() error {
@@ -323,14 +360,20 @@ func (s *Session) TenantID() string { return s.tenantID }
 // Subject returns the JWT subject the server resolved this session to.
 func (s *Session) Subject() string { return s.subject }
 
-// Close cancels the stream, releases the reader goroutine, and unblocks
-// any pending Produce calls with an error. Safe to call multiple times.
+// Close cancels the stream, releases the reader + writer goroutines,
+// and unblocks any pending Produce calls with an error. Safe to call
+// multiple times.
 func (s *Session) Close() error {
 	s.closeMu.Lock()
 	defer s.closeMu.Unlock()
 	if s.closed.Swap(true) {
 		return nil
 	}
+	// Drain the writer first so any in-flight send completes (or fails
+	// cleanly via sendErr) before we tear the stream down. Closing
+	// sendCh signals writeLoop to exit once it finishes the queue.
+	close(s.sendCh)
+	<-s.writerDone
 	// CloseSend tells the server we're done writing — it gets a clean
 	// EOF on its Recv loop. cancel() then propagates the close to the
 	// reader so it exits as well.

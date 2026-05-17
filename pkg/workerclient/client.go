@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -124,29 +125,76 @@ func (c *Client) Run(ctx context.Context, h Handler) error {
 		return fmt.Errorf("workerclient: open stream: %w", err)
 	}
 
-	sess := &session{
-		cfg:    c.cfg,
-		stream: stream,
-		taskCh: make(chan *workerpb.Task),
-		log:    c.cfg.Logger,
-	}
+	sess := newSession(ctx, c.cfg, stream)
+	defer sess.closeWriter()
 	return sess.run(ctx, h)
 }
 
 // session bundles the per-Run mutable state. One session per Run call.
+// Sends are funnelled through a single writer goroutine reading from
+// sendCh instead of a mutex around stream.Send: profile (Phase 6)
+// pinned the client-side sendMu at ~26% of the mutex profile under
+// 128-slot load, with the per-slot Ready/Result loops fighting each
+// other for the lock.
 type session struct {
 	cfg    Config
 	stream workerpb.WorkerStream_StreamClient
 	taskCh chan *workerpb.Task
 	log    *slog.Logger
 
-	sendMu sync.Mutex // serializes stream.Send across slots + reader
+	ctx        context.Context
+	sendCh     chan *workerpb.WorkerEvent
+	sendErr    atomic.Pointer[error]
+	writerDone chan struct{}
+}
+
+// sendChanBufferClient is sized to absorb a burst of Ready/Result
+// messages from every slot in flight. 256 keeps queueing latency low
+// while avoiding spurious context cancellations during gRPC flushes.
+const sendChanBufferClient = 256
+
+func newSession(ctx context.Context, cfg Config, stream workerpb.WorkerStream_StreamClient) *session {
+	s := &session{
+		cfg:        cfg,
+		stream:     stream,
+		taskCh:     make(chan *workerpb.Task),
+		log:        cfg.Logger,
+		ctx:        ctx,
+		sendCh:     make(chan *workerpb.WorkerEvent, sendChanBufferClient),
+		writerDone: make(chan struct{}),
+	}
+	go s.writeLoop()
+	return s
+}
+
+func (s *session) writeLoop() {
+	defer close(s.writerDone)
+	for ev := range s.sendCh {
+		if s.sendErr.Load() != nil {
+			continue
+		}
+		if err := s.stream.Send(ev); err != nil {
+			cp := err
+			s.sendErr.Store(&cp)
+		}
+	}
+}
+
+func (s *session) closeWriter() {
+	close(s.sendCh)
+	<-s.writerDone
 }
 
 func (s *session) send(ev *workerpb.WorkerEvent) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	return s.stream.Send(ev)
+	if errPtr := s.sendErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+	select {
+	case s.sendCh <- ev:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
 }
 
 func (s *session) run(ctx context.Context, h Handler) error {

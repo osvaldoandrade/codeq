@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -47,19 +48,66 @@ func New(scheduler services.SchedulerService, validator auth.Validator, logger *
 	}
 }
 
-// streamSession is the per-connection state. sendMu serializes Send so
-// the per-event handler goroutines never race on the gRPC stream.
+// streamSession is the per-connection state. Sends are funnelled through
+// a dedicated writer goroutine reading from sendCh, mirroring the worker
+// server (Phase 6 / M1) — profile showed sendMu mutex contention was the
+// single largest source of delay across all the stream sessions.
 type streamSession struct {
 	stream   producerpb.ProducerStream_StreamServer
-	sendMu   sync.Mutex
 	tenantID string
 	subject  string
+
+	ctx        context.Context
+	sendCh     chan *producerpb.ServerEvent
+	sendErr    atomic.Pointer[error]
+	writerDone chan struct{}
+}
+
+// sendChanBuffer caps how many CreateAcks queue ahead of the writer.
+// A producer pipelining N CreateTask events in flight will generate at
+// most N acks in close succession; 256 keeps the writer-side queue
+// shallow without forcing handlers to block on ctx-cancelled paths.
+const sendChanBuffer = 256
+
+func newStreamSession(ctx context.Context, stream producerpb.ProducerStream_StreamServer) *streamSession {
+	s := &streamSession{
+		stream:     stream,
+		ctx:        ctx,
+		sendCh:     make(chan *producerpb.ServerEvent, sendChanBuffer),
+		writerDone: make(chan struct{}),
+	}
+	go s.writeLoop()
+	return s
+}
+
+func (s *streamSession) writeLoop() {
+	defer close(s.writerDone)
+	for ev := range s.sendCh {
+		if s.sendErr.Load() != nil {
+			continue
+		}
+		if err := s.stream.Send(ev); err != nil {
+			cp := err
+			s.sendErr.Store(&cp)
+		}
+	}
+}
+
+func (s *streamSession) closeWriter() {
+	close(s.sendCh)
+	<-s.writerDone
 }
 
 func (s *streamSession) send(ev *producerpb.ServerEvent) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	return s.stream.Send(ev)
+	if errPtr := s.sendErr.Load(); errPtr != nil {
+		return *errPtr
+	}
+	select {
+	case s.sendCh <- ev:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
 }
 
 func (s *streamSession) sendAck(seq uint64, ok bool, taskID, errMsg string) error {
@@ -83,6 +131,10 @@ func (s *Server) Stream(stream producerpb.ProducerStream_StreamServer) error {
 	if err != nil {
 		return err
 	}
+	// Drain the writer before letting the rpc handler return; otherwise
+	// a final CreateAck in flight could race the stream's runtime
+	// teardown.
+	defer sess.closeWriter()
 
 	var wg sync.WaitGroup
 	for {
@@ -143,14 +195,13 @@ func (s *Server) handleHello(stream producerpb.ProducerStream_StreamServer) (*st
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "auth failed: %v", err)
 	}
-	sess := &streamSession{
-		stream:   stream,
-		tenantID: tenantIDFromClaims(claims),
-		subject:  claims.Subject,
-	}
+	sess := newStreamSession(stream.Context(), stream)
+	sess.tenantID = tenantIDFromClaims(claims)
+	sess.subject = claims.Subject
 	if err := sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_HelloAck{
 		HelloAck: &producerpb.HelloAck{TenantId: sess.tenantID, Subject: sess.subject},
 	}}); err != nil {
+		sess.closeWriter()
 		return nil, err
 	}
 	return sess, nil
