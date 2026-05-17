@@ -33,7 +33,22 @@ The tenant ID segment is omitted for backward compatibility when `tenantID` is e
 - Sets: `SADD`, `SREM`, `SCARD`, `SRANDMEMBER` (in-progress tracking + DLQ)
 - ZSET: `ZADD`, `ZRANGEBYSCORE`, `ZREM`
 - Keys: `SETEX`, `TTL`, `EXPIRE`, `DEL`
-- Lua: `EVAL` (atomic claim move: `RPOP` + `SADD`)
+- Lua: `EVALSHA` (atomic claim move: `RPOP` + `SADD`); `EVAL` (fallback for kvrocks)
+
+### Lua scripts
+
+codeQ uses Lua scripts for atomicity in critical paths:
+
+1. **Claim move script** (`claimMoveScript` in `task_repository.go`): Atomically moves a task from the pending queue to in-progress state using `RPOP` and `SADD`.
+2. **Rate limiter script** (`tokenBucketScript` in `token_bucket.go`): Token bucket algorithm for rate limiting across distributed workers.
+
+**Script preloading (kvrocks compatibility):**
+
+codeQ preloads Lua scripts at startup via `PreloadScripts()` calls in `application.go`. This is necessary because kvrocks (a Redis fork) returns `NOSCRIPT` errors in a different format than standard Redis. The preload ensures that subsequent `EVALSHA` calls always hit the cached script.
+
+If preloading fails or a script is evicted, codeQ automatically falls back to `EVAL` (loading the full script on demand). This fallback is transparent to callers and maintains correctness.
+
+**Implementation detail:** When a kvrocks instance returns a `NOSCRIPT` error, codeQ detects it by checking for the string `"NOSCRIPT"` in the error message. It then retries using `EVAL` instead of `EVALSHA`.
 
 ## Retention
 

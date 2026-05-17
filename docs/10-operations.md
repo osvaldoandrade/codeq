@@ -1,5 +1,16 @@
 # Operations
 
+## Startup
+
+When the codeQ API starts, it performs the following initialization steps:
+
+1. **Connect to KVRocks/Redis:** Attempts to establish a connection to the configured KVRocks instance.
+2. **Preload Lua scripts:** Uploads all required Lua scripts (claim move, rate limiting) to the backend. This is idempotent and safe to call repeatedly. If any script fails to preload, startup fails with an error.
+3. **Initialize services:** Sets up request handlers, middleware, and background services.
+4. **Health check:** Once initialized, `/healthz` returns `{"status":"ok"}`.
+
+**Why preload scripts?** codeQ uses Lua scripts for atomic operations in hot paths (task claiming, rate limiting). For kvrocks compatibility, scripts are preloaded at startup rather than relied upon via EVALSHA alone. codeQ includes a fallback mechanism: if a script is not found (NOSCRIPT error), it falls back to EVAL (full script load) before retrying the operation. This ensures correctness even if scripts are evicted from memory.
+
 ## Health
 
 `GET /healthz` returns `{"status":"ok"}`.
