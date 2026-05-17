@@ -249,6 +249,10 @@ func (s *Session) readLoop() {
 		switch e := ev.Event.(type) {
 		case *producerpb.ServerEvent_CreateAck:
 			s.deliver(e.CreateAck)
+		case *producerpb.ServerEvent_CreateAckBatch:
+			for _, ack := range e.CreateAckBatch.Acks {
+				s.deliver(ack)
+			}
 		case *producerpb.ServerEvent_Error:
 			s.cli.cfg.Logger.Warn("producerclient: server error event",
 				"code", e.Error.Code, "msg", e.Error.Message)
@@ -336,6 +340,92 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 		s.pending.Delete(seq)
 		return "", ctx.Err()
 	}
+}
+
+// ProduceBatch pipelines N CreateTasks into a single CreateTaskBatch
+// message and waits for the matching CreateAckBatch. Returns one
+// BatchResult per request in input order — Err non-nil on rejection,
+// TaskID set on success. Phase 6 / Q3 batch entry point.
+//
+// Compared to N concurrent Produce calls: one stream Send (vs N), one
+// goroutine fan-out on the server (vs N event handlers), one
+// CreateAckBatch on the wire (vs N CreateAcks). The server still
+// processes each task in parallel internally so per-task latency is
+// not serialised.
+func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]BatchResult, error) {
+	if len(reqs) == 0 {
+		return nil, nil
+	}
+	if s.closed.Load() {
+		return nil, errors.New("producerclient: session closed")
+	}
+	if err := s.peekReadErr(); err != nil {
+		return nil, err
+	}
+
+	pbTasks := make([]*producerpb.CreateTask, len(reqs))
+	channels := make([]chan ackResult, len(reqs))
+	seqs := make([]uint64, len(reqs))
+	for i, req := range reqs {
+		seq := s.seq.Add(1)
+		ch := make(chan ackResult, 1)
+		s.pending.Store(seq, ch)
+		seqs[i] = seq
+		channels[i] = ch
+
+		var runAt *timestamppb.Timestamp
+		if !req.RunAt.IsZero() {
+			runAt = timestamppb.New(req.RunAt)
+		}
+		pbTasks[i] = &producerpb.CreateTask{
+			Seq:            seq,
+			Command:        req.Command,
+			Payload:        req.Payload,
+			Priority:       int32(req.Priority),
+			Webhook:        req.Webhook,
+			MaxAttempts:    int32(req.MaxAttempts),
+			IdempotencyKey: req.IdempotencyKey,
+			RunAt:          runAt,
+			DelaySeconds:   int32(req.DelaySeconds),
+			TraceParent:    req.TraceParent,
+			TraceState:     req.TraceState,
+		}
+	}
+
+	ev := &producerpb.ProducerEvent{Event: &producerpb.ProducerEvent_CreateBatch{
+		CreateBatch: &producerpb.CreateTaskBatch{Tasks: pbTasks},
+	}}
+	if err := s.send(ev); err != nil {
+		for _, seq := range seqs {
+			s.pending.Delete(seq)
+		}
+		return nil, fmt.Errorf("producerclient: send batch: %w", err)
+	}
+
+	results := make([]BatchResult, len(reqs))
+	for i, ch := range channels {
+		select {
+		case res := <-ch:
+			results[i] = BatchResult{TaskID: res.taskID, Err: res.err}
+		case <-ctx.Done():
+			// Cancel cleanup: drop pending entries for the remaining seqs so
+			// late acks don't leak into stale channels. The reader will see
+			// "ack for unknown seq" but that's harmless.
+			for _, seq := range seqs[i:] {
+				s.pending.Delete(seq)
+			}
+			return results[:i], ctx.Err()
+		}
+	}
+	return results, nil
+}
+
+// BatchResult is one slot of a ProduceBatch reply. Err is set if the
+// server rejected the request (validation, scheduler error); otherwise
+// TaskID is the assigned id.
+type BatchResult struct {
+	TaskID string
+	Err    error
 }
 
 // peekReadErr returns a non-nil error if the reader goroutine has

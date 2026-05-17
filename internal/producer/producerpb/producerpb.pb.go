@@ -216,12 +216,63 @@ func (x *CreateTask) GetTraceState() string {
 	return ""
 }
 
+// CreateTaskBatch is a producer pipelining N CreateTasks into a single
+// stream message. Server processes them with one fan-out goroutine
+// instead of one per CreateTask, and emits a single CreateAckBatch
+// covering every seq. The Pebble commit coalescer (Phase 1.1) merges
+// the resulting writes into fewer commits; combined with the reduced
+// gRPC framing this is the Phase 6 / Q3 batch path for producers.
+type CreateTaskBatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tasks         []*CreateTask          `protobuf:"bytes,1,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateTaskBatch) Reset() {
+	*x = CreateTaskBatch{}
+	mi := &file_producerpb_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateTaskBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateTaskBatch) ProtoMessage() {}
+
+func (x *CreateTaskBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_producerpb_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateTaskBatch.ProtoReflect.Descriptor instead.
+func (*CreateTaskBatch) Descriptor() ([]byte, []int) {
+	return file_producerpb_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CreateTaskBatch) GetTasks() []*CreateTask {
+	if x != nil {
+		return x.Tasks
+	}
+	return nil
+}
+
 type ProducerEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
 	//
 	//	*ProducerEvent_Hello
 	//	*ProducerEvent_Create
+	//	*ProducerEvent_CreateBatch
 	Event         isProducerEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -229,7 +280,7 @@ type ProducerEvent struct {
 
 func (x *ProducerEvent) Reset() {
 	*x = ProducerEvent{}
-	mi := &file_producerpb_proto_msgTypes[2]
+	mi := &file_producerpb_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -241,7 +292,7 @@ func (x *ProducerEvent) String() string {
 func (*ProducerEvent) ProtoMessage() {}
 
 func (x *ProducerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_producerpb_proto_msgTypes[2]
+	mi := &file_producerpb_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -254,7 +305,7 @@ func (x *ProducerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProducerEvent.ProtoReflect.Descriptor instead.
 func (*ProducerEvent) Descriptor() ([]byte, []int) {
-	return file_producerpb_proto_rawDescGZIP(), []int{2}
+	return file_producerpb_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ProducerEvent) GetEvent() isProducerEvent_Event {
@@ -282,6 +333,15 @@ func (x *ProducerEvent) GetCreate() *CreateTask {
 	return nil
 }
 
+func (x *ProducerEvent) GetCreateBatch() *CreateTaskBatch {
+	if x != nil {
+		if x, ok := x.Event.(*ProducerEvent_CreateBatch); ok {
+			return x.CreateBatch
+		}
+	}
+	return nil
+}
+
 type isProducerEvent_Event interface {
 	isProducerEvent_Event()
 }
@@ -294,9 +354,15 @@ type ProducerEvent_Create struct {
 	Create *CreateTask `protobuf:"bytes,2,opt,name=create,proto3,oneof"`
 }
 
+type ProducerEvent_CreateBatch struct {
+	CreateBatch *CreateTaskBatch `protobuf:"bytes,3,opt,name=create_batch,json=createBatch,proto3,oneof"`
+}
+
 func (*ProducerEvent_Hello) isProducerEvent_Event() {}
 
 func (*ProducerEvent_Create) isProducerEvent_Event() {}
+
+func (*ProducerEvent_CreateBatch) isProducerEvent_Event() {}
 
 type HelloAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -308,7 +374,7 @@ type HelloAck struct {
 
 func (x *HelloAck) Reset() {
 	*x = HelloAck{}
-	mi := &file_producerpb_proto_msgTypes[3]
+	mi := &file_producerpb_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -320,7 +386,7 @@ func (x *HelloAck) String() string {
 func (*HelloAck) ProtoMessage() {}
 
 func (x *HelloAck) ProtoReflect() protoreflect.Message {
-	mi := &file_producerpb_proto_msgTypes[3]
+	mi := &file_producerpb_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -333,7 +399,7 @@ func (x *HelloAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HelloAck.ProtoReflect.Descriptor instead.
 func (*HelloAck) Descriptor() ([]byte, []int) {
-	return file_producerpb_proto_rawDescGZIP(), []int{3}
+	return file_producerpb_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *HelloAck) GetTenantId() string {
@@ -365,7 +431,7 @@ type CreateAck struct {
 
 func (x *CreateAck) Reset() {
 	*x = CreateAck{}
-	mi := &file_producerpb_proto_msgTypes[4]
+	mi := &file_producerpb_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -377,7 +443,7 @@ func (x *CreateAck) String() string {
 func (*CreateAck) ProtoMessage() {}
 
 func (x *CreateAck) ProtoReflect() protoreflect.Message {
-	mi := &file_producerpb_proto_msgTypes[4]
+	mi := &file_producerpb_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -390,7 +456,7 @@ func (x *CreateAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAck.ProtoReflect.Descriptor instead.
 func (*CreateAck) Descriptor() ([]byte, []int) {
-	return file_producerpb_proto_rawDescGZIP(), []int{4}
+	return file_producerpb_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CreateAck) GetSeq() uint64 {
@@ -431,7 +497,7 @@ type ServerError struct {
 
 func (x *ServerError) Reset() {
 	*x = ServerError{}
-	mi := &file_producerpb_proto_msgTypes[5]
+	mi := &file_producerpb_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -443,7 +509,7 @@ func (x *ServerError) String() string {
 func (*ServerError) ProtoMessage() {}
 
 func (x *ServerError) ProtoReflect() protoreflect.Message {
-	mi := &file_producerpb_proto_msgTypes[5]
+	mi := &file_producerpb_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -456,7 +522,7 @@ func (x *ServerError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerError.ProtoReflect.Descriptor instead.
 func (*ServerError) Descriptor() ([]byte, []int) {
-	return file_producerpb_proto_rawDescGZIP(), []int{5}
+	return file_producerpb_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ServerError) GetCode() string {
@@ -473,6 +539,52 @@ func (x *ServerError) GetMessage() string {
 	return ""
 }
 
+// CreateAckBatch acks every CreateTask in a CreateTaskBatch in one
+// message. Order matches the input order.
+type CreateAckBatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Acks          []*CreateAck           `protobuf:"bytes,1,rep,name=acks,proto3" json:"acks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreateAckBatch) Reset() {
+	*x = CreateAckBatch{}
+	mi := &file_producerpb_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreateAckBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreateAckBatch) ProtoMessage() {}
+
+func (x *CreateAckBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_producerpb_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreateAckBatch.ProtoReflect.Descriptor instead.
+func (*CreateAckBatch) Descriptor() ([]byte, []int) {
+	return file_producerpb_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *CreateAckBatch) GetAcks() []*CreateAck {
+	if x != nil {
+		return x.Acks
+	}
+	return nil
+}
+
 type ServerEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
@@ -480,6 +592,7 @@ type ServerEvent struct {
 	//	*ServerEvent_HelloAck
 	//	*ServerEvent_CreateAck
 	//	*ServerEvent_Error
+	//	*ServerEvent_CreateAckBatch
 	Event         isServerEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -487,7 +600,7 @@ type ServerEvent struct {
 
 func (x *ServerEvent) Reset() {
 	*x = ServerEvent{}
-	mi := &file_producerpb_proto_msgTypes[6]
+	mi := &file_producerpb_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -499,7 +612,7 @@ func (x *ServerEvent) String() string {
 func (*ServerEvent) ProtoMessage() {}
 
 func (x *ServerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_producerpb_proto_msgTypes[6]
+	mi := &file_producerpb_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -512,7 +625,7 @@ func (x *ServerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerEvent.ProtoReflect.Descriptor instead.
 func (*ServerEvent) Descriptor() ([]byte, []int) {
-	return file_producerpb_proto_rawDescGZIP(), []int{6}
+	return file_producerpb_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ServerEvent) GetEvent() isServerEvent_Event {
@@ -549,6 +662,15 @@ func (x *ServerEvent) GetError() *ServerError {
 	return nil
 }
 
+func (x *ServerEvent) GetCreateAckBatch() *CreateAckBatch {
+	if x != nil {
+		if x, ok := x.Event.(*ServerEvent_CreateAckBatch); ok {
+			return x.CreateAckBatch
+		}
+	}
+	return nil
+}
+
 type isServerEvent_Event interface {
 	isServerEvent_Event()
 }
@@ -565,11 +687,17 @@ type ServerEvent_Error struct {
 	Error *ServerError `protobuf:"bytes,3,opt,name=error,proto3,oneof"`
 }
 
+type ServerEvent_CreateAckBatch struct {
+	CreateAckBatch *CreateAckBatch `protobuf:"bytes,4,opt,name=create_ack_batch,json=createAckBatch,proto3,oneof"`
+}
+
 func (*ServerEvent_HelloAck) isServerEvent_Event() {}
 
 func (*ServerEvent_CreateAck) isServerEvent_Event() {}
 
 func (*ServerEvent_Error) isServerEvent_Event() {}
+
+func (*ServerEvent_CreateAckBatch) isServerEvent_Event() {}
 
 var File_producerpb_proto protoreflect.FileDescriptor
 
@@ -593,10 +721,13 @@ const file_producerpb_proto_rawDesc = "" +
 	"\ftrace_parent\x18\n" +
 	" \x01(\tR\vtraceParent\x12\x1f\n" +
 	"\vtrace_state\x18\v \x01(\tR\n" +
-	"traceState\"u\n" +
+	"traceState\"?\n" +
+	"\x0fCreateTaskBatch\x12,\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x16.producerpb.CreateTaskR\x05tasks\"\xb7\x01\n" +
 	"\rProducerEvent\x12)\n" +
 	"\x05hello\x18\x01 \x01(\v2\x11.producerpb.HelloH\x00R\x05hello\x120\n" +
-	"\x06create\x18\x02 \x01(\v2\x16.producerpb.CreateTaskH\x00R\x06createB\a\n" +
+	"\x06create\x18\x02 \x01(\v2\x16.producerpb.CreateTaskH\x00R\x06create\x12@\n" +
+	"\fcreate_batch\x18\x03 \x01(\v2\x1b.producerpb.CreateTaskBatchH\x00R\vcreateBatchB\a\n" +
 	"\x05event\"A\n" +
 	"\bHelloAck\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x18\n" +
@@ -608,12 +739,15 @@ const file_producerpb_proto_rawDesc = "" +
 	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\";\n" +
 	"\vServerError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\xb4\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\";\n" +
+	"\x0eCreateAckBatch\x12)\n" +
+	"\x04acks\x18\x01 \x03(\v2\x15.producerpb.CreateAckR\x04acks\"\xfc\x01\n" +
 	"\vServerEvent\x123\n" +
 	"\thello_ack\x18\x01 \x01(\v2\x14.producerpb.HelloAckH\x00R\bhelloAck\x126\n" +
 	"\n" +
 	"create_ack\x18\x02 \x01(\v2\x15.producerpb.CreateAckH\x00R\tcreateAck\x12/\n" +
-	"\x05error\x18\x03 \x01(\v2\x17.producerpb.ServerErrorH\x00R\x05errorB\a\n" +
+	"\x05error\x18\x03 \x01(\v2\x17.producerpb.ServerErrorH\x00R\x05error\x12F\n" +
+	"\x10create_ack_batch\x18\x04 \x01(\v2\x1a.producerpb.CreateAckBatchH\x00R\x0ecreateAckBatchB\a\n" +
 	"\x05event2R\n" +
 	"\x0eProducerStream\x12@\n" +
 	"\x06Stream\x12\x19.producerpb.ProducerEvent\x1a\x17.producerpb.ServerEvent(\x010\x01B>Z<github.com/osvaldoandrade/codeq/internal/producer/producerpbb\x06proto3"
@@ -630,31 +764,37 @@ func file_producerpb_proto_rawDescGZIP() []byte {
 	return file_producerpb_proto_rawDescData
 }
 
-var file_producerpb_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_producerpb_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_producerpb_proto_goTypes = []any{
 	(*Hello)(nil),                 // 0: producerpb.Hello
 	(*CreateTask)(nil),            // 1: producerpb.CreateTask
-	(*ProducerEvent)(nil),         // 2: producerpb.ProducerEvent
-	(*HelloAck)(nil),              // 3: producerpb.HelloAck
-	(*CreateAck)(nil),             // 4: producerpb.CreateAck
-	(*ServerError)(nil),           // 5: producerpb.ServerError
-	(*ServerEvent)(nil),           // 6: producerpb.ServerEvent
-	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(*CreateTaskBatch)(nil),       // 2: producerpb.CreateTaskBatch
+	(*ProducerEvent)(nil),         // 3: producerpb.ProducerEvent
+	(*HelloAck)(nil),              // 4: producerpb.HelloAck
+	(*CreateAck)(nil),             // 5: producerpb.CreateAck
+	(*ServerError)(nil),           // 6: producerpb.ServerError
+	(*CreateAckBatch)(nil),        // 7: producerpb.CreateAckBatch
+	(*ServerEvent)(nil),           // 8: producerpb.ServerEvent
+	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
 }
 var file_producerpb_proto_depIdxs = []int32{
-	7, // 0: producerpb.CreateTask.run_at:type_name -> google.protobuf.Timestamp
-	0, // 1: producerpb.ProducerEvent.hello:type_name -> producerpb.Hello
-	1, // 2: producerpb.ProducerEvent.create:type_name -> producerpb.CreateTask
-	3, // 3: producerpb.ServerEvent.hello_ack:type_name -> producerpb.HelloAck
-	4, // 4: producerpb.ServerEvent.create_ack:type_name -> producerpb.CreateAck
-	5, // 5: producerpb.ServerEvent.error:type_name -> producerpb.ServerError
-	2, // 6: producerpb.ProducerStream.Stream:input_type -> producerpb.ProducerEvent
-	6, // 7: producerpb.ProducerStream.Stream:output_type -> producerpb.ServerEvent
-	7, // [7:8] is the sub-list for method output_type
-	6, // [6:7] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	6, // [6:6] is the sub-list for extension extendee
-	0, // [0:6] is the sub-list for field type_name
+	9,  // 0: producerpb.CreateTask.run_at:type_name -> google.protobuf.Timestamp
+	1,  // 1: producerpb.CreateTaskBatch.tasks:type_name -> producerpb.CreateTask
+	0,  // 2: producerpb.ProducerEvent.hello:type_name -> producerpb.Hello
+	1,  // 3: producerpb.ProducerEvent.create:type_name -> producerpb.CreateTask
+	2,  // 4: producerpb.ProducerEvent.create_batch:type_name -> producerpb.CreateTaskBatch
+	5,  // 5: producerpb.CreateAckBatch.acks:type_name -> producerpb.CreateAck
+	4,  // 6: producerpb.ServerEvent.hello_ack:type_name -> producerpb.HelloAck
+	5,  // 7: producerpb.ServerEvent.create_ack:type_name -> producerpb.CreateAck
+	6,  // 8: producerpb.ServerEvent.error:type_name -> producerpb.ServerError
+	7,  // 9: producerpb.ServerEvent.create_ack_batch:type_name -> producerpb.CreateAckBatch
+	3,  // 10: producerpb.ProducerStream.Stream:input_type -> producerpb.ProducerEvent
+	8,  // 11: producerpb.ProducerStream.Stream:output_type -> producerpb.ServerEvent
+	11, // [11:12] is the sub-list for method output_type
+	10, // [10:11] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_producerpb_proto_init() }
@@ -662,14 +802,16 @@ func file_producerpb_proto_init() {
 	if File_producerpb_proto != nil {
 		return
 	}
-	file_producerpb_proto_msgTypes[2].OneofWrappers = []any{
+	file_producerpb_proto_msgTypes[3].OneofWrappers = []any{
 		(*ProducerEvent_Hello)(nil),
 		(*ProducerEvent_Create)(nil),
+		(*ProducerEvent_CreateBatch)(nil),
 	}
-	file_producerpb_proto_msgTypes[6].OneofWrappers = []any{
+	file_producerpb_proto_msgTypes[8].OneofWrappers = []any{
 		(*ServerEvent_HelloAck)(nil),
 		(*ServerEvent_CreateAck)(nil),
 		(*ServerEvent_Error)(nil),
+		(*ServerEvent_CreateAckBatch)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -677,7 +819,7 @@ func file_producerpb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_producerpb_proto_rawDesc), len(file_producerpb_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

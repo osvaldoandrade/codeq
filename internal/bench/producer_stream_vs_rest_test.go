@@ -207,3 +207,71 @@ func TestProducerThroughput_StreamPath(t *testing.T) {
 	t.Logf("STREAM: created=%d duration=%s rate=%.0f creates/s",
 		created.Load(), elapsed.Round(time.Millisecond), rate)
 }
+
+// TestProducerThroughput_StreamBatchPath measures the Phase 6 / Q3
+// producer batch path: 32 goroutines pumping ProduceBatch with batches
+// of 16. Net effect is the same total in-flight load as the single
+// path but with N requests per stream message.
+func TestProducerThroughput_StreamBatchPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("throughput tests are long; run without -short")
+	}
+	streamAddr := fmt.Sprintf("127.0.0.1:%d", freePortT(t))
+	_ = newPebbleAppForProducer(t, streamAddr)
+
+	cli, err := producerclient.New(producerclient.Config{
+		Addr:  streamAddr,
+		Token: phase2ProducerToken,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sess, err := cli.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer sess.Close()
+
+	const batchSize = 16
+	body := []byte(`{"bench":true}`)
+	var created atomic.Int64
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range phase3Concurrency {
+		wg.Go(func() {
+			reqs := make([]producerclient.CreateRequest, batchSize)
+			for i := range reqs {
+				reqs[i] = producerclient.CreateRequest{Command: "GENERATE_MASTER", Payload: body}
+			}
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				results, err := sess.ProduceBatch(ctx, reqs)
+				if err != nil {
+					return
+				}
+				for _, r := range results {
+					if r.Err == nil {
+						created.Add(1)
+					}
+				}
+			}
+		})
+	}
+
+	start := time.Now()
+	time.Sleep(phase3Duration)
+	close(stop)
+	wg.Wait()
+	elapsed := time.Since(start)
+	rate := float64(created.Load()) / elapsed.Seconds()
+	t.Logf("STREAM-BATCH (size=%d): created=%d duration=%s rate=%.0f creates/s",
+		batchSize, created.Load(), elapsed.Round(time.Millisecond), rate)
+}
