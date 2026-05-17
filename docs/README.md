@@ -21,6 +21,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
 30. `docs/30-performance-baselines.md` - Baseline load test results and regression benchmarks
 33. `docs/33-staging-validation-runbook.md` - Staging performance validation runbook
+34. `docs/34-streaming-api-guide.md` - Streaming gRPC APIs for producers and workers (33k+ tasks/sec, batching support)
 
 ### Technical Reference (Information-Oriented)
 

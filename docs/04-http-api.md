@@ -1,5 +1,7 @@
 # HTTP API
 
+> **High Throughput Alternative**: For throughput-critical workloads (33k+ tasks/sec producers or batch-processing workers), use the **Streaming gRPC APIs** documented in `docs/34-streaming-api-guide.md`. Streaming achieves 2-3x higher throughput by eliminating per-request authentication overhead and enabling request pipelining.
+
 All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 
 ## Common headers

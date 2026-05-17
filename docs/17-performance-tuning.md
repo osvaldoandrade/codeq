@@ -724,6 +724,67 @@ For workloads requiring global distribution:
 - Producers enqueue to local region, workers claim from local region
 - For cross-region tasks, use webhooks to trigger secondary enqueue
 
+## 3.1) Phase 6: In-Memory Lease Optimization & Streaming APIs
+
+### Phase 6 In-Memory Lease Table
+
+**Performance gain: +10% full-cycle throughput**
+
+Phase 6 / M2 replaces the on-disk `KeyLease` Redis index with a volatile in-memory lease table. This eliminates per-claim Redis SET operations and per-reaper-tick lease fetch operations.
+
+**Benefits:**
+- Fewer Redis operations per task lifecycle
+- Lower latency on gRPC streaming worker claim paths
+- Memory-efficient: 32 bytes per active lease × 1M tasks = 32 MiB
+- Crash-safe: leases recovered from `KeyInprog` set at startup
+
+**Configuration:** In-memory leases are enabled by default. For extremely ephemeral workers (killed/recreated frequently), revert to Redis-backed leases via `inprogKey` configuration (trades throughput for crash recovery).
+
+See `docs/03-architecture.md#phase-6-in-memory-lease-table` for detailed explanation.
+
+### Streaming APIs: 2-3x Higher Throughput
+
+codeQ provides high-performance gRPC streaming APIs for producers and workers (Phase 3 / Q2):
+
+**Producer Streaming API:**
+- **33,000+ tasks/sec** per stream (vs. ~10,000 with REST POST)
+- Pipelined async requests: many CreateTask in-flight before acks arrive
+- Single authentication per stream, amortized tenant resolution
+
+**Worker Streaming API:**
+- Single-task mode: ~5,000-10,000 tasks/sec (similar to REST)
+- **Batch mode (BatchSize > 1): 50,000-100,000+ tasks/sec** — 10x improvement
+- Concurrent slots with independent Ready-Task-Result cycles
+- Batched result submission amortizes Pebble commit cost
+
+**When to Use:**
+- Producers: high-throughput enqueue (>10k tasks/sec target)
+- Workers: continuous processing with batch workloads (>5k tasks/sec target)
+- Alternative: REST APIs remain best choice for simple scripts and low-throughput use cases
+
+**Configuration:**
+
+```yaml
+producerStreamAddr: :9092
+workerStreamAddr: :9091
+```
+
+**Client Example:**
+
+```go
+// Worker streaming with batching
+cfg := workerclient.Config{
+    Addr: "codeq:9091",
+    Token: token,
+    Concurrency: 4,    // 4 parallel slots
+    BatchSize: 10,     // claim 10 tasks per Ready
+}
+client, _ := workerclient.New(cfg)
+client.Run(ctx, handler)  // ~50k tasks/sec throughput
+```
+
+See `docs/34-streaming-api-guide.md` for complete tutorials, protocol reference, and error handling.
+
 ## 4) Performance Benchmarks
 
 Performance varies based on workload, infrastructure, and configuration. These benchmarks provide baseline expectations.

@@ -169,6 +169,15 @@ The following fields are deprecated in favor of the new plugin-based authenticat
   - Environment variable: `WORKER_STREAM_ADDR`
   - Empty by default; REST worker endpoints remain available either way
   - Uses the same worker auth, scopes, event type authorization, tenant resolution, and `allowProducerAsWorker` behavior as the REST worker path
+  - See `docs/34-streaming-api-guide.md` for detailed tutorials, performance characteristics, and client configuration
+
+### Producer Streaming gRPC
+
+- `producerStreamAddr` (string, optional): Enables the bidirectional producer gRPC stream on the provided listen address, for example `:9092`
+  - Environment variable: `PRODUCER_STREAM_ADDR`
+  - Empty by default; REST producer endpoints remain available either way
+  - Uses the same producer auth, tenant resolution, and rate limiting as the REST producer path
+  - See `docs/34-streaming-api-guide.md` for detailed tutorials, performance characteristics, and client configuration
 
 ## Webhooks
 
