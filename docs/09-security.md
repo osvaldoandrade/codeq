@@ -107,3 +107,10 @@ See [Authentication Plugins](20-authentication-plugins.md) for details on:
 - Creating custom authentication plugins
 - Plugin interface reference
 - Migration guide
+
+## See also
+
+- [Authentication plugins](./20-authentication-plugins.md) — JWKS, custom auth implementations
+- [Multi-tenancy](./39-multi-tenancy.md) — Tenant isolation and JWT claims
+- [Configuration reference](./14-configuration.md) — Security-related settings
+- [Developer guide](./21-developer-guide.md) — Building with codeq securely

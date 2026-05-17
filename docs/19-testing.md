@@ -333,3 +333,10 @@ For comprehensive documentation, see:
 - The `pkg/config` package is difficult to test due to environment variable parsing
 - CLI tests are run separately in the release workflow
 - Focus is on testable business logic: backoff, repository, services, domain, providers
+
+## See also
+
+- [Load testing](./26-load-testing.md) — Comprehensive performance testing framework
+- [Performance baselines](./30-performance-baselines.md) — Baseline results and regression detection
+- [Performance tuning](./17-performance-tuning.md) — Optimization techniques
+- [Developer guide](./21-developer-guide.md) — Development best practices

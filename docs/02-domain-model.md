@@ -140,3 +140,9 @@ type Queue interface {
     Size(ctx context.Context, command string) (int64, error)
 }
 ```
+
+## See also
+
+- [System overview](./01-overview.md) — High-level goals and architecture
+- [Architecture](./03-architecture.md) — System components and layers
+- [Queueing model](./05-queueing-model.md) — Task queue semantics and lifecycle

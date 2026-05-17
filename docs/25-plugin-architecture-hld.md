@@ -1374,3 +1374,10 @@ The authentication plugin system already exists in production, validating the pl
 Organizations gain flexibility to integrate codeQ with existing infrastructure investments while maintaining security boundaries. Plugin developers work within clear contracts that remain stable across codeQ versions. Operators configure plugins through standard configuration files without requiring code changes.
 
 The phased implementation approach delivers incremental value, starting with foundational interfaces and progressing to production-ready backends and example plugins.
+
+## See also
+
+- [Persistence plugin system](./27-persistence-plugin-system.md) — Plugin system overview and how-to
+- [Queue sharding HLD](./24-queue-sharding-hld.md) — Sharding architecture for scaling
+- [Security](./09-security.md) — Authentication plugin system
+- [Configuration reference](./14-configuration.md) — Plugin configuration

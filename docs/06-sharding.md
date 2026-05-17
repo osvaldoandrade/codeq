@@ -180,3 +180,10 @@ The `StaticShardSupplier.Validate()` method checks that all shard references (de
 ## Design Document
 
 For the full sharding design including architecture diagrams, atomicity analysis, Redis Cluster considerations, and alternative approaches, see **[Queue Sharding HLD](24-queue-sharding-hld.md)**.
+
+## See also
+
+- [Cluster architecture](./05-cluster-architecture.md) — Distributed sharding across nodes
+- [Architecture](./03-architecture.md) — System components and data flow
+- [Lease management](./06b-lease-management.md) — How leases work with sharded storage
+- [Queue Sharding HLD](./24-queue-sharding-hld.md) — Detailed design and technical analysis

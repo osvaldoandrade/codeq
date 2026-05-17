@@ -213,3 +213,10 @@ See [Configuration](14-configuration.md) for complete rate limiting configuratio
 ## Scaling
 
 Scale horizontally. Use stateless API instances. KVRocks is the stateful component and must be scaled according to queue throughput.
+
+## See also
+
+- [Operational runbooks](./29-operational-runbooks.md) — Incident response and maintenance procedures
+- [Troubleshooting](./28-troubleshooting.md) — Common issues and diagnostics
+- [Observability](./37-observability.md) — Monitoring and metrics
+- [Configuration reference](./14-configuration.md) — Operational settings

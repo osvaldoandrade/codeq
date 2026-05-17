@@ -329,3 +329,10 @@ Example CI step:
 
 > **Tip:** Use `k6 run --out json=results.json` and archive the JSON artifact for
 > historical trend analysis with tools like `k6-reporter` or Grafana Cloud k6.
+
+## See also
+
+- [Load testing](./26-load-testing.md) — Load testing framework and scenarios
+- [Performance tuning](./17-performance-tuning.md) — Optimization techniques
+- [Testing](./19-testing.md) — Testing strategies and benchmarks
+- [Staging validation runbook](./33-staging-validation-runbook.md) — Pre-production validation

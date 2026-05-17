@@ -316,3 +316,10 @@ Planned plugin implementations:
 - **TiKV Plugin**: RAFT-backed consensus storage
 
 See `docs/25-plugin-architecture-hld.md` for detailed design documentation.
+
+## See also
+
+- [Plugin architecture HLD](./25-plugin-architecture-hld.md) — Detailed design and roadmap
+- [Storage: Pebble](./07b-storage-pebble.md) — Embedded persistence engine
+- [Storage: KVRocks](./07-storage-kvrocks.md) — Redis-compatible storage
+- [Configuration reference](./14-configuration.md) — Persistence plugin configuration

@@ -531,3 +531,10 @@ Sampling is parent-based by default, so if an incoming request has a sampled tra
 - **Integration Guides**:
   - [Java Integration](integrations/java-integration.md)
   - [Node.js Integration](integrations/nodejs-integration.md)
+
+## See also
+
+- [Producer streaming SDK](./35-producer-streaming-sdk.md) — High-throughput task submission
+- [Worker streaming SDK](./36-worker-streaming-sdk.md) — Efficient task claiming and processing
+- [HTTP API reference](./04-http-api.md) — REST endpoint reference
+- [Configuration reference](./14-configuration.md) — Configuration options

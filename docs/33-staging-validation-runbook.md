@@ -246,3 +246,10 @@ Before each release, validate all of the following in staging:
 - Performance tuning: `docs/17-performance-tuning.md`
 - Benchmark CI workflow: `.github/workflows/benchmark-regression.yml`
 - Benchmark CI guide: `.github/copilot/instructions/07-benchmark-regression-ci.md`
+
+## See also
+
+- [Performance baselines](./30-performance-baselines.md) — Baseline results and regression detection
+- [Load testing](./26-load-testing.md) — Load testing framework
+- [Performance tuning](./17-performance-tuning.md) — Optimization techniques
+- [Operational runbooks](./29-operational-runbooks.md) — Production procedures

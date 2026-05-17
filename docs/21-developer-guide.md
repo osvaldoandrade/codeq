@@ -778,3 +778,10 @@ prometheus.MustRegister(&myCollector{db: db, desc: desc})
 - Open an issue: https://github.com/osvaldoandrade/codeq/issues
 - Check existing docs in `docs/` directory
 - Review the source code - it's designed to be readable!
+
+## See also
+
+- [Architecture](./03-architecture.md) — System design and components
+- [HTTP API](./04-http-api.md) — API reference
+- [Testing](./19-testing.md) — Testing strategies and benchmarks
+- [Local development](./22-local-development.md) — Development environment setup

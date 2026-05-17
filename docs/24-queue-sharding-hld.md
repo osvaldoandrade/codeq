@@ -950,3 +950,10 @@ The explicit sharding design through ShardSupplier, combined with RAFT-backed co
 **Next steps**: Implementation phases track to issue #31. Phase 1 (interface definition) begins immediately. Subsequent phases gate on production validation. Complete ETA: Aug/26.
 
 **Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Redis-protocol storage.
+
+## See also
+
+- [Sharding](./06-sharding.md) — Sharding overview and configuration
+- [Cluster architecture](./05-cluster-architecture.md) — Multi-node scaling
+- [Configuration reference](./14-configuration.md) — Shard configuration options
+- [Plugin architecture HLD](./25-plugin-architecture-hld.md) — Storage backend architecture

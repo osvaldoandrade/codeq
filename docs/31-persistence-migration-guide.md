@@ -203,3 +203,10 @@ func TestYourPluginContractTests(t *testing.T) {
 - Contract tests: `pkg/persistence/persistencetest/contract.go`
 - Plugin system overview: `docs/27-persistence-plugin-system.md`
 - Plugin architecture HLD: `docs/25-plugin-architecture-hld.md`
+
+## See also
+
+- [Persistence plugin system](./27-persistence-plugin-system.md) — Plugin system overview
+- [Plugin architecture HLD](./25-plugin-architecture-hld.md) — Detailed design
+- [Storage: KVRocks](./07-storage-kvrocks.md) — Redis-compatible persistence
+- [Storage: Pebble](./07b-storage-pebble.md) — Embedded persistence engine

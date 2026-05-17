@@ -53,3 +53,9 @@ If preloading fails or a script is evicted, codeQ automatically falls back to `E
 ## Retention
 
 Tasks are retained for 24 hours and removed by admin cleanup. Cleanup removes task records, results, leases, and queue entries. Retention does not use Redis key TTL for task records to avoid accidental deletions.
+
+## See also
+
+- [Storage: Pebble](./07b-storage-pebble.md) — Embedded LSM-tree persistence engine
+- [Persistence plugin system](./27-persistence-plugin-system.md) — How storage backends integrate
+- [Architecture](./03-architecture.md) — Storage layer in system design

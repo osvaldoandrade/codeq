@@ -31,3 +31,10 @@ Let C be the number of commands, L the scan limit, and N the list length.
 - Cleanup: O(k * m) where k is tasks deleted and m is the number of lists touched
 
 These bounds follow Redis list, set, and sorted set complexity.
+
+## See also
+
+- [Architecture](./03-architecture.md) — System design and guarantees
+- [Lease management](./06b-lease-management.md) — How leases prevent data loss
+- [Cluster gRPC protocol](./19b-cluster-grpc-protocol.md) — Distributed consistency model
+- [Cluster architecture](./05-cluster-architecture.md) — Multi-node consistency
