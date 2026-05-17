@@ -327,3 +327,66 @@ rateLimit:
     requestsPerMinute: 0
     burstSize: 0
 ````
+
+## Clustering
+
+Clustering enables horizontal scaling across multiple codeQ nodes using a consistent-hash ring for task ownership. When disabled, codeQ runs as a single-node instance (default behavior, no configuration needed).
+
+### Configuration
+
+````yaml
+cluster:
+  enabled: true
+  
+  # Node definitions in the cluster
+  nodes:
+    - id: "node-1"
+      grpc_addr: "codeq-1.internal:50051"
+    - id: "node-2"
+      grpc_addr: "codeq-2.internal:50051"
+    - id: "node-3"
+      grpc_addr: "codeq-3.internal:50051"
+  
+  # Optional: Bloom filter for negative lookup optimization
+  bloom:
+    enabled: true
+    capacity: 100000          # max items per bloom
+    false_positive_rate: 0.01 # 1% FP rate
+  
+  # Optional: gRPC client configuration
+  grpc:
+    timeout_seconds: 10
+    # tls_enabled: true      # mTLS configuration (future)
+````
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable cluster mode (default: single-node) |
+| `nodes[*].id` | string | required | Stable node identifier (appears in logs, metrics) |
+| `nodes[*].grpc_addr` | string | required | Host:port for internal gRPC server |
+| `bloom.enabled` | bool | `true` | Enable Bloom filter caching for negative lookups |
+| `bloom.capacity` | int | `100000` | Maximum number of items per Bloom filter |
+| `bloom.false_positive_rate` | float | `0.01` | Target false positive rate (0.0 - 1.0) |
+| `grpc.timeout_seconds` | int | `10` | RPC timeout for inter-node calls |
+
+### Deployment Notes
+
+1. **Static membership**: All nodes must know all other nodes at startup. Changes require rolling restart.
+2. **Local storage**: Each node runs an embedded Pebble shard. Tasks lost on node crash (no replication).
+3. **REST API unchanged**: Producers and workers still use HTTP; gRPC is internal to the cluster.
+4. **Load distribution**: Virtual nodes (256 per real node) ensure smooth load balancing (~5% std dev for 3-16 nodes).
+5. **No automatic recovery**: Operator must provision replacement nodes with same ID.
+
+### Monitoring
+
+Cluster health can be monitored via metrics:
+
+- `codeq_cluster_nodes_total`: Number of nodes in ring
+- `codeq_cluster_local_hash_load`: Proportion of hash space owned by this node
+- `codeq_cluster_bloom_stale`: Age of cached peer blooms (in seconds)
+
+### Related
+
+See [05-cluster-architecture.md](05-cluster-architecture.md) for detailed clustering concepts and request routing patterns.

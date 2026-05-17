@@ -29,22 +29,23 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 2. `docs/02-domain-model.md` - Core entities and relationships
 3. `docs/03-architecture.md` - System architecture and components
 4. `docs/04-http-api.md` - HTTP API reference
-5. `docs/05-queueing-model.md` - Queue semantics and behavior
-6. `docs/06-sharding.md` - Sharding strategy and ShardSupplier interface
-7. `docs/07-storage-kvrocks.md` - KVRocks storage layout
-7b. `docs/07b-storage-pebble.md` - Pebble embedded storage layout and comparison
-8. `docs/08-consistency.md` - Consistency guarantees
-9. `docs/09-security.md` - Authentication and authorization
-10. `docs/10-operations.md` - Operational procedures
-11. `docs/11-backoff.md` - Retry and backoff logic
-12. `docs/12-webhooks.md` - Webhook notifications
-16. `docs/16-workflows.md` - GitHub Actions workflows guide
-17. `docs/17-performance-tuning.md` - Performance optimization and tuning guide
-18. `docs/18-package-reference.md` - Package structure and codebase guide
-19. `docs/19-testing.md` - Test coverage and testing strategy
-20. `docs/20-authentication-plugins.md` - Authentication plugin system
-21. `docs/21-developer-guide.md` - Developer guide for contributors
-27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Pebble, Memory, and extensibility)
+5. `docs/05-cluster-architecture.md` - Horizontal scaling via consistent-hash ring and gRPC routing
+6. `docs/05-queueing-model.md` - Queue semantics and behavior
+7. `docs/06-sharding.md` - Sharding strategy and ShardSupplier interface
+8. `docs/07-storage-kvrocks.md` - KVRocks storage layout
+8b. `docs/07b-storage-pebble.md` - Pebble embedded storage layout and comparison
+9. `docs/08-consistency.md` - Consistency guarantees
+10. `docs/09-security.md` - Authentication and authorization
+11. `docs/10-operations.md` - Operational procedures
+12. `docs/11-backoff.md` - Retry and backoff logic
+13. `docs/12-webhooks.md` - Webhook notifications
+17. `docs/16-workflows.md` - GitHub Actions workflows guide
+18. `docs/17-performance-tuning.md` - Performance optimization and tuning guide
+19. `docs/18-package-reference.md` - Package structure and codebase guide
+20. `docs/19-testing.md` - Test coverage and testing strategy
+21. `docs/20-authentication-plugins.md` - Authentication plugin system
+22. `docs/21-developer-guide.md` - Developer guide for contributors
+28. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Pebble, Memory, and extensibility)
 34. `docs/34-streaming-api-guide.md` - gRPC streaming API protocol reference, throughput characteristics, and concurrency model
 
 ### Integration Guides
