@@ -43,6 +43,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 20. `docs/20-authentication-plugins.md` - Authentication plugin system
 21. `docs/21-developer-guide.md` - Developer guide for contributors
 27. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Memory, and extensibility)
+34. `docs/34-streaming-api-guide.md` - gRPC streaming API for producers and workers
 
 ### Integration Guides
 
