@@ -289,3 +289,54 @@ func TestClient_RunRequiresHandler(t *testing.T) {
 		t.Error("nil handler should error")
 	}
 }
+
+// TestClient_RunBatchSize drives the Phase 6 / Q2 batch path end-to-end:
+// 20 tasks enqueued, BatchSize=8, Concurrency=1. The single slot should
+// pull tasks in batches and submit results as ResultBatches. Test
+// passes if all 20 tasks are processed within the deadline.
+func TestClient_RunBatchSize(t *testing.T) {
+	f := newFixture(t)
+	defer f.stop()
+
+	const n = 20
+	for i := range n {
+		f.enqueue(t, fmt.Sprintf(`{"command":"GENERATE_MASTER","payload":{"i":%d}}`, i))
+	}
+
+	c, err := workerclient.New(workerclient.Config{
+		Addr:         f.streamAddr,
+		Token:        "dev-token",
+		Commands:     []string{"GENERATE_MASTER"},
+		Concurrency:  1,
+		BatchSize:    8,
+		LeaseSeconds: 60,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Close()
+
+	var processed atomic.Int64
+	done := make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = c.Run(ctx, func(_ context.Context, _ workerclient.Task) workerclient.Result {
+			if processed.Add(1) >= n {
+				select {
+				case <-done:
+				default:
+					close(done)
+				}
+			}
+			return workerclient.Completed(map[string]any{"ok": true})
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("processed only %d/%d before timeout", processed.Load(), n)
+	}
+}

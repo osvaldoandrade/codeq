@@ -234,14 +234,21 @@ func (x *Hello) GetWorkerId() string {
 }
 
 // Ready is the worker saying "I have capacity for one more task with
-// any of these commands; push me one when available." The server
-// responds with a Task message when a task becomes available; until
-// then no message is sent for this Ready. Each Ready consumes exactly
-// one Task; if the worker wants prefetching, it sends N Readys.
+// any of these commands; push me one when available." Each Ready
+// consumes up to `count` Tasks; the server responds with either:
+//   - one TaskAssignment per task (count==0 or 1; legacy path), or
+//   - one TaskBatch carrying up to count tasks (count > 1; Phase 6 / Q2).
+//
+// When count==0 the server defaults to 1 for backward compatibility
+// with clients that never set the field.
 type Ready struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Commands      []string               `protobuf:"bytes,1,rep,name=commands,proto3" json:"commands,omitempty"`
-	LeaseSeconds  int32                  `protobuf:"varint,2,opt,name=lease_seconds,json=leaseSeconds,proto3" json:"lease_seconds,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Commands     []string               `protobuf:"bytes,1,rep,name=commands,proto3" json:"commands,omitempty"`
+	LeaseSeconds int32                  `protobuf:"varint,2,opt,name=lease_seconds,json=leaseSeconds,proto3" json:"lease_seconds,omitempty"`
+	// count = max tasks to deliver in response. 0/1 = single TaskAssignment.
+	// >1 = TaskBatch capped at count. Server may deliver fewer than count
+	// if the queue empties before the batch fills.
+	Count         int32 `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -286,6 +293,13 @@ func (x *Ready) GetCommands() []string {
 func (x *Ready) GetLeaseSeconds() int32 {
 	if x != nil {
 		return x.LeaseSeconds
+	}
+	return 0
+}
+
+func (x *Ready) GetCount() int32 {
+	if x != nil {
+		return x.Count
 	}
 	return 0
 }
@@ -523,6 +537,55 @@ func (x *Abandon) GetTaskId() string {
 	return ""
 }
 
+// ResultBatch is the worker submitting completion for N tasks in a
+// single message. Equivalent to N Result events but the server
+// processes them with one BatchSubmit call (single Pebble batch +
+// single round-trip of acks), eliminating the per-task Send overhead
+// and amortising claim/result write paths. Phase 6 / Q2.
+type ResultBatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Results       []*Result              `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResultBatch) Reset() {
+	*x = ResultBatch{}
+	mi := &file_workerpb_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResultBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResultBatch) ProtoMessage() {}
+
+func (x *ResultBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_workerpb_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResultBatch.ProtoReflect.Descriptor instead.
+func (*ResultBatch) Descriptor() ([]byte, []int) {
+	return file_workerpb_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ResultBatch) GetResults() []*Result {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
 type WorkerEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
@@ -533,6 +596,7 @@ type WorkerEvent struct {
 	//	*WorkerEvent_Nack
 	//	*WorkerEvent_Heartbeat
 	//	*WorkerEvent_Abandon
+	//	*WorkerEvent_ResultBatch
 	Event         isWorkerEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -540,7 +604,7 @@ type WorkerEvent struct {
 
 func (x *WorkerEvent) Reset() {
 	*x = WorkerEvent{}
-	mi := &file_workerpb_proto_msgTypes[7]
+	mi := &file_workerpb_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -552,7 +616,7 @@ func (x *WorkerEvent) String() string {
 func (*WorkerEvent) ProtoMessage() {}
 
 func (x *WorkerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[7]
+	mi := &file_workerpb_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -565,7 +629,7 @@ func (x *WorkerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerEvent.ProtoReflect.Descriptor instead.
 func (*WorkerEvent) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{7}
+	return file_workerpb_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *WorkerEvent) GetEvent() isWorkerEvent_Event {
@@ -629,6 +693,15 @@ func (x *WorkerEvent) GetAbandon() *Abandon {
 	return nil
 }
 
+func (x *WorkerEvent) GetResultBatch() *ResultBatch {
+	if x != nil {
+		if x, ok := x.Event.(*WorkerEvent_ResultBatch); ok {
+			return x.ResultBatch
+		}
+	}
+	return nil
+}
+
 type isWorkerEvent_Event interface {
 	isWorkerEvent_Event()
 }
@@ -657,6 +730,10 @@ type WorkerEvent_Abandon struct {
 	Abandon *Abandon `protobuf:"bytes,6,opt,name=abandon,proto3,oneof"`
 }
 
+type WorkerEvent_ResultBatch struct {
+	ResultBatch *ResultBatch `protobuf:"bytes,7,opt,name=result_batch,json=resultBatch,proto3,oneof"`
+}
+
 func (*WorkerEvent_Hello) isWorkerEvent_Event() {}
 
 func (*WorkerEvent_Ready) isWorkerEvent_Event() {}
@@ -669,6 +746,8 @@ func (*WorkerEvent_Heartbeat) isWorkerEvent_Event() {}
 
 func (*WorkerEvent_Abandon) isWorkerEvent_Event() {}
 
+func (*WorkerEvent_ResultBatch) isWorkerEvent_Event() {}
+
 type HelloAck struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
@@ -679,7 +758,7 @@ type HelloAck struct {
 
 func (x *HelloAck) Reset() {
 	*x = HelloAck{}
-	mi := &file_workerpb_proto_msgTypes[8]
+	mi := &file_workerpb_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -691,7 +770,7 @@ func (x *HelloAck) String() string {
 func (*HelloAck) ProtoMessage() {}
 
 func (x *HelloAck) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[8]
+	mi := &file_workerpb_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -704,7 +783,7 @@ func (x *HelloAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HelloAck.ProtoReflect.Descriptor instead.
 func (*HelloAck) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{8}
+	return file_workerpb_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *HelloAck) GetWorkerId() string {
@@ -732,7 +811,7 @@ type TaskAssignment struct {
 
 func (x *TaskAssignment) Reset() {
 	*x = TaskAssignment{}
-	mi := &file_workerpb_proto_msgTypes[9]
+	mi := &file_workerpb_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -744,7 +823,7 @@ func (x *TaskAssignment) String() string {
 func (*TaskAssignment) ProtoMessage() {}
 
 func (x *TaskAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[9]
+	mi := &file_workerpb_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -757,12 +836,106 @@ func (x *TaskAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskAssignment.ProtoReflect.Descriptor instead.
 func (*TaskAssignment) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{9}
+	return file_workerpb_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TaskAssignment) GetTask() *Task {
 	if x != nil {
 		return x.Task
+	}
+	return nil
+}
+
+// TaskBatch is the server's response to a Ready with count > 1.
+// Carries up to Ready.count Tasks in a single message. May be shorter
+// than count if the queue emptied; an empty TaskBatch is a legal
+// no-tasks-available response.
+type TaskBatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tasks         []*Task                `protobuf:"bytes,1,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskBatch) Reset() {
+	*x = TaskBatch{}
+	mi := &file_workerpb_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskBatch) ProtoMessage() {}
+
+func (x *TaskBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_workerpb_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskBatch.ProtoReflect.Descriptor instead.
+func (*TaskBatch) Descriptor() ([]byte, []int) {
+	return file_workerpb_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TaskBatch) GetTasks() []*Task {
+	if x != nil {
+		return x.Tasks
+	}
+	return nil
+}
+
+// ResultAckBatch acknowledges all results in a ResultBatch in one
+// message. Order matches the ResultBatch.results order.
+type ResultAckBatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Acks          []*ResultAck           `protobuf:"bytes,1,rep,name=acks,proto3" json:"acks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResultAckBatch) Reset() {
+	*x = ResultAckBatch{}
+	mi := &file_workerpb_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResultAckBatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResultAckBatch) ProtoMessage() {}
+
+func (x *ResultAckBatch) ProtoReflect() protoreflect.Message {
+	mi := &file_workerpb_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResultAckBatch.ProtoReflect.Descriptor instead.
+func (*ResultAckBatch) Descriptor() ([]byte, []int) {
+	return file_workerpb_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ResultAckBatch) GetAcks() []*ResultAck {
+	if x != nil {
+		return x.Acks
 	}
 	return nil
 }
@@ -780,7 +953,7 @@ type ResultAck struct {
 
 func (x *ResultAck) Reset() {
 	*x = ResultAck{}
-	mi := &file_workerpb_proto_msgTypes[10]
+	mi := &file_workerpb_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -792,7 +965,7 @@ func (x *ResultAck) String() string {
 func (*ResultAck) ProtoMessage() {}
 
 func (x *ResultAck) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[10]
+	mi := &file_workerpb_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -805,7 +978,7 @@ func (x *ResultAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResultAck.ProtoReflect.Descriptor instead.
 func (*ResultAck) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{10}
+	return file_workerpb_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ResultAck) GetTaskId() string {
@@ -840,7 +1013,7 @@ type HeartbeatAck struct {
 
 func (x *HeartbeatAck) Reset() {
 	*x = HeartbeatAck{}
-	mi := &file_workerpb_proto_msgTypes[11]
+	mi := &file_workerpb_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -852,7 +1025,7 @@ func (x *HeartbeatAck) String() string {
 func (*HeartbeatAck) ProtoMessage() {}
 
 func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[11]
+	mi := &file_workerpb_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -865,7 +1038,7 @@ func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatAck.ProtoReflect.Descriptor instead.
 func (*HeartbeatAck) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{11}
+	return file_workerpb_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *HeartbeatAck) GetTaskId() string {
@@ -902,7 +1075,7 @@ type NackAck struct {
 
 func (x *NackAck) Reset() {
 	*x = NackAck{}
-	mi := &file_workerpb_proto_msgTypes[12]
+	mi := &file_workerpb_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -914,7 +1087,7 @@ func (x *NackAck) String() string {
 func (*NackAck) ProtoMessage() {}
 
 func (x *NackAck) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[12]
+	mi := &file_workerpb_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -927,7 +1100,7 @@ func (x *NackAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NackAck.ProtoReflect.Descriptor instead.
 func (*NackAck) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{12}
+	return file_workerpb_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *NackAck) GetTaskId() string {
@@ -976,7 +1149,7 @@ type AbandonAck struct {
 
 func (x *AbandonAck) Reset() {
 	*x = AbandonAck{}
-	mi := &file_workerpb_proto_msgTypes[13]
+	mi := &file_workerpb_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -988,7 +1161,7 @@ func (x *AbandonAck) String() string {
 func (*AbandonAck) ProtoMessage() {}
 
 func (x *AbandonAck) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[13]
+	mi := &file_workerpb_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1001,7 +1174,7 @@ func (x *AbandonAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbandonAck.ProtoReflect.Descriptor instead.
 func (*AbandonAck) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{13}
+	return file_workerpb_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AbandonAck) GetTaskId() string {
@@ -1035,7 +1208,7 @@ type ServerError struct {
 
 func (x *ServerError) Reset() {
 	*x = ServerError{}
-	mi := &file_workerpb_proto_msgTypes[14]
+	mi := &file_workerpb_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1047,7 +1220,7 @@ func (x *ServerError) String() string {
 func (*ServerError) ProtoMessage() {}
 
 func (x *ServerError) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[14]
+	mi := &file_workerpb_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1060,7 +1233,7 @@ func (x *ServerError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerError.ProtoReflect.Descriptor instead.
 func (*ServerError) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{14}
+	return file_workerpb_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ServerError) GetMessage() string {
@@ -1088,6 +1261,8 @@ type ServerEvent struct {
 	//	*ServerEvent_NackAck
 	//	*ServerEvent_AbandonAck
 	//	*ServerEvent_Error
+	//	*ServerEvent_TaskBatch
+	//	*ServerEvent_ResultAckBatch
 	Event         isServerEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1095,7 +1270,7 @@ type ServerEvent struct {
 
 func (x *ServerEvent) Reset() {
 	*x = ServerEvent{}
-	mi := &file_workerpb_proto_msgTypes[15]
+	mi := &file_workerpb_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1282,7 @@ func (x *ServerEvent) String() string {
 func (*ServerEvent) ProtoMessage() {}
 
 func (x *ServerEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_workerpb_proto_msgTypes[15]
+	mi := &file_workerpb_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1295,7 @@ func (x *ServerEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerEvent.ProtoReflect.Descriptor instead.
 func (*ServerEvent) Descriptor() ([]byte, []int) {
-	return file_workerpb_proto_rawDescGZIP(), []int{15}
+	return file_workerpb_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ServerEvent) GetEvent() isServerEvent_Event {
@@ -1193,6 +1368,24 @@ func (x *ServerEvent) GetError() *ServerError {
 	return nil
 }
 
+func (x *ServerEvent) GetTaskBatch() *TaskBatch {
+	if x != nil {
+		if x, ok := x.Event.(*ServerEvent_TaskBatch); ok {
+			return x.TaskBatch
+		}
+	}
+	return nil
+}
+
+func (x *ServerEvent) GetResultAckBatch() *ResultAckBatch {
+	if x != nil {
+		if x, ok := x.Event.(*ServerEvent_ResultAckBatch); ok {
+			return x.ResultAckBatch
+		}
+	}
+	return nil
+}
+
 type isServerEvent_Event interface {
 	isServerEvent_Event()
 }
@@ -1225,6 +1418,14 @@ type ServerEvent_Error struct {
 	Error *ServerError `protobuf:"bytes,7,opt,name=error,proto3,oneof"`
 }
 
+type ServerEvent_TaskBatch struct {
+	TaskBatch *TaskBatch `protobuf:"bytes,8,opt,name=task_batch,json=taskBatch,proto3,oneof"`
+}
+
+type ServerEvent_ResultAckBatch struct {
+	ResultAckBatch *ResultAckBatch `protobuf:"bytes,9,opt,name=result_ack_batch,json=resultAckBatch,proto3,oneof"`
+}
+
 func (*ServerEvent_HelloAck) isServerEvent_Event() {}
 
 func (*ServerEvent_Task) isServerEvent_Event() {}
@@ -1238,6 +1439,10 @@ func (*ServerEvent_NackAck) isServerEvent_Event() {}
 func (*ServerEvent_AbandonAck) isServerEvent_Event() {}
 
 func (*ServerEvent_Error) isServerEvent_Event() {}
+
+func (*ServerEvent_TaskBatch) isServerEvent_Event() {}
+
+func (*ServerEvent_ResultAckBatch) isServerEvent_Event() {}
 
 var File_workerpb_proto protoreflect.FileDescriptor
 
@@ -1264,10 +1469,11 @@ const file_workerpb_proto_rawDesc = "" +
 	"updated_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\":\n" +
 	"\x05Hello\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1b\n" +
-	"\tworker_id\x18\x02 \x01(\tR\bworkerId\"H\n" +
+	"\tworker_id\x18\x02 \x01(\tR\bworkerId\"^\n" +
 	"\x05Ready\x12\x1a\n" +
 	"\bcommands\x18\x01 \x03(\tR\bcommands\x12#\n" +
-	"\rlease_seconds\x18\x02 \x01(\x05R\fleaseSeconds\"p\n" +
+	"\rlease_seconds\x18\x02 \x01(\x05R\fleaseSeconds\x12\x14\n" +
+	"\x05count\x18\x03 \x01(\x05R\x05count\"p\n" +
 	"\x06Result\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +
@@ -1282,20 +1488,27 @@ const file_workerpb_proto_rawDesc = "" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12%\n" +
 	"\x0eextend_seconds\x18\x02 \x01(\x05R\rextendSeconds\"\"\n" +
 	"\aAbandon\x12\x17\n" +
-	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x9e\x02\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"9\n" +
+	"\vResultBatch\x12*\n" +
+	"\aresults\x18\x01 \x03(\v2\x10.workerpb.ResultR\aresults\"\xda\x02\n" +
 	"\vWorkerEvent\x12'\n" +
 	"\x05hello\x18\x01 \x01(\v2\x0f.workerpb.HelloH\x00R\x05hello\x12'\n" +
 	"\x05ready\x18\x02 \x01(\v2\x0f.workerpb.ReadyH\x00R\x05ready\x12*\n" +
 	"\x06result\x18\x03 \x01(\v2\x10.workerpb.ResultH\x00R\x06result\x12$\n" +
 	"\x04nack\x18\x04 \x01(\v2\x0e.workerpb.NackH\x00R\x04nack\x123\n" +
 	"\theartbeat\x18\x05 \x01(\v2\x13.workerpb.HeartbeatH\x00R\theartbeat\x12-\n" +
-	"\aabandon\x18\x06 \x01(\v2\x11.workerpb.AbandonH\x00R\aabandonB\a\n" +
+	"\aabandon\x18\x06 \x01(\v2\x11.workerpb.AbandonH\x00R\aabandon\x12:\n" +
+	"\fresult_batch\x18\a \x01(\v2\x15.workerpb.ResultBatchH\x00R\vresultBatchB\a\n" +
 	"\x05event\"D\n" +
 	"\bHelloAck\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\"4\n" +
 	"\x0eTaskAssignment\x12\"\n" +
-	"\x04task\x18\x01 \x01(\v2\x0e.workerpb.TaskR\x04task\"Y\n" +
+	"\x04task\x18\x01 \x01(\v2\x0e.workerpb.TaskR\x04task\"1\n" +
+	"\tTaskBatch\x12$\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x0e.workerpb.TaskR\x05tasks\"9\n" +
+	"\x0eResultAckBatch\x12'\n" +
+	"\x04acks\x18\x01 \x03(\v2\x13.workerpb.ResultAckR\x04acks\"Y\n" +
 	"\tResultAck\x12\x17\n" +
 	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12\x0e\n" +
 	"\x02ok\x18\x02 \x01(\bR\x02ok\x12#\n" +
@@ -1317,7 +1530,7 @@ const file_workerpb_proto_rawDesc = "" +
 	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\";\n" +
 	"\vServerError\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage\x12\x12\n" +
-	"\x04code\x18\x02 \x01(\tR\x04code\"\x86\x03\n" +
+	"\x04code\x18\x02 \x01(\tR\x04code\"\x82\x04\n" +
 	"\vServerEvent\x121\n" +
 	"\thello_ack\x18\x01 \x01(\v2\x12.workerpb.HelloAckH\x00R\bhelloAck\x12.\n" +
 	"\x04task\x18\x02 \x01(\v2\x18.workerpb.TaskAssignmentH\x00R\x04task\x124\n" +
@@ -1327,7 +1540,10 @@ const file_workerpb_proto_rawDesc = "" +
 	"\bnack_ack\x18\x05 \x01(\v2\x11.workerpb.NackAckH\x00R\anackAck\x127\n" +
 	"\vabandon_ack\x18\x06 \x01(\v2\x14.workerpb.AbandonAckH\x00R\n" +
 	"abandonAck\x12-\n" +
-	"\x05error\x18\a \x01(\v2\x15.workerpb.ServerErrorH\x00R\x05errorB\a\n" +
+	"\x05error\x18\a \x01(\v2\x15.workerpb.ServerErrorH\x00R\x05error\x124\n" +
+	"\n" +
+	"task_batch\x18\b \x01(\v2\x13.workerpb.TaskBatchH\x00R\ttaskBatch\x12D\n" +
+	"\x10result_ack_batch\x18\t \x01(\v2\x18.workerpb.ResultAckBatchH\x00R\x0eresultAckBatchB\a\n" +
 	"\x05event2J\n" +
 	"\fWorkerStream\x12:\n" +
 	"\x06Stream\x12\x15.workerpb.WorkerEvent\x1a\x15.workerpb.ServerEvent(\x010\x01B:Z8github.com/osvaldoandrade/codeq/internal/worker/workerpbb\x06proto3"
@@ -1344,7 +1560,7 @@ func file_workerpb_proto_rawDescGZIP() []byte {
 	return file_workerpb_proto_rawDescData
 }
 
-var file_workerpb_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_workerpb_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_workerpb_proto_goTypes = []any{
 	(*Task)(nil),                  // 0: workerpb.Task
 	(*Hello)(nil),                 // 1: workerpb.Hello
@@ -1353,41 +1569,50 @@ var file_workerpb_proto_goTypes = []any{
 	(*Nack)(nil),                  // 4: workerpb.Nack
 	(*Heartbeat)(nil),             // 5: workerpb.Heartbeat
 	(*Abandon)(nil),               // 6: workerpb.Abandon
-	(*WorkerEvent)(nil),           // 7: workerpb.WorkerEvent
-	(*HelloAck)(nil),              // 8: workerpb.HelloAck
-	(*TaskAssignment)(nil),        // 9: workerpb.TaskAssignment
-	(*ResultAck)(nil),             // 10: workerpb.ResultAck
-	(*HeartbeatAck)(nil),          // 11: workerpb.HeartbeatAck
-	(*NackAck)(nil),               // 12: workerpb.NackAck
-	(*AbandonAck)(nil),            // 13: workerpb.AbandonAck
-	(*ServerError)(nil),           // 14: workerpb.ServerError
-	(*ServerEvent)(nil),           // 15: workerpb.ServerEvent
-	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
+	(*ResultBatch)(nil),           // 7: workerpb.ResultBatch
+	(*WorkerEvent)(nil),           // 8: workerpb.WorkerEvent
+	(*HelloAck)(nil),              // 9: workerpb.HelloAck
+	(*TaskAssignment)(nil),        // 10: workerpb.TaskAssignment
+	(*TaskBatch)(nil),             // 11: workerpb.TaskBatch
+	(*ResultAckBatch)(nil),        // 12: workerpb.ResultAckBatch
+	(*ResultAck)(nil),             // 13: workerpb.ResultAck
+	(*HeartbeatAck)(nil),          // 14: workerpb.HeartbeatAck
+	(*NackAck)(nil),               // 15: workerpb.NackAck
+	(*AbandonAck)(nil),            // 16: workerpb.AbandonAck
+	(*ServerError)(nil),           // 17: workerpb.ServerError
+	(*ServerEvent)(nil),           // 18: workerpb.ServerEvent
+	(*timestamppb.Timestamp)(nil), // 19: google.protobuf.Timestamp
 }
 var file_workerpb_proto_depIdxs = []int32{
-	16, // 0: workerpb.Task.created_at:type_name -> google.protobuf.Timestamp
-	16, // 1: workerpb.Task.updated_at:type_name -> google.protobuf.Timestamp
-	1,  // 2: workerpb.WorkerEvent.hello:type_name -> workerpb.Hello
-	2,  // 3: workerpb.WorkerEvent.ready:type_name -> workerpb.Ready
-	3,  // 4: workerpb.WorkerEvent.result:type_name -> workerpb.Result
-	4,  // 5: workerpb.WorkerEvent.nack:type_name -> workerpb.Nack
-	5,  // 6: workerpb.WorkerEvent.heartbeat:type_name -> workerpb.Heartbeat
-	6,  // 7: workerpb.WorkerEvent.abandon:type_name -> workerpb.Abandon
-	0,  // 8: workerpb.TaskAssignment.task:type_name -> workerpb.Task
-	8,  // 9: workerpb.ServerEvent.hello_ack:type_name -> workerpb.HelloAck
-	9,  // 10: workerpb.ServerEvent.task:type_name -> workerpb.TaskAssignment
-	10, // 11: workerpb.ServerEvent.result_ack:type_name -> workerpb.ResultAck
-	11, // 12: workerpb.ServerEvent.heartbeat_ack:type_name -> workerpb.HeartbeatAck
-	12, // 13: workerpb.ServerEvent.nack_ack:type_name -> workerpb.NackAck
-	13, // 14: workerpb.ServerEvent.abandon_ack:type_name -> workerpb.AbandonAck
-	14, // 15: workerpb.ServerEvent.error:type_name -> workerpb.ServerError
-	7,  // 16: workerpb.WorkerStream.Stream:input_type -> workerpb.WorkerEvent
-	15, // 17: workerpb.WorkerStream.Stream:output_type -> workerpb.ServerEvent
-	17, // [17:18] is the sub-list for method output_type
-	16, // [16:17] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	19, // 0: workerpb.Task.created_at:type_name -> google.protobuf.Timestamp
+	19, // 1: workerpb.Task.updated_at:type_name -> google.protobuf.Timestamp
+	3,  // 2: workerpb.ResultBatch.results:type_name -> workerpb.Result
+	1,  // 3: workerpb.WorkerEvent.hello:type_name -> workerpb.Hello
+	2,  // 4: workerpb.WorkerEvent.ready:type_name -> workerpb.Ready
+	3,  // 5: workerpb.WorkerEvent.result:type_name -> workerpb.Result
+	4,  // 6: workerpb.WorkerEvent.nack:type_name -> workerpb.Nack
+	5,  // 7: workerpb.WorkerEvent.heartbeat:type_name -> workerpb.Heartbeat
+	6,  // 8: workerpb.WorkerEvent.abandon:type_name -> workerpb.Abandon
+	7,  // 9: workerpb.WorkerEvent.result_batch:type_name -> workerpb.ResultBatch
+	0,  // 10: workerpb.TaskAssignment.task:type_name -> workerpb.Task
+	0,  // 11: workerpb.TaskBatch.tasks:type_name -> workerpb.Task
+	13, // 12: workerpb.ResultAckBatch.acks:type_name -> workerpb.ResultAck
+	9,  // 13: workerpb.ServerEvent.hello_ack:type_name -> workerpb.HelloAck
+	10, // 14: workerpb.ServerEvent.task:type_name -> workerpb.TaskAssignment
+	13, // 15: workerpb.ServerEvent.result_ack:type_name -> workerpb.ResultAck
+	14, // 16: workerpb.ServerEvent.heartbeat_ack:type_name -> workerpb.HeartbeatAck
+	15, // 17: workerpb.ServerEvent.nack_ack:type_name -> workerpb.NackAck
+	16, // 18: workerpb.ServerEvent.abandon_ack:type_name -> workerpb.AbandonAck
+	17, // 19: workerpb.ServerEvent.error:type_name -> workerpb.ServerError
+	11, // 20: workerpb.ServerEvent.task_batch:type_name -> workerpb.TaskBatch
+	12, // 21: workerpb.ServerEvent.result_ack_batch:type_name -> workerpb.ResultAckBatch
+	8,  // 22: workerpb.WorkerStream.Stream:input_type -> workerpb.WorkerEvent
+	18, // 23: workerpb.WorkerStream.Stream:output_type -> workerpb.ServerEvent
+	23, // [23:24] is the sub-list for method output_type
+	22, // [22:23] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_workerpb_proto_init() }
@@ -1395,15 +1620,16 @@ func file_workerpb_proto_init() {
 	if File_workerpb_proto != nil {
 		return
 	}
-	file_workerpb_proto_msgTypes[7].OneofWrappers = []any{
+	file_workerpb_proto_msgTypes[8].OneofWrappers = []any{
 		(*WorkerEvent_Hello)(nil),
 		(*WorkerEvent_Ready)(nil),
 		(*WorkerEvent_Result)(nil),
 		(*WorkerEvent_Nack)(nil),
 		(*WorkerEvent_Heartbeat)(nil),
 		(*WorkerEvent_Abandon)(nil),
+		(*WorkerEvent_ResultBatch)(nil),
 	}
-	file_workerpb_proto_msgTypes[15].OneofWrappers = []any{
+	file_workerpb_proto_msgTypes[18].OneofWrappers = []any{
 		(*ServerEvent_HelloAck)(nil),
 		(*ServerEvent_Task)(nil),
 		(*ServerEvent_ResultAck)(nil),
@@ -1411,6 +1637,8 @@ func file_workerpb_proto_init() {
 		(*ServerEvent_NackAck)(nil),
 		(*ServerEvent_AbandonAck)(nil),
 		(*ServerEvent_Error)(nil),
+		(*ServerEvent_TaskBatch)(nil),
+		(*ServerEvent_ResultAckBatch)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1418,7 +1646,7 @@ func file_workerpb_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_workerpb_proto_rawDesc), len(file_workerpb_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

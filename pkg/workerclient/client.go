@@ -41,11 +41,21 @@ type Config struct {
 	Commands []string
 
 	// Concurrency is the number of in-flight tasks the client maintains.
-	// Defaults to 1. Each slot holds one Ready→Task→Result cycle.
+	// Defaults to 1. Each slot holds one Ready→Task(s)→Result(s) cycle.
 	Concurrency int
 
 	// LeaseSeconds is sent on each Ready. 0 means "server default".
 	LeaseSeconds int
+
+	// BatchSize controls how many tasks each slot tries to claim per
+	// Ready, and how many Results coalesce into one ResultBatch. 0/1
+	// keeps the legacy single-task path (one Ready → one Task → one
+	// Result per cycle). >1 enables Phase 6 / Q2 batching: each cycle
+	// pulls up to BatchSize Tasks via Ready{count=BatchSize} → server
+	// replies with TaskBatch, and the resulting Results are sent back
+	// as one ResultBatch. Amortises gRPC framing + Pebble commit cost
+	// across the batch.
+	BatchSize int
 
 	// IdleBackoff is how long a slot waits before re-sending Ready when
 	// the previous Ready didn't yield a task within ReadyTimeout. Defaults
@@ -139,8 +149,13 @@ func (c *Client) Run(ctx context.Context, h Handler) error {
 type session struct {
 	cfg    Config
 	stream workerpb.WorkerStream_StreamClient
-	taskCh chan *workerpb.Task
-	log    *slog.Logger
+	// batchCh delivers each Ready's response to one slot. For
+	// BatchSize<=1 the batch contains exactly one task (legacy single-
+	// task path). For BatchSize>1 it contains up to BatchSize tasks
+	// from a single TaskBatch — kept together so the slot can issue
+	// one ResultBatch in response without serial Send overhead.
+	batchCh chan []*workerpb.Task
+	log     *slog.Logger
 
 	ctx        context.Context
 	sendCh     chan *workerpb.WorkerEvent
@@ -157,7 +172,7 @@ func newSession(ctx context.Context, cfg Config, stream workerpb.WorkerStream_St
 	s := &session{
 		cfg:        cfg,
 		stream:     stream,
-		taskCh:     make(chan *workerpb.Task),
+		batchCh:    make(chan []*workerpb.Task),
 		log:        cfg.Logger,
 		ctx:        ctx,
 		sendCh:     make(chan *workerpb.WorkerEvent, sendChanBufferClient),
@@ -210,7 +225,7 @@ func (s *session) run(ctx context.Context, h Handler) error {
 	readerErrCh := make(chan error, 1)
 	go func() {
 		readerErrCh <- s.readLoop(ctx)
-		close(s.taskCh)
+		close(s.batchCh)
 	}()
 
 	// N slots in parallel, each looping: Ready → Task → Handler → Result.
@@ -269,11 +284,21 @@ func (s *session) readLoop(ctx context.Context) error {
 		switch e := ev.Event.(type) {
 		case *workerpb.ServerEvent_Task:
 			select {
-			case s.taskCh <- e.Task.Task:
+			case s.batchCh <- []*workerpb.Task{e.Task.Task}:
+			case <-ctx.Done():
+				return nil
+			}
+		case *workerpb.ServerEvent_TaskBatch:
+			if len(e.TaskBatch.Tasks) == 0 {
+				continue
+			}
+			select {
+			case s.batchCh <- e.TaskBatch.Tasks:
 			case <-ctx.Done():
 				return nil
 			}
 		case *workerpb.ServerEvent_ResultAck,
+			*workerpb.ServerEvent_ResultAckBatch,
 			*workerpb.ServerEvent_HeartbeatAck,
 			*workerpb.ServerEvent_NackAck,
 			*workerpb.ServerEvent_AbandonAck:
@@ -290,6 +315,10 @@ func (s *session) readLoop(ctx context.Context) error {
 }
 
 func (s *session) slotLoop(ctx context.Context, h Handler) {
+	batchSize := s.cfg.BatchSize
+	if batchSize < 1 {
+		batchSize = 1
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -298,6 +327,7 @@ func (s *session) slotLoop(ctx context.Context, h Handler) {
 			Ready: &workerpb.Ready{
 				Commands:     s.cfg.Commands,
 				LeaseSeconds: int32(s.cfg.LeaseSeconds),
+				Count:        int32(batchSize),
 			},
 		}}); err != nil {
 			s.log.Warn("workerclient: send ready", "err", err)
@@ -305,13 +335,58 @@ func (s *session) slotLoop(ctx context.Context, h Handler) {
 		}
 
 		select {
-		case t, ok := <-s.taskCh:
+		case batch, ok := <-s.batchCh:
 			if !ok {
 				return
 			}
-			s.dispatch(ctx, h, t)
+			s.dispatchBatch(ctx, h, batch)
 		case <-ctx.Done():
 			return
+		}
+	}
+}
+
+// dispatchBatch invokes the handler for every task in the batch and
+// coalesces the results into one ResultBatch send when len(batch)>1.
+// Splits Result vs Nack vs Abandon per result kind: only "Completed"
+// and "Failed" carry through the batch path because BatchSubmit on
+// the server only handles Submit. Nack and Abandon are rare under
+// load and fall back to per-message sends.
+func (s *session) dispatchBatch(ctx context.Context, h Handler, batch []*workerpb.Task) {
+	if len(batch) == 1 {
+		s.dispatch(ctx, h, batch[0])
+		return
+	}
+	results := make([]*workerpb.Result, 0, len(batch))
+	for _, pt := range batch {
+		t := protoToTask(pt)
+		res := h(ctx, t)
+		switch res.kind {
+		case resultCompleted:
+			var payload []byte
+			if res.body != nil {
+				if b, err := sonic.Marshal(res.body); err == nil {
+					payload = b
+				}
+			}
+			results = append(results, &workerpb.Result{
+				TaskId: pt.Id, Status: "COMPLETED", ResultJson: payload,
+			})
+		case resultFailed:
+			results = append(results, &workerpb.Result{
+				TaskId: pt.Id, Status: "FAILED", Error: res.err,
+			})
+		default:
+			// Nack / Abandon don't go through BatchSubmit on the server;
+			// send per-task so they take the rare-path handler.
+			_ = s.applyResult(pt.Id, res)
+		}
+	}
+	if len(results) > 0 {
+		if err := s.send(&workerpb.WorkerEvent{Event: &workerpb.WorkerEvent_ResultBatch{
+			ResultBatch: &workerpb.ResultBatch{Results: results},
+		}}); err != nil {
+			s.log.Warn("workerclient: send result batch", "err", err)
 		}
 	}
 }
