@@ -1017,3 +1017,705 @@ preparation.
 replication instead of the API-based approach above. See
 [§3.3 KVRocks Scaling](#33-kvrocks-scaling-and-replication) for
 replication setup.
+
+---
+
+## 6. Pebble Single-Node Runbook
+
+Sections 1-5 target the legacy KVRocks/Redis backend. From v0.4 the
+default `persistenceProvider` is `pebble` — an embedded LSM that runs
+in-process under `persistenceConfig.path`. Operationally Pebble is
+closer to SQLite or RocksDB than to Redis: no daemon, no network port,
+exclusive directory lock. See
+[Storage layout (Pebble)](./07b-storage-pebble.md) for the key schema
+and [Configuration](./14-configuration.md) for tunables. The runbooks
+below assume `persistenceProvider: pebble`.
+
+### 6.1 Backup and Restore (Pebble)
+
+**When to use:** Before major maintenance, before binary upgrades that
+touch the persistence schema, or as part of disaster-recovery drills.
+
+**Backup strategies:** Pebble offers three valid options. Pick one
+based on your downtime tolerance:
+
+| Strategy | Downtime | Consistency | Tool |
+|---|---|---|---|
+| Pebble checkpoint (online) | None | Crash-consistent snapshot | `pebble.Checkpoint(destDir)` |
+| Filesystem snapshot (online) | None | Filesystem-consistent | LVM, ZFS, EBS |
+| Cold copy (offline) | Stop API | Byte-identical | `cp -a`, `rsync` |
+
+`pebble.Checkpoint` is the recommended online path: it produces a
+self-contained directory with hard-linked SSTs and a fresh `MANIFEST`.
+Restore is `cp -a <checkpoint> <new-path>` and pointing
+`persistenceConfig.path` at it. Concurrent writes do not invalidate
+the snapshot.
+
+**Online backup procedure (single-shard Pebble checkpoint):**
+
+1. **Trigger** a checkpoint via the admin endpoint. The destination
+   must be on the same filesystem as the live data so Pebble can
+   hard-link SSTs:
+
+   ```bash
+   curl -X POST http://<api-host>:8080/v1/codeq/admin/pebble/checkpoint \
+     -H "Authorization: Bearer <token>" \
+     -H "Content-Type: application/json" \
+     -d '{"destination": "/backup/codeq-pebble-checkpoint-'"$(date +%Y%m%d%H%M%S)"'"}'
+   ```
+
+2. **Archive** the checkpoint and the config to durable storage:
+
+   ```bash
+   tar -C /backup -czf codeq-pebble-$(date +%Y%m%d%H%M%S).tar.gz \
+     codeq-pebble-checkpoint-<timestamp>/
+   cp /etc/codeq/config.yml /backup/config-$(date +%Y%m%d%H%M%S).yml
+   aws s3 cp codeq-pebble-*.tar.gz s3://codeq-backups/$(hostname)/
+   ```
+
+3. **Verify** the archive on a staging host monthly — backups you
+   never restore are not backups. `tar -tzf` should show `OPTIONS-*`,
+   `CURRENT`, `MANIFEST-*`, and `*.sst` entries.
+
+**Offline backup (cold copy):** stop the API, `rsync -aHAX` the data
+directory, restart. Do **not** copy a live Pebble directory with plain
+`cp` outside of a checkpoint or filesystem snapshot — Pebble rewrites
+the `MANIFEST` and active `*.sst` concurrently and a torn copy fails to
+open with `corruption: missing files referenced by manifest`.
+
+**Restore procedure:** stop the API, move the existing directory
+aside (do not delete until restore is verified), extract the backup
+into place, fix ownership, start the API. The log should show `pebble
+open`, `recover seq`, and `recoverLeases` succeed in under a second.
+
+```bash
+systemctl stop codeq-api
+mv /var/lib/codeq/pebble /var/lib/codeq/pebble.broken-$(date +%Y%m%d%H%M%S)
+tar -C /var/lib/codeq -xzf /backup/codeq-pebble-<timestamp>.tar.gz
+mv /var/lib/codeq/codeq-pebble-checkpoint-<timestamp> /var/lib/codeq/pebble
+chown -R codeq:codeq /var/lib/codeq/pebble
+systemctl start codeq-api
+curl -s http://<api-host>:8080/metrics | grep codeq_queue_depth
+```
+
+**Rollback:** the original directory is at `pebble.broken-<timestamp>`.
+Stop the API, swap them back, restart.
+
+---
+
+### 6.2 Disk Full and Corruption Recovery
+
+**When to use:** the API logs `pebble: out of disk space`, `corruption:
+...`, or refuses to start with `pebble open: ...`.
+
+**Disk full (`no space left on device`):** Pebble blocks writes when
+the volume fills — the memtable can't flush and compactions can't run.
+Free space outside the Pebble directory first (journals, log archives,
+cores — don't touch SSTs by hand), then grow the volume (`lvextend`,
+`aws ec2 modify-volume`, `resize2fs`). Pebble has no shrink path —
+reclaim only happens when compactions drop superseded SSTs. Restart
+the API once headroom is available.
+
+> **Performance**: provision Pebble volumes at 2x the steady-state
+> on-disk size. Compaction needs room for the new SST before the old
+> one is dropped, and a checkpoint hard-links every live SST into a
+> second directory tree until you archive it.
+
+**Corruption (symptom: `pebble open: corruption: ...`):**
+
+Corruption comes from torn power-loss writes, a failing disk, or a
+checkpoint copied while writes were in flight (see §6.1). Pebble
+refuses to open in this state.
+
+1. **Capture** the exact error: `journalctl -u codeq-api --no-pager |
+   grep -A5 "pebble open"`.
+
+2. **Run** `pebble db check /var/lib/codeq/pebble` if the pebble CLI is
+   installed.
+
+3. **Recover** from the most recent backup (§6.1 restore procedure).
+   This is the supported path — there is no in-place repair for
+   corruption the LSM cannot self-heal.
+
+4. **WAL-only fallback (last resort, no backup):** if only the latest
+   `*.log` is corrupt, move it aside (`mv .../000123.log /tmp/`) and
+   restart. This loses every task in that WAL — usually the last few
+   seconds of writes — and is **at-most-once for that window**.
+
+> **Warning**: prefer restore-from-backup. WAL truncation creates tasks
+> that producers believe succeeded but that codeq never persists.
+
+---
+
+### 6.3 Lease Recovery After Crash
+
+**When to use:** the codeq process exited unexpectedly (panic, OOM,
+kernel kill, host reboot) and you need to understand what happens to
+tasks that were `IN_PROGRESS` at the time.
+
+**Background:**
+
+The Pebble backend keeps the lease table in memory only (see
+[`internal/repository/pebble/lease_table.go`](../internal/repository/pebble/lease_table.go)).
+Phase 6 / M2 dropped the `KeyLease` write per Claim and the `KeyLease`
+Get per reaper tick. The trade-off is volatility — a crash empties
+the table. The on-disk inprog index
+(`codeq/q/<cmd>/<tenant>/inprog/`) plus each task body's `LeaseUntil`
+timestamp are the source of truth.
+
+On `Open()` the task repository runs `recoverLeases()`: scan every key
+under `codeq/q/` for the `/inprog/` segment, fetch the task body,
+parse `LeaseUntil`, and seed the in-memory lease table with
+`(taskID, workerID, command, tenantID, untilUnix)`. Tasks whose
+`LeaseUntil` is still in the future re-enter as live leases — the
+original worker can submit results normally. Tasks past `LeaseUntil`
+land as expired entries; the reaper's first sweep Nacks them through
+the same path it uses in normal operation. From the worker's
+perspective a crash is indistinguishable from "the reaper noticed the
+expiry one tick later".
+
+**Procedure (post-crash):**
+
+1. **Restart** the process — lease rebuild is automatic. Confirm with
+   `journalctl -u codeq-api | grep -E "pebble open|recover seq"`.
+
+2. **Wait** one reaper tick (default 5s,
+   `ReaperOptions.LeaseSweepInterval`). Expired leases are Nacked and
+   re-queued for the next polling worker.
+
+3. **Verify** `rate(codeq_lease_expired_total[1m])` normalises. A
+   short spike right after restart is expected — it represents
+   workers that crashed alongside the API.
+
+**Recovery handles transparently:** worker still alive (lease
+re-seeded), worker dead (lease re-seeded, reaper Nacks on expiry),
+corrupt task body (entry skipped, TTL sweep trims later).
+
+**Recovery does not handle:** Pebble itself failing to open (§6.2), a
+panic mid-scan (idempotent — next restart re-runs from scratch).
+
+> **Note**: recovery is linear in inprog queue size. ~10k inprog
+> tasks recover in under 100ms on the reference box. Millions of
+> inprog tasks add multi-second startup latency before the API
+> accepts traffic.
+
+---
+
+### 6.4 Compaction Tuning
+
+**When to use:** sustained write amplification is high, the on-disk
+size grows faster than expected, or background compactions cause
+visible latency spikes.
+
+**Defaults:** codeq runs Pebble close to LevelDB defaults with two
+overrides — a 256 MiB block cache and a per-level bloom filter (10
+bits/key, `TableFilter`) so negative `KeyTask` lookups miss without
+touching SSTs. Memtable size, level multiplier, compaction
+concurrency, and target file sizes use Pebble defaults. This fits
+codeq's workload (small values, high churn, frequent reaper deletes).
+
+**Observability:** Pebble does not export Prometheus metrics directly.
+Watch `du -sh /var/lib/codeq/pebble` over time, the SST count
+(`ls .../*.sst | wc -l` — high means L0 backed up), the WAL count
+(`*.log` — high means memtables aren't flushing), and
+`codeq_task_create_latency_seconds` p99 (spikes correlate with stalls).
+
+**Symptoms and tuning:**
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Steady on-disk growth, low write rate | Reaper not deleting completed tasks | Confirm TTL sweep is running; reduce `Tasks.TTL` |
+| Spiky p99 every few minutes | Background compaction stalls writes | Enable `numShards > 1` to parallelise compactions |
+| Disk usage 5x logical | Many tombstones not yet compacted | Wait — compactions will catch up; consider a manual checkpoint+restore to force a major compaction if growth is unbounded |
+| High WAL count | Memtable flush trailing writes | Likely a slow disk; check `iostat -x 1` for `%util` |
+
+**When to shard:** the biggest compaction lever is `numShards`.
+Running 4 shards in one process parallelises 4 independent compaction
+pipelines. On the reference box that's the difference between 42k
+tasks/s single-shard and 83k tasks/s 4-shard for the full
+create→claim→complete cycle
+(`internal/bench/profile_full_cycle_test.go::TestProfile_FullCycle`,
+`PHASE8_SHARDS=4`). See §7 for shard operations.
+
+> **Performance**: do not enable `fsyncOnCommit` unless your durability
+> requirement demands it. NoSync commit relies on the OS page cache
+> and survives `kill -9` of the codeq process; only host power loss
+> can lose the last in-flight commit. Enabling fsync costs ~20%
+> throughput in the harness and pushes p99 latency from ~1ms to ~10ms.
+
+---
+
+## 7. Phase 8 Intra-Process Sharding Runbook
+
+`numShards > 1` opens N independent Pebble instances under
+`<path>/shard<i>/` and routes every key by `hash(taskID) % N`. The
+sharded repositories fan reads across all shards (Claim is a parallel
+scatter-gather) and write to exactly one (Produce, Complete). Reapers
+are per-shard.
+
+Design rationale: [Sharding](./06-sharding.md) and the
+[intra-process sharding HLD](./24-queue-sharding-hld.md). This section
+is operational only.
+
+### 7.1 Changing `numShards` Safely
+
+**When to use:** scaling up from `numShards: 1` to `numShards: 4`, or
+adjusting the shard count after a hardware change.
+
+> **Warning**: changing `numShards` is **destructive to in-flight
+> data**. The key router (`hash(taskID) % N`) changes its output when
+> N changes, so tasks written under N=1 are no longer addressable
+> under N=4. There is no online resharding — codeq does not migrate
+> existing data into the new shard layout.
+
+**Three viable strategies:**
+
+| Strategy | Downtime | Data loss | When to use |
+|---|---|---|---|
+| Drain then redeploy | Drain window (~minutes) | None | Production, low queue depth |
+| Full restart with backup | API restart (~seconds) | None if backup restored | Production, manageable queue depth |
+| Wipe and redeploy | API restart | All historical tasks | Dev, staging, recoverable workloads |
+
+**Procedure (drain then redeploy — safest):**
+
+1. **Stop** producers (gateway deny rule or sharp rate-limit cut).
+
+2. **Wait** for ready + in-progress depth to reach zero:
+
+   ```promql
+   sum by (command) (codeq_queue_depth{queue=~"ready|in_progress"}) == 0
+   ```
+
+3. **Stop** the API, **back up** the old directory (§6.1), then move
+   it aside and recreate:
+
+   ```bash
+   systemctl stop codeq-api
+   mv /var/lib/codeq/pebble /var/lib/codeq/pebble.pre-resharding-$(date +%Y%m%d)
+   mkdir -p /var/lib/codeq/pebble && chown codeq:codeq /var/lib/codeq/pebble
+   ```
+
+4. **Update** `config.yml` with the new shard count and **start** the
+   API. Verify `ls /var/lib/codeq/pebble/` shows `shard0 … shardN-1`,
+   then re-enable producer traffic.
+
+   ```yaml
+   persistenceProvider: pebble
+   persistenceConfig:
+     path: /var/lib/codeq/pebble
+     numShards: 4         # was 1 (or absent)
+     fsyncOnCommit: false
+   ```
+
+**Procedure (wipe and redeploy — dev only):** stop the API, `rm -rf`
+the data directory, change `numShards` in config, restart. Only
+appropriate when the queue holds no important state.
+
+> **Warning**: shrinking `numShards` (e.g. 4 → 2) follows the same
+> rules as growing it. Even though the source data exists across the
+> 4 old shard directories, codeq does not read shards that the router
+> would not route to. Always treat shard count change as a destructive
+> migration unless you've drained first.
+
+---
+
+### 7.2 Per-Shard Reaper Monitoring
+
+Each shard runs its own reaper. The reapers share no state — they read
+and write only against their own DB. This isolates compaction stalls
+on one shard from blocking expiry sweeps on another.
+
+**Observability:**
+
+Per-shard metric labels are a follow-up; until they land, watch:
+
+| Signal | Healthy | Action if abnormal |
+|---|---|---|
+| Shard directory sizes | Within ~2x of each other | Large imbalance means hash routing is concentrated; consider salting non-random IDs |
+| `codeq_lease_expired_total` rate | Near zero | Sudden spike on one command/tenant points to worker issues, not shard issues |
+| Reaper tick log per shard | Every `LeaseSweepInterval` | Missing on one shard means its reaper goroutine is wedged |
+
+**Goroutine dump for a wedged shard reaper** (requires pprof enabled
+via `cfg.PprofAddr`):
+
+```bash
+curl -s "http://<api-host>:6060/debug/pprof/goroutine?debug=2" | \
+  grep -A20 "pebble.Reaper"
+```
+
+Expect one `(*Reaper).loop` per shard. N-1 loops for N shards means
+one reaper has exited — restart the API to re-spawn it.
+
+---
+
+### 7.3 Backup Considerations with N Shards
+
+With `numShards > 1`, the on-disk layout is:
+
+```text
+/var/lib/codeq/pebble/
+├── shard0/
+│   ├── CURRENT
+│   ├── MANIFEST-*
+│   └── *.sst
+├── shard1/
+├── shard2/
+└── shard3/
+```
+
+Each shard directory is a complete, independent Pebble database. Each
+needs its own checkpoint. Mixing checkpoints from different
+"as-of times" across shards produces an inconsistent restore — a task
+might exist in shard0's checkpoint but not in shard2's because the
+shards were snapshotted seconds apart and shard2's reaper deleted the
+companion result entry in between.
+
+**Procedure (consistent multi-shard backup):**
+
+Pebble checkpoints are crash-consistent per-DB, not cross-DB. For
+low-volume queues just issue the checkpoints back-to-back — sub-second
+skew. For high-volume queues either pause producers briefly or accept
+the skew (codeq's lease+reaper model requeues anything that looks
+inconsistent on restore: a task body in one shard's checkpoint without
+its inprog marker in another's will be requeued).
+
+```bash
+for i in 0 1 2 3; do
+  curl -X POST http://<api-host>:8080/v1/codeq/admin/pebble/checkpoint \
+    -H "Authorization: Bearer <token>" \
+    -H "Content-Type: application/json" \
+    -d "{\"shard\": $i, \"destination\": \"/backup/shard$i-$(date +%s)\"}"
+done
+tar -C /backup -czf codeq-pebble-sharded-$(date +%Y%m%d%H%M%S).tar.gz \
+  shard0-* shard1-* shard2-* shard3-*
+```
+
+**Restore:** unpack into the parent path, ensure subdirectory names
+match `shard0`, `shard1`, etc., and start the API with the same
+`numShards` value as the backup.
+
+> **Warning**: a backup taken at `numShards: 4` cannot be restored at
+> `numShards: 2` (or any other count). The shard topology is encoded
+> in the on-disk layout and the router math.
+
+---
+
+## 8. Cluster (Multi-Node) Runbook
+
+Cluster mode (`cluster.enabled: true`) runs N codeq processes, each
+with its own local Pebble, joined by a consistent-hash ring and gRPC
+inter-node calls. ID-routed operations (Get, Submit, Complete) hash to
+the owning node; Claim is scatter-gather across every node and takes
+the first non-empty response. Each peer gossips its task-ID bloom
+every second so the router can skip RPCs to peers that definitely do
+not hold the requested ID.
+
+See [Cluster architecture](./05-cluster-architecture.md) for design.
+Runbooks below assume the cluster is deployed and healthy.
+
+### 8.1 Add or Remove a Cluster Node
+
+**When to use:** scaling out by adding a node, or decommissioning a
+node.
+
+**Important constraint:** the ring is **static**. Every node must have
+the same `cluster.nodes` list. Adding or removing a node requires a
+rolling restart of every node with the updated list — there is no
+runtime membership change.
+
+**Failover sequence (single node down):**
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Router as Router on N1
+  participant N1 as Node 1 (local Pebble)
+  participant N2 as Node 2 (peer)
+  participant N3 as Node 3 (peer, owner)
+
+  Note over N3: Node 3 crashes
+  Client->>Router: SubmitResult(taskID owned by N3)
+  Router->>N3: gRPC LocalSubmit
+  N3-->>Router: connection refused
+  Router-->>Client: error: node N3 unavailable
+  Note over Client: Client retries on backoff
+  Client->>Router: SubmitResult (retry)
+  Router->>N3: gRPC LocalSubmit
+  N3-->>Router: connection refused
+  Router-->>Client: error
+  Note over N1,N2: Operator restarts N3
+  N3->>N3: Pebble Open, recoverLeases
+  N3->>N2: gossip bloom (next tick)
+  Client->>Router: SubmitResult (retry)
+  Router->>N3: gRPC LocalSubmit
+  N3->>N3: apply
+  N3-->>Router: ok
+  Router-->>Client: ok
+```
+
+The router does not silently re-route writes for a failed peer
+elsewhere — that would create split-brain because the data lives on a
+specific node's disk. Submits and completions for a downed node's IDs
+return errors and the SDK retries until the node is back. Claims
+remain available across the surviving nodes because Claim is a
+scatter-gather and the failed node simply contributes nothing to that
+poll.
+
+**Adding a node:**
+
+1. **Update** every existing node's `cluster.nodes` to include the new
+   node. **Do not** start the new node yet — peers must know about it
+   first:
+
+   ```yaml
+   cluster:
+     enabled: true
+     selfId: node-1
+     grpcAddr: 0.0.0.0:9090
+     nodes:
+       - id: node-1
+         grpcAddr: 10.0.0.11:9090
+       - id: node-2
+         grpcAddr: 10.0.0.12:9090
+       - id: node-3
+         grpcAddr: 10.0.0.13:9090
+       - id: node-4
+         grpcAddr: 10.0.0.14:9090   # new
+   ```
+
+2. **Rolling restart** the existing nodes one at a time (§2.1
+   pattern). They will fail to dial `node-4` until step 3; that's
+   expected and does not affect existing traffic — the router only
+   dials when it has work to send.
+
+3. **Deploy and start** the new node with the same `cluster.nodes`
+   and `selfId: node-4`. Verify each existing node sees `node-4` in
+   its peer pool and bloom gossip is flowing (within ~1s).
+
+**Removing a node:**
+
+1. **Drain** the node by stopping producers and waiting for its
+   `codeq_queue_depth` to reach zero.
+
+2. **Stop** the node, then update every remaining node's
+   `cluster.nodes` to omit it and rolling-restart the survivors.
+
+> **Warning**: never remove a node from the config while its Pebble
+> directory still holds undelivered tasks. The peers will stop
+> routing to it and the data becomes unreachable until the node is
+> re-added. Always drain first.
+
+---
+
+### 8.2 Bloom Gossip Troubleshooting
+
+The bloom is sized at 1M expected items / 0.1% false-positive rate
+(~1.7 MiB on the wire). Gossip cadence is 1s. Each peer's most recent
+bloom is stored in the `BloomCache` (see
+[`internal/cluster/bloom_cache.go`](../internal/cluster/bloom_cache.go)).
+
+**Symptoms of broken or stale gossip:**
+
+| Symptom | Likely cause |
+|---|---|
+| Every ID lookup is a network call | Bloom cache empty for that peer (gossip never arrived) |
+| Lookups hit the right peer most of the time but occasionally miss | Bloom has filled past 1M items — false-positive rate has degraded |
+| One peer never sends a bloom | Outbound gRPC firewall block, or that peer's gossiper goroutine died |
+| Bloom snapshots have stale `seq` | That peer is not adding tasks (idle); the bloom is correct but stale |
+
+**Diagnosis:**
+
+1. **Confirm** the inbound gRPC channel from each peer works:
+
+   ```bash
+   for host in 10.0.0.11 10.0.0.12 10.0.0.13; do
+     nc -zv $host 9090 && echo "$host: ok"
+   done
+   ```
+
+2. **Inspect** the local bloom cache for each peer's last update
+   sequence number (admin endpoint when wired):
+
+   ```bash
+   curl -s http://<api-host>:8080/v1/codeq/admin/cluster/bloom | jq .
+   ```
+
+3. **Check** for `cluster.bloom-gossiper` errors in the log:
+
+   ```bash
+   journalctl -u codeq-api --no-pager | \
+     grep -E "bloom-gossiper|GossipBloom"
+   ```
+
+**Workarounds:** a missing or degraded bloom is never a correctness
+issue — the router falls back to the actual gRPC call. The cost is
+one extra round-trip per ID lookup that misses. Restart the affected
+peer to reset bloom state; this is not a paging event.
+
+---
+
+### 8.3 Scatter-Gather Claim Performance
+
+`Claim` fans `LocalClaim` out to every node in parallel and returns
+the first non-empty response. The implementation is in
+[`internal/cluster/router.go`](../internal/cluster/router.go) under the
+`Claim` method. The local node is tried first synchronously — if the
+local queue has a task, no gRPC call happens at all.
+
+**Symptoms of scatter-gather problems:**
+
+| Symptom | Likely cause | Action |
+|---|---|---|
+| Claim latency p99 grows with cluster size | Slow or hung peer | Identify the lagging peer and check its reaper / disk |
+| Workers idle while peers report `ready` depth > 0 | One node's local queue is empty and the scatter-gather is returning empty before peers respond | Confirm with `codeq_queue_depth` per node; this is expected behaviour, not a bug |
+| Claim returns `context deadline exceeded` | A peer is so slow it exceeds the gRPC deadline | Check the slow peer's `codeq_task_create_latency_seconds` p99 |
+
+**Diagnosis:**
+
+1. **Compare** per-node ready-queue depth. Imbalance > 10x indicates
+   hash routing concentration (rare; only with non-random taskID
+   spaces): `curl -s http://$host:8080/metrics | grep
+   'codeq_queue_depth{.*queue="ready"}'`.
+
+2. **Measure** per-node Claim latency. The slowest peer pins
+   scatter-gather Claim latency:
+
+   ```promql
+   histogram_quantile(0.99,
+     sum by (le, instance) (rate(codeq_claim_latency_seconds_bucket[5m]))
+   )
+   ```
+
+3. **Restart** a peer whose Pebble is wedged on compaction. The
+   in-progress queue drops to zero and recovers via the lease rebuild
+   from §6.3.
+
+> **Performance**: scatter-gather Claim does not parallelise infinitely
+> — every additional node adds one parallel RPC per poll. At cluster
+> sizes above ~8 nodes consider hashing workers to a subset of nodes
+> (sticky polling) rather than fanning out to all of them.
+
+---
+
+### 8.4 Cluster + Sharding Are Mutually Exclusive
+
+**Error you may see:**
+
+```text
+pebble: cluster mode + intra-process shards not supported (pick one)
+```
+
+This panic happens at startup when both `cluster.enabled: true` and
+`persistenceConfig.numShards > 1` are set. The reason is architectural:
+the `cluster.Server` exposes a single concrete `TaskRepository` over
+gRPC, and the sharded wrapper would need its own per-shard cluster
+bridge to be addressable from peers. That work is queued as a
+follow-up; until it lands the two modes are mutually exclusive.
+
+**Choose one:**
+
+| Goal | Pick |
+|---|---|
+| Single physical box, more cores | `numShards: 4` (or 8 on bigger boxes), `cluster.enabled: false` |
+| Multiple physical boxes, HA | `cluster.enabled: true`, omit `numShards` (or set to 1) |
+| Both? | Not yet — multi-node sharded is on the roadmap |
+
+**Procedure to fix the panic:** edit `config.yml` to either Option A
+(`numShards: N`, `cluster.enabled: false`) or Option B
+(`cluster.enabled: true`, omit `numShards`), then restart.
+
+```yaml
+# Option A — single-node sharded
+persistenceProvider: pebble
+persistenceConfig:
+  path: /var/lib/codeq/pebble
+  numShards: 4
+cluster:
+  enabled: false
+
+# Option B — cluster (no intra-process shards)
+persistenceProvider: pebble
+persistenceConfig:
+  path: /var/lib/codeq/pebble
+cluster:
+  enabled: true
+  selfId: node-1
+  grpcAddr: 0.0.0.0:9090
+  nodes:
+    - id: node-1
+      grpcAddr: 10.0.0.11:9090
+```
+
+---
+
+## 9. Backup Topology Reference
+
+A consolidated view of the backup topologies for the two production
+modes. Single-node Pebble produces one checkpoint directory per shard.
+Cluster mode produces one set of checkpoints per node — and within
+each node, one per shard if that node is sharded (which today means
+one, because cluster + shards are mutually exclusive).
+
+```mermaid
+graph TB
+  subgraph SingleNode[Single-node Pebble]
+    SN_API[codeq API]
+    SN_PEB0[shard0/]
+    SN_PEB1[shard1/]
+    SN_PEB2[shard2/]
+    SN_PEB3[shard3/]
+    SN_BACKUP[(/backup/codeq-pebble-*)]
+    SN_API --> SN_PEB0
+    SN_API --> SN_PEB1
+    SN_API --> SN_PEB2
+    SN_API --> SN_PEB3
+    SN_PEB0 -.checkpoint.-> SN_BACKUP
+    SN_PEB1 -.checkpoint.-> SN_BACKUP
+    SN_PEB2 -.checkpoint.-> SN_BACKUP
+    SN_PEB3 -.checkpoint.-> SN_BACKUP
+  end
+
+  subgraph Cluster[Cluster mode]
+    C_N1[node-1 + local Pebble]
+    C_N2[node-2 + local Pebble]
+    C_N3[node-3 + local Pebble]
+    C_BACKUP1[(/backup/node-1-*)]
+    C_BACKUP2[(/backup/node-2-*)]
+    C_BACKUP3[(/backup/node-3-*)]
+    C_N1 -.checkpoint.-> C_BACKUP1
+    C_N2 -.checkpoint.-> C_BACKUP2
+    C_N3 -.checkpoint.-> C_BACKUP3
+  end
+```
+
+Key points:
+
+- Backups are **per-DB**, never cluster-wide. Each node's checkpoint
+  is independent — there is no global snapshot primitive.
+- Restoring a single node is safe: peers treat it as one that came
+  back from a crash. Bloom gossip resyncs within 1s. Tasks claimed
+  before the backup snapshot come back as expired leases at restart
+  (§6.3).
+- Restoring the full cluster requires every node down before the
+  restore so gossip doesn't mix stale and fresh blooms. Bring the
+  cluster up node-by-node afterwards.
+
+> **Note**: backup is not a substitute for replication. A restored
+> backup loses every task created between the snapshot and the
+> failure. For zero-RPO workloads, run cluster mode for redundancy
+> and treat backups as last-resort recovery only.
+
+---
+
+## See also
+
+- [Cluster architecture](./05-cluster-architecture.md) — design of
+  the consistent-hash ring, gRPC routing, and bloom gossip referenced
+  in §8.
+- [Storage layout (Pebble)](./07b-storage-pebble.md) — key schema,
+  recovery semantics, and the on-disk file layout that backup tooling
+  operates on.
+- [Troubleshooting](./28-troubleshooting.md) — symptom-driven
+  diagnostics; complements the action-driven procedures here.
+- [Lease management](./06b-lease-management.md) — deep dive on the
+  in-memory lease table and the recovery scan; available after Wave 3.
