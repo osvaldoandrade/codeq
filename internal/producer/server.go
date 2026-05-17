@@ -259,16 +259,17 @@ func (s *Server) handleCreateBatch(ctx context.Context, sess *streamSession, req
 	if req == nil || len(req.Tasks) == 0 {
 		return
 	}
+	// Phase 6 / F3: process the batch serially. The previous fan-out
+	// (one goroutine per task) showed up under runtime.newstack in the
+	// profile: ~8 goroutine spawns per Recv, each one allocating its
+	// own stack and contending on the Pebble commit coalescer that
+	// already serialises commits. Doing the work inline lets a single
+	// goroutine accumulate all N CreateTask invocations and emit one
+	// CreateAckBatch — same wire shape, no fan-out overhead.
 	acks := make([]*producerpb.CreateAck, len(req.Tasks))
-	var wg sync.WaitGroup
 	for i, t := range req.Tasks {
-		wg.Add(1)
-		go func(idx int, tk *producerpb.CreateTask) {
-			defer wg.Done()
-			acks[idx] = s.processCreate(ctx, sess, tk)
-		}(i, t)
+		acks[i] = s.processCreate(ctx, sess, t)
 	}
-	wg.Wait()
 	_ = sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_CreateAckBatch{
 		CreateAckBatch: &producerpb.CreateAckBatch{Acks: acks},
 	}})
