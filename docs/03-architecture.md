@@ -72,6 +72,7 @@
 ## Components
 
 - HTTP API: Gin-based router with JSON binding.
+- gRPC Streaming APIs: High-throughput producer/worker streaming (Phase 3 & Phase 6)
 - Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
 - Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
@@ -82,6 +83,55 @@
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
 - Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+
+## gRPC Streaming Flows
+
+codeQ provides two high-throughput gRPC streaming APIs to complement the REST endpoints, achieving 2-3× throughput by amortizing per-call authentication and middleware overhead.
+
+### Producer Streaming (`pkg/producerclient`)
+
+**Goal**: Replace per-call `POST /tasks` with a single authenticated stream carrying pipelined `CreateTask` events.
+
+**Flow**:
+1. Client opens bidirectional stream and sends `Hello(token)`
+2. Server authenticates, resolves tenant, and replies with `HelloAck(tenant_id, subject)`
+3. Client sends `CreateTask(seq=N)` messages from many goroutines (pipelined)
+4. Server processes each task through the normal enqueue logic
+5. Server replies with `CreateAck(seq=N, task_id)` (may arrive out-of-order)
+6. Client's Produce call returns as soon as the corresponding CreateAck arrives; no blocking on subsequent calls
+
+**Performance**: ~33k tasks/sec per stream (vs ~15k with REST); single authentication reduces per-call latency by 30-50%.
+
+For complete reference, see `docs/34-streaming-api-guide.md` (Producer Streaming API section).
+
+### Worker Streaming (`pkg/workerclient`)
+
+**Goal**: Replace per-call `POST /claim` + `POST /tasks/:id/result` with a single stream carrying pipelined Ready, Task, and Result events.
+
+**Flow (single-task mode, BatchSize ≤ 1)**:
+1. Client opens stream and sends `Hello(token, worker_id)`
+2. Server authenticates and replies with `HelloAck`
+3. Client sends `Ready(commands, lease_seconds)`
+4. Server holds Ready until a matching task arrives, then sends `TaskAssignment(task)`
+5. Client calls Handler (user code) to process task
+6. Client sends `Result(task_id, status, result_json)` or `Nack` or `Abandon`
+7. Server processes result through normal completion logic
+8. Loop back to step 3
+
+**Flow (batching mode, BatchSize > 1, Phase 6)**:
+1. Hello handshake same as above
+2. Client sends `Ready(commands, lease_seconds, count=BatchSize)`
+3. Server holds Ready until tasks arrive, then sends `TaskBatch(tasks[0..n])` where n ≤ count
+4. Client calls Handler for each task sequentially
+5. Client sends `ResultBatch(results[...])` (all results in one message)
+6. Server replies with `ResultAckBatch(acks[...])` acknowledging all results
+7. Loop back to step 2
+
+**Concurrency**: Client spawns N independent slot goroutines (N = Config.Concurrency). Each slot independently loops through Ready→Task→Handler→Result. Slots run in parallel; one slot's error doesn't block peers.
+
+**Performance**: 2-3× throughput improvement with batching (Phase 6); amortizes gRPC framing and Pebble commit cost across batch.
+
+For complete reference, see `docs/34-streaming-api-guide.md` (Worker Streaming API section).
 
 ## Enqueue flow
 

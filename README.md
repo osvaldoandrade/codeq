@@ -199,6 +199,7 @@ Key references:
 - **Architecture**: `docs/03-architecture.md` - System components and multi-tenant architecture
 - **Security**: `docs/09-security.md` - Authentication, authorization, and tenant isolation
 - **HTTP API**: `docs/04-http-api.md` - Complete API reference
+- **Streaming APIs**: `docs/34-streaming-api-guide.md` - High-throughput gRPC streaming for producers and workers
 - **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
 - **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs
   - [Java Integration](docs/integrations/java-integration.md) - Spring Boot, Quarkus, Micronaut
