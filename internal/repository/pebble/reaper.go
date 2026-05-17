@@ -29,6 +29,7 @@ type Reaper struct {
 	backoffBaseSeconds int
 	backoffMaxSeconds  int
 	maxAttemptsDefault int
+	dlqCallback        func(ctx context.Context, t domain.Task, rec domain.ResultRecord)
 
 	leaseInterval time.Duration // how often to scan lease/*
 	ttlInterval   time.Duration // how often to scan ttl_index
@@ -48,6 +49,10 @@ type ReaperOptions struct {
 	BackoffBaseSeconds int
 	BackoffMaxSeconds  int
 	MaxAttemptsDefault int
+	// DLQCallback fires when a task is moved to DLQ due to lease expiry
+	// (after max attempts). Invoked once per task, post-commit, with a
+	// synthetic ResultRecord describing the failure. Optional.
+	DLQCallback func(ctx context.Context, t domain.Task, rec domain.ResultRecord)
 }
 
 func NewReaper(db *DB, tz *time.Location, logger *slog.Logger, opts ReaperOptions) *Reaper {
@@ -86,6 +91,7 @@ func NewReaper(db *DB, tz *time.Location, logger *slog.Logger, opts ReaperOption
 		backoffBaseSeconds: opts.BackoffBaseSeconds,
 		backoffMaxSeconds:  opts.BackoffMaxSeconds,
 		maxAttemptsDefault: opts.MaxAttemptsDefault,
+		dlqCallback:        opts.DLQCallback,
 		leaseInterval:      opts.LeaseInterval,
 		ttlInterval:        opts.TTLInterval,
 		leaseBatch:         opts.LeaseBatch,
@@ -219,6 +225,15 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 		}
 		r.db.Leases.Delete(t.ID)
 		metrics.TaskCompletedTotal.WithLabelValues(string(t.Command), string(t.Status)).Inc()
+		if r.dlqCallback != nil {
+			rec := domain.ResultRecord{
+				TaskID:      t.ID,
+				Status:      domain.StatusFailed,
+				Error:       t.Error,
+				CompletedAt: now,
+			}
+			r.dlqCallback(context.WithoutCancel(ctx), *t, rec)
+		}
 		return nil
 	}
 

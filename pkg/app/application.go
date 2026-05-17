@@ -177,9 +177,20 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	subs := services.NewSubscriptionService(subRepo)
 	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
 	cleanup := services.NewSubscriptionCleanupService(subRepo, logger, cfg.SubscriptionCleanupIntervalSeconds)
+	resultCallback := services.NewResultCallbackService(
+		logger,
+		cfg.WebhookHmacSecret,
+		cfg.ResultWebhookMaxAttempts,
+		cfg.ResultWebhookBaseBackoffSeconds,
+		cfg.ResultWebhookMaxBackoffSeconds,
+		limiter,
+		ratelimit.Bucket(cfg.RateLimit.Webhook),
+		webhookClient,
+	)
 	scheduler := services.NewSchedulerService(
 		repo,
 		notifier,
+		resultCallback,
 		loc,
 		time.Now,
 		cfg.DefaultLeaseSeconds,
@@ -216,16 +227,6 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		resultRepo = repository.NewResultRepository(redisClient, loc, shardSupplier)
 	}
 	uploader := providers.NewLocalUploader(cfg.LocalArtifactsDir)
-	resultCallback := services.NewResultCallbackService(
-		logger,
-		cfg.WebhookHmacSecret,
-		cfg.ResultWebhookMaxAttempts,
-		cfg.ResultWebhookBaseBackoffSeconds,
-		cfg.ResultWebhookMaxBackoffSeconds,
-		limiter,
-		ratelimit.Bucket(cfg.RateLimit.Webhook),
-		webhookClient,
-	)
 	results := services.NewResultsService(resultRepo, uploader, resultCallback, logger, time.Now, loc)
 
 	engine := gin.New()
