@@ -38,6 +38,21 @@ func (m *mockSchedulerService) ClaimTask(ctx context.Context, workerID string, c
 	return &domain.Task{ID: "task-1", Status: domain.StatusInProgress}, true, nil
 }
 
+func (m *mockSchedulerService) ClaimManyTasks(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, max int, tenantID string) ([]*domain.Task, error) {
+	out := make([]*domain.Task, 0, max)
+	for range max {
+		t, ok, err := m.ClaimTask(ctx, workerID, commands, leaseSeconds, 0, tenantID)
+		if err != nil {
+			return out, err
+		}
+		if !ok {
+			break
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
 func (m *mockSchedulerService) Heartbeat(context.Context, string, string, int) error {
 	return nil
 }

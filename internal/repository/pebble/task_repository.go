@@ -596,6 +596,143 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	return &t, true, nil
 }
 
+// ClaimMany is the Phase 7 batch claim path. Pops up to `max` hints
+// from the per-(cmd, tenant, prio) channels in priority order (highest
+// first, FIFO within priority), loads each task body, validates, and
+// writes ALL state transitions for the batch in a single Pebble batch
+// with one commit. Compared to N sequential Claim calls this saves
+// (N-1) batch.Close + (N-1) coalescer trips through the channel +
+// reduces the total fsync amplification by amortising the commit's
+// fixed cost across N tasks. Drops invalid pending hints (ghost, bad
+// JSON, status != PENDING) into the same batch so the channel and
+// disk stay in sync without an extra round-trip.
+//
+// Returns the claimed tasks in pop order. May return fewer than `max`
+// if channels emptied. Returns a nil slice (no error) when nothing was
+// claimed — caller decides whether to retry.
+//
+// Reconciliation prelude (moveDueDelayed + requeueExpired) runs once
+// before the pop loop, same as Claim.
+func (r *TaskRepository) ClaimMany(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, max int, inspectLimit int, maxAttemptsDefault int, tenantID string) ([]*domain.Task, error) {
+	if max <= 0 {
+		return nil, nil
+	}
+	if inspectLimit <= 0 {
+		inspectLimit = defaultInspectLimit
+	}
+	// Same prelude as Claim: move due-delayed entries into pending and
+	// rescue expired in-progress tasks (throttled). Both write through
+	// the channel hints we're about to pop.
+	for _, cmd := range commands {
+		if _, err := r.moveDueDelayedForTenant(ctx, cmd, inspectLimit, tenantID); err != nil {
+			return nil, err
+		}
+		if r.reconcile.shouldRun(cmd, tenantID) {
+			if _, err := r.requeueExpired(ctx, cmd, inspectLimit, maxAttemptsDefault, tenantID); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	type popped struct {
+		cmd      domain.Command
+		priority int
+		seq      uint64
+		id       string
+	}
+	hints := make([]popped, 0, max)
+	// Drain non-blocking, highest priority first, across all commands.
+	// Stop when we hit max or every queue is empty in this pass.
+collect:
+	for _, cmd := range commands {
+		for p := maxPriority; p >= minPriority && len(hints) < max; p-- {
+			q := r.channelFor(cmd, tenantID, p)
+			for len(hints) < max {
+				select {
+				case h := <-q.ch:
+					hints = append(hints, popped{cmd: cmd, priority: p, seq: h.seq, id: h.id})
+				default:
+					// channel empty at this priority — move on
+					goto nextprio
+				}
+			}
+		nextprio:
+		}
+		if len(hints) >= max {
+			break collect
+		}
+	}
+	if len(hints) == 0 {
+		return nil, nil
+	}
+
+	now := r.now()
+	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
+	leaseUntilStr := leaseUntil.Format(time.RFC3339)
+	ttlScore := uint64(now.Add(taskRetention).Unix())
+	encodedLease := encodeLease(workerID, leaseUntil)
+
+	out := make([]*domain.Task, 0, len(hints))
+	b := r.db.Batch()
+	defer b.Close()
+
+	// Process every popped hint. Drop the bad ones (ghost / bad JSON /
+	// status != pending) by deleting only their pending key — same
+	// invariant as completeClaim, just folded into the batch.
+	for _, h := range hints {
+		pendingKey := KeyPending(h.cmd, tenantID, h.priority, h.seq, h.id)
+		taskJSON, err := r.db.Get(KeyTask(h.id))
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				_ = b.Delete(pendingKey, nil)
+				continue
+			}
+			return nil, err
+		}
+		var t domain.Task
+		if err := sonic.Unmarshal(taskJSON, &t); err != nil {
+			_ = b.Delete(pendingKey, nil)
+			continue
+		}
+		if t.Status != domain.StatusPending {
+			// Stale hint — duplicate publication or recovery race. Drop
+			// the pending key; the rightful claimer already owns it.
+			_ = b.Delete(pendingKey, nil)
+			continue
+		}
+		t.Status = domain.StatusInProgress
+		t.LastKnownLocation = domain.LocationInProgress
+		t.WorkerID = workerID
+		t.LeaseUntil = leaseUntilStr
+		t.Attempts++
+		t.UpdatedAt = now
+		updatedJSON, _ := sonic.Marshal(&t)
+		if err := b.Delete(pendingKey, nil); err != nil {
+			return nil, err
+		}
+		if err := b.Set(KeyInprog(h.cmd, tenantID, h.id), nil, nil); err != nil {
+			return nil, err
+		}
+		if err := b.Set(KeyTask(h.id), updatedJSON, nil); err != nil {
+			return nil, err
+		}
+		if err := b.Set(KeyLease(h.id), encodedLease, nil); err != nil {
+			return nil, err
+		}
+		if err := b.Set(KeyTTLIndex(ttlScore, h.id), nil, nil); err != nil {
+			return nil, err
+		}
+		// Stash a value copy so all returned pointers are independent and
+		// the caller can mutate them without aliasing the loop variable.
+		tc := t
+		out = append(out, &tc)
+	}
+	if err := r.db.CommitBatch(b); err != nil {
+		return nil, fmt.Errorf("commit claim-many: %w", err)
+	}
+	return out, nil
+}
+
 // findPendingKey scans the per-prio pending prefix looking for an entry
 // whose trailing id matches. The seq we wrote at Enqueue time isn't
 // carried through the channel hint, so we have to discover it here. The
