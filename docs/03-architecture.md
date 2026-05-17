@@ -7,7 +7,16 @@
 - **`pkg/app`**: Application bootstrap and HTTP server setup
   - `application.go`: Main application struct, server initialization
   - `url_mappings.go`: HTTP route definitions
+  - `producer_stream.go`: gRPC producer streaming server setup
+  - `worker_stream.go`: gRPC worker streaming server setup
   - `integration_test.go`: End-to-end integration tests
+- **`pkg/producerclient`**: Go SDK for producer streaming API
+  - `client.go`: High-level session API with pipelining support
+  - `client_test.go`: Client tests
+- **`pkg/workerclient`**: Go SDK for worker streaming API
+  - `client.go`: High-level worker runner with concurrent slot management
+  - `result.go`: Result type definitions (Completed, Failed, Nack, Abandon)
+  - `client_test.go`: Client tests
 - **`pkg/auth`**: Authentication plugin system
   - `interface.go`: Plugin interface definitions (Validator, Claims)
   - `jwks/`: Default JWKS-based authentication plugin
@@ -30,6 +39,9 @@
   - `get_task_controller.go`, `get_result_controller.go`: Read endpoints
   - `create_subscription_controller.go`, `heartbeat_subscription_controller.go`: Webhook subscription management
   - `queue_admin_controller.go`, `queue_stats_controller.go`, `cleanup_expired_controller.go`: Admin operations
+- **`internal/producer`** / **`internal/worker`**: gRPC streaming server implementations
+  - `proto/`: Protocol buffer definitions (producerpb, workerpb)
+  - Server-side streaming handlers and interceptors
 - **`internal/middleware`**: Authentication and request processing
   - `auth.go`: Producer token validation (JWKS-based via plugin system)
   - `worker_auth.go`: Worker JWT validation (JWKS-based via plugin system)
@@ -72,6 +84,7 @@
 ## Components
 
 - HTTP API: Gin-based router with JSON binding.
+- **gRPC Streaming APIs** (Phase 2–3): Bidirectional gRPC streams for producer task submission and worker claim-result loops (see [Streaming API Guide](34-streaming-api-guide.md))
 - Auth: Producer and worker token validation via pluggable authentication system (default: JWKS).
 - Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
@@ -82,6 +95,41 @@
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
 - Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+
+## gRPC Streaming Flows
+
+### Producer Streaming (High-Throughput Enqueue)
+
+**Goal:** Replace per-call HTTP overhead on the enqueue hot path with a single long-lived bidirectional stream.
+
+1. Producer opens stream and sends `Hello` with bearer token
+2. Server validates token, resolves tenant, replies `HelloAck`
+3. Producer sends `CreateTask` messages with monotonically-increasing `seq` numbers
+4. Server acks each with `CreateAck` (echoing seq, task_id, or error)
+5. Multiple goroutines can `Produce()` concurrently; each blocks until matching `CreateAck` arrives
+
+**Throughput:** ~33k tasks/sec per stream (vs ~2k–5k for REST), achieved via pipelining (many requests in flight before first ack).
+
+**See:** [Producer Streaming API](34-streaming-api-guide.md#producer-streaming-api)
+
+### Worker Streaming (High-Concurrency Claim-Result Loop)
+
+**Goal:** Replace sequential claim → process → result calls with concurrent, independent slots on one stream.
+
+1. Worker opens stream and sends `Hello` with bearer token
+2. Server validates token, resolves tenant, replies `HelloAck`
+3. Worker spawns N concurrent slots (default 1; configurable via `Concurrency`)
+4. Each slot independently loops:
+   - Send `Ready` with lease duration and desired commands
+   - Receive `Task` from server
+   - Run handler (user callback)
+   - Send `Result` (one of: `Completed`, `Failed`, `Nack`, `Abandon`)
+   - Back to `Ready`
+5. Slots run in parallel; one task failure/timeout doesn't block siblings
+
+**Throughput:** ~33k tasks/sec per worker (scales linearly with concurrency; vs ~100–300 for sequential REST).
+
+**See:** [Worker Streaming API](34-streaming-api-guide.md#worker-streaming-api)
 
 ## Enqueue flow
 
