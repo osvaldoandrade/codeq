@@ -101,6 +101,16 @@ func (r *Reaper) Start(ctx context.Context) {
 	go r.loop(ctx, r.ttlInterval, r.sweepTTL, "ttl")
 }
 
+// StartReapersForShards is the Phase 8 helper: spawns one Reaper per
+// shard, each sweeping its own DB. Sharing one reaper across shards
+// would serialise their sweeps and undo the parallelism, so we keep
+// them independent.
+func StartReapersForShards(ctx context.Context, dbs []*DB, tz *time.Location, logger *slog.Logger, opts ReaperOptions) {
+	for _, db := range dbs {
+		NewReaper(db, tz, logger, opts).Start(ctx)
+	}
+}
+
 func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(context.Context) (int, error), label string) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
