@@ -525,3 +525,12 @@ scrape_configs:
 ````
 
 See [Operations Guide](10-operations.md#monitoring) for full metrics reference and Grafana dashboard setup.
+
+## High-Throughput Alternative: gRPC Streaming APIs
+
+For production workloads requiring higher throughput and lower latency, codeQ provides **gRPC streaming APIs** that achieve 2-3x throughput improvement over REST by replacing per-call authentication and HTTP middleware overhead with long-lived bidirectional streams.
+
+See [gRPC Streaming APIs](34-streaming-api-guide.md) for:
+- **Producer Streaming API**: Submit tasks at 33k+ tasks/sec with pipelined requests
+- **Worker Streaming API**: Claim and process tasks with configurable concurrency and batch processing
+- Performance comparisons and migration guide from REST
