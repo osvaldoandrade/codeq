@@ -191,6 +191,15 @@ func (s *Server) Stream(stream workerpb.WorkerStream_StreamServer) error {
 				defer wg.Done()
 				s.handleResult(ctx, sess, req)
 			}(e.Result)
+		case *workerpb.WorkerEvent_ResultBatch:
+			if !sess.requireScope("codeq:result") {
+				continue
+			}
+			wg.Add(1)
+			go func(req *workerpb.ResultBatch) {
+				defer wg.Done()
+				s.handleResultBatch(ctx, sess, req)
+			}(e.ResultBatch)
 		case *workerpb.WorkerEvent_Nack:
 			if !sess.requireScope("codeq:nack") {
 				continue
@@ -279,10 +288,18 @@ func (s *Server) handleReady(ctx context.Context, sess *streamSession, req *work
 	if lease <= 0 {
 		lease = s.DefaultLease
 	}
-	// Poll until a task is available, the stream closes, or we hit the
-	// retry budget. The repo doesn't block server-side, so we busy-wait
-	// with a small delay between attempts. This is intentionally simple;
-	// a future revision can wake on producer-side push notification.
+	// count=0 / count=1 → legacy single-task path. count > 1 → batch.
+	count := int(req.Count)
+	if count <= 1 {
+		s.handleReadyOne(ctx, sess, commands, lease)
+		return
+	}
+	s.handleReadyBatch(ctx, sess, commands, lease, count)
+}
+
+// handleReadyOne is the unchanged single-task path; kept verbatim so
+// existing clients see no behavior change.
+func (s *Server) handleReadyOne(ctx context.Context, sess *streamSession, commands []domain.Command, lease int) {
 	for attempt := 0; attempt <= s.MaxClaimRetries; attempt++ {
 		if ctx.Err() != nil {
 			return
@@ -304,8 +321,121 @@ func (s *Server) handleReady(ctx context.Context, sess *streamSession, req *work
 		case <-time.After(s.ClaimPollDelay):
 		}
 	}
-	// No task within the retry budget — silently drop. The worker is
-	// free to send another Ready.
+}
+
+// handleReadyBatch claims up to `count` tasks and sends them as one
+// TaskBatch. First task waits up to MaxClaimRetries × ClaimPollDelay so
+// idle workers don't busy-loop; subsequent tasks pull only if the
+// scheduler returns immediately — we never block waiting for the second
+// task once the batch has one, because the worker would rather start
+// processing the partial batch than wait for the queue to fill.
+func (s *Server) handleReadyBatch(ctx context.Context, sess *streamSession, commands []domain.Command, lease, count int) {
+	tasks := make([]*workerpb.Task, 0, count)
+	for attempt := 0; attempt <= s.MaxClaimRetries && len(tasks) == 0; attempt++ {
+		if ctx.Err() != nil {
+			return
+		}
+		task, ok, err := s.Scheduler.ClaimTask(ctx, sess.workerID, commands, lease, 0, sess.tenantID)
+		if err != nil {
+			_ = sess.sendError(codes.Internal, err.Error())
+			return
+		}
+		if ok && task != nil {
+			tasks = append(tasks, taskToProto(task))
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.ClaimPollDelay):
+		}
+	}
+	// Greedy drain — pull more tasks while the scheduler has them ready.
+	for len(tasks) < count {
+		if ctx.Err() != nil {
+			break
+		}
+		task, ok, err := s.Scheduler.ClaimTask(ctx, sess.workerID, commands, lease, 0, sess.tenantID)
+		if err != nil || !ok || task == nil {
+			break
+		}
+		tasks = append(tasks, taskToProto(task))
+	}
+	if len(tasks) == 0 {
+		return
+	}
+	_ = sess.send(&workerpb.ServerEvent{Event: &workerpb.ServerEvent_TaskBatch{
+		TaskBatch: &workerpb.TaskBatch{Tasks: tasks},
+	}})
+}
+
+// handleResultBatch is the batched submit path. Eliminates the per-task
+// Send + Pebble commit overhead that handleResult pays for each result,
+// by funnelling all N results through ResultsService.BatchSubmit (one
+// GetTasksBatch + one BatchUpdateTasksOnComplete on Pebble). Acks come
+// back as a single ResultAckBatch matching the input order so the
+// client can correlate without extra bookkeeping.
+func (s *Server) handleResultBatch(ctx context.Context, sess *streamSession, req *workerpb.ResultBatch) {
+	if req == nil || len(req.Results) == 0 {
+		return
+	}
+	acks := make([]*workerpb.ResultAck, len(req.Results))
+	items := make([]domain.BatchSubmitItem, 0, len(req.Results))
+	itemIdx := make([]int, 0, len(req.Results)) // results index for each item
+
+	// First pass: validate per-result, parse JSON; rejects produce a
+	// ResultAck in-place without touching the service. Valid results
+	// get batched for one BatchSubmit call.
+	for i, r := range req.Results {
+		if r == nil {
+			acks[i] = &workerpb.ResultAck{Ok: false, ErrorMessage: "nil result"}
+			continue
+		}
+		if err := validateResultStatus(r.Status); err != nil {
+			acks[i] = &workerpb.ResultAck{TaskId: r.TaskId, Ok: false, ErrorMessage: err.Error()}
+			continue
+		}
+		var resultVal map[string]any
+		if len(r.ResultJson) > 0 {
+			if err := sonic.Unmarshal(r.ResultJson, &resultVal); err != nil {
+				acks[i] = &workerpb.ResultAck{TaskId: r.TaskId, Ok: false, ErrorMessage: "invalid result_json"}
+				continue
+			}
+		}
+		items = append(items, domain.BatchSubmitItem{
+			TaskID: r.TaskId,
+			SubmitResultRequest: domain.SubmitResultRequest{
+				Status:   domain.TaskStatus(r.Status),
+				WorkerID: sess.workerID,
+				Result:   resultVal,
+				Error:    r.Error,
+			},
+		})
+		itemIdx = append(itemIdx, i)
+	}
+
+	if len(items) > 0 {
+		resps, err := s.Results.BatchSubmit(ctx, items)
+		if err != nil {
+			// Whole-batch failure: ack every queued item with the same error.
+			for _, i := range itemIdx {
+				acks[i] = &workerpb.ResultAck{TaskId: req.Results[i].TaskId, Ok: false, ErrorMessage: err.Error()}
+			}
+		} else {
+			for k, resp := range resps {
+				i := itemIdx[k]
+				if resp.Error != "" {
+					acks[i] = &workerpb.ResultAck{TaskId: resp.TaskID, Ok: false, ErrorMessage: resp.Error}
+				} else {
+					acks[i] = &workerpb.ResultAck{TaskId: resp.TaskID, Ok: true}
+				}
+			}
+		}
+	}
+
+	_ = sess.send(&workerpb.ServerEvent{Event: &workerpb.ServerEvent_ResultAckBatch{
+		ResultAckBatch: &workerpb.ResultAckBatch{Acks: acks},
+	}})
 }
 
 func (s *Server) handleResult(ctx context.Context, sess *streamSession, req *workerpb.Result) {

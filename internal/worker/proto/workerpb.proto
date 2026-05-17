@@ -50,13 +50,19 @@ message Hello {
 }
 
 // Ready is the worker saying "I have capacity for one more task with
-// any of these commands; push me one when available." The server
-// responds with a Task message when a task becomes available; until
-// then no message is sent for this Ready. Each Ready consumes exactly
-// one Task; if the worker wants prefetching, it sends N Readys.
+// any of these commands; push me one when available." Each Ready
+// consumes up to `count` Tasks; the server responds with either:
+//   - one TaskAssignment per task (count==0 or 1; legacy path), or
+//   - one TaskBatch carrying up to count tasks (count > 1; Phase 6 / Q2).
+// When count==0 the server defaults to 1 for backward compatibility
+// with clients that never set the field.
 message Ready {
   repeated string commands = 1;
   int32 lease_seconds = 2;
+  // count = max tasks to deliver in response. 0/1 = single TaskAssignment.
+  // >1 = TaskBatch capped at count. Server may deliver fewer than count
+  // if the queue empties before the batch fills.
+  int32 count = 3;
 }
 
 // Result is the worker submitting completion for a previously-assigned
@@ -90,6 +96,15 @@ message Abandon {
   string task_id = 1;
 }
 
+// ResultBatch is the worker submitting completion for N tasks in a
+// single message. Equivalent to N Result events but the server
+// processes them with one BatchSubmit call (single Pebble batch +
+// single round-trip of acks), eliminating the per-task Send overhead
+// and amortising claim/result write paths. Phase 6 / Q2.
+message ResultBatch {
+  repeated Result results = 1;
+}
+
 message WorkerEvent {
   oneof event {
     Hello hello = 1;
@@ -98,6 +113,7 @@ message WorkerEvent {
     Nack nack = 4;
     Heartbeat heartbeat = 5;
     Abandon abandon = 6;
+    ResultBatch result_batch = 7;
   }
 }
 
@@ -112,6 +128,20 @@ message HelloAck {
 // If no task is available the server holds the Ready until one is.
 message TaskAssignment {
   Task task = 1;
+}
+
+// TaskBatch is the server's response to a Ready with count > 1.
+// Carries up to Ready.count Tasks in a single message. May be shorter
+// than count if the queue emptied; an empty TaskBatch is a legal
+// no-tasks-available response.
+message TaskBatch {
+  repeated Task tasks = 1;
+}
+
+// ResultAckBatch acknowledges all results in a ResultBatch in one
+// message. Order matches the ResultBatch.results order.
+message ResultAckBatch {
+  repeated ResultAck acks = 1;
 }
 
 message ResultAck {
@@ -156,6 +186,8 @@ message ServerEvent {
     NackAck nack_ack = 5;
     AbandonAck abandon_ack = 6;
     ServerError error = 7;
+    TaskBatch task_batch = 8;
+    ResultAckBatch result_ack_batch = 9;
   }
 }
 

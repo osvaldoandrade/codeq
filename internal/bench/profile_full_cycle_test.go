@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"runtime"
 	"runtime/pprof"
 	"sync"
@@ -68,12 +69,16 @@ func TestProfile_FullCycle(t *testing.T) {
 	}
 	defer prodSess.Close()
 
-	// Worker side: workerclient with high concurrency to drain.
+	// Worker side: workerclient with high concurrency to drain. BatchSize
+	// is opt-in via env so the same harness can profile both single-task
+	// (PHASE6_BATCH=0) and batched (PHASE6_BATCH=N) paths.
+	batchSize, _ := strconv.Atoi(os.Getenv("PHASE6_BATCH"))
 	workerCli, err := workerclient.New(workerclient.Config{
 		Addr:         streamWorkerAddr,
 		Token:        phase2WorkerToken,
 		Commands:     []string{"GENERATE_MASTER"},
 		Concurrency:  128,
+		BatchSize:    batchSize,
 		LeaseSeconds: 300,
 	})
 	if err != nil {
