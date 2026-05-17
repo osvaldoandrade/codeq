@@ -4,25 +4,52 @@ This document provides detailed information about the codeQ codebase structure a
 
 ## Repository Layout
 
-````
-codeq/
-├── cmd/codeq/          # CLI entrypoint
-├── pkg/                # Public API packages
-│   ├── app/            # Application bootstrap
-│   ├── config/         # Configuration
-│   └── domain/         # Domain entities
-├── internal/           # Private implementation
-│   ├── backoff/        # Retry logic
-│   ├── controllers/    # HTTP handlers
-│   ├── middleware/     # Auth & middleware
-│   ├── providers/      # External services
-│   ├── repository/     # Data access
-│   └── services/       # Business logic
-├── helm/codeq/         # Kubernetes Helm chart
-├── docs/               # Documentation
-├── test/               # Integration tests
-└── wiki/               # GitHub Pages content
-````
+```mermaid
+graph TB
+  subgraph Entry[Entry points]
+    CMD_SERVER[cmd/server]
+    CMD_CODEQ[cmd/codeq]
+  end
+  subgraph Public[Public packages pkg/]
+    PKG_APP[pkg/app]
+    PKG_AUTH[pkg/auth]
+    PKG_CONFIG[pkg/config]
+    PKG_DOMAIN[pkg/domain]
+    PKG_PERSIST[pkg/persistence]
+    PKG_PRODCLI[pkg/producerclient]
+    PKG_WORKCLI[pkg/workerclient]
+  end
+  subgraph Internal[Internal packages internal/]
+    INT_BENCH[internal/bench]
+    INT_CTRL[internal/controllers]
+    INT_CLUSTER[internal/cluster]
+    INT_MW[internal/middleware]
+    INT_PROD[internal/producer]
+    INT_PROV[internal/providers]
+    INT_RL[internal/ratelimit]
+    INT_REPO[internal/repository]
+    INT_SVC[internal/services]
+    INT_SHARD[internal/shard]
+    INT_TRACE[internal/tracing]
+    INT_WORK[internal/worker]
+  end
+  subgraph Ops[Build/Deploy/Docs]
+    DEPLOY[deploy/]
+    DOCS[docs/]
+    SDKS[sdks/]
+  end
+  CMD_SERVER --> PKG_APP
+  CMD_CODEQ --> PKG_APP
+  PKG_APP --> Internal
+  PKG_APP --> PKG_CONFIG
+  PKG_APP --> PKG_DOMAIN
+  PKG_APP --> PKG_PERSIST
+  PKG_APP --> PKG_AUTH
+  PKG_PRODCLI --> PKG_DOMAIN
+  PKG_WORKCLI --> PKG_DOMAIN
+```
+
+Each public `pkg/` is intended to be importable by external code (SDK consumers). `internal/` is process-local and not stable API.
 
 ## Public Packages (`pkg/`)
 
@@ -659,3 +686,8 @@ CI/CD automation. See `docs/16-workflows.md` for workflow details.
 - **Security**: `docs/09-security.md`
 - **Configuration**: `docs/14-configuration.md`
 - **Contributing**: `CONTRIBUTING.md`
+
+## See also
+
+- [Architecture](./03-architecture.md)
+- [Developer guide](./21-developer-guide.md)
