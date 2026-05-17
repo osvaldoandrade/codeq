@@ -31,6 +31,13 @@ type DB struct {
 	commitCh chan *commitReq
 	stopCh   chan struct{}
 	stopped  chan struct{}
+
+	// Leases is the Phase 6 / M2 in-memory lease table, shared between
+	// TaskRepository (writer) and ResultRepository (clearer on submit).
+	// Lives on DB so both repos see the same instance without an extra
+	// wiring layer. Recovery from KeyInprog runs in
+	// TaskRepository.recoverLeases at NewTaskRepository time.
+	Leases *leaseTable
 }
 
 // commitReq carries a single submitter's batch through the coalescer.
@@ -88,6 +95,7 @@ func Open(opts Options) (*DB, error) {
 		commitCh: make(chan *commitReq, commitChanBuf),
 		stopCh:   make(chan struct{}),
 		stopped:  make(chan struct{}),
+		Leases:   newLeaseTable(),
 	}
 	if err := wrapper.recoverSeq(); err != nil {
 		_ = d.Close()

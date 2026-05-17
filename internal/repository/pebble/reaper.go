@@ -121,67 +121,47 @@ func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(con
 	}
 }
 
-// sweepLeases scans up to leaseBatch entries from lease/*, requeues any
-// whose until_unix is in the past. Uses the same Nack semantics as the
-// foreground requeueExpired path so retry policy/DLQ behavior is
-// consistent regardless of who notices the expiry first.
+// sweepLeases snapshots up to leaseBatch entries from the in-memory
+// lease table (Phase 6 / M2) whose until_unix is in the past, then
+// requeues each via the same path as the foreground requeueExpired so
+// retry policy / DLQ behavior stays consistent regardless of which
+// path notices the expiry first. Pre-M2 this scanned KeyLease entries
+// on disk; the in-memory swap removed a per-tick Pebble iter from the
+// reaper's hot path AND eliminated 1 KeyLease write per Claim.
 func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
-	lower, upper := PrefixLease()
-	it, err := r.db.Iter(lower, upper)
-	if err != nil {
-		return 0, err
-	}
-	defer it.Close()
-
-	type expired struct {
-		id    string
-		until int64
-	}
-	bucket := make([]expired, 0, r.leaseBatch)
 	now := time.Now().In(r.tz).Unix()
-	for valid := it.First(); valid && len(bucket) < r.leaseBatch; valid = it.Next() {
-		k := it.Key()
-		v := it.Value()
-		_, until, ok := parseLease(v)
-		if !ok {
-			continue
-		}
-		if until > now {
-			continue
-		}
-		id := strings.TrimPrefix(string(k), pLease)
-		bucket = append(bucket, expired{id: id, until: until})
-	}
-	if len(bucket) == 0 {
+	ids := r.db.Leases.SnapshotExpired(now, r.leaseBatch)
+	if len(ids) == 0 {
 		return 0, nil
 	}
-
 	moved := 0
-	for _, e := range bucket {
-		taskJSON, err := r.db.Get(KeyTask(e.id))
+	for _, id := range ids {
+		// Double-check the lease is still expired — a Heartbeat between
+		// snapshot and now would have extended it.
+		if e, ok := r.db.Leases.Get(id); ok && e.untilU > now {
+			continue
+		}
+		taskJSON, err := r.db.Get(KeyTask(id))
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				// Task gone — just delete the dangling lease.
-				_ = r.db.Delete(KeyLease(e.id))
+				r.db.Leases.Delete(id)
 				continue
 			}
 			return moved, err
 		}
 		var t domain.Task
 		if err := sonic.Unmarshal(taskJSON, &t); err != nil {
-			_ = r.db.Delete(KeyLease(e.id))
+			r.db.Leases.Delete(id)
 			continue
 		}
 		if t.Status != domain.StatusInProgress {
-			_ = r.db.Delete(KeyLease(e.id))
+			r.db.Leases.Delete(id)
 			continue
 		}
 		metrics.LeaseExpiredTotal.WithLabelValues(string(t.Command)).Inc()
 		delaySeconds := backoff.Compute(r.backoffPolicy, r.backoffBaseSeconds, r.backoffMaxSeconds, t.Attempts, nil)
-		// Reuse the resultRepo Nack indirectly by inlining the smaller path
-		// here — we'd otherwise need to hold a *taskRepo reference.
 		if err := r.requeueExpiredOne(ctx, &t, delaySeconds); err != nil {
-			r.logger.Warn("reap requeue failed", "id", e.id, "err", err)
+			r.logger.Warn("reap requeue failed", "id", id, "err", err)
 			continue
 		}
 		moved++
@@ -207,9 +187,8 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 	if err := b.Delete(KeyInprog(t.Command, t.TenantID, t.ID), nil); err != nil {
 		return err
 	}
-	if err := b.Delete(KeyLease(t.ID), nil); err != nil {
-		return err
-	}
+	// Phase 6 / M2: KeyLease eliminated; in-memory drop happens after
+	// CommitBatch below so a failed commit doesn't lose the lease.
 
 	if t.Attempts >= t.MaxAttempts {
 		t.Status = domain.StatusFailed
@@ -228,6 +207,7 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 		if err := r.db.CommitBatch(b); err != nil {
 			return err
 		}
+		r.db.Leases.Delete(t.ID)
 		metrics.TaskCompletedTotal.WithLabelValues(string(t.Command), string(t.Status)).Inc()
 		return nil
 	}
@@ -245,7 +225,11 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 	if err := b.Set(KeyTask(t.ID), updated, nil); err != nil {
 		return err
 	}
-	return r.db.CommitBatch(b)
+	if err := r.db.CommitBatch(b); err != nil {
+		return err
+	}
+	r.db.Leases.Delete(t.ID)
+	return nil
 }
 
 // sweepTTL drops aged-out task hashes (and their lease entries) up to
@@ -286,15 +270,16 @@ func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
 		if err := b.Delete(KeyTask(c.id), nil); err != nil {
 			return 0, err
 		}
-		if err := b.Delete(KeyLease(c.id), nil); err != nil {
-			return 0, err
-		}
+		// Phase 6 / M2: KeyLease eliminated; in-memory drop below.
 		if err := b.Delete(c.ttlKey, nil); err != nil {
 			return 0, err
 		}
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return 0, err
+	}
+	for _, c := range bucket {
+		r.db.Leases.Delete(c.id)
 	}
 	return len(bucket), nil
 }

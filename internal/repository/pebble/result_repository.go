@@ -138,14 +138,17 @@ func (r *ResultRepository) UpdateTaskOnComplete(ctx context.Context, id string, 
 	if err := b.Delete(KeyInprog(cmd, tenantID, id), nil); err != nil {
 		return err
 	}
-	if err := b.Delete(KeyLease(id), nil); err != nil {
-		return err
-	}
+	// Phase 6 / M2: KeyLease eliminated; the in-memory lease is
+	// cleared below after the durable commit.
 	ttlScore := uint64(r.now().Add(taskRetention).Unix())
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return err
 	}
-	return r.db.CommitBatch(b)
+	if err := r.db.CommitBatch(b); err != nil {
+		return err
+	}
+	r.db.Leases.Delete(id)
+	return nil
 }
 
 func (r *ResultRepository) RemoveFromInprogAndClearLease(ctx context.Context, id string, cmd domain.Command, tenantID string) error {
@@ -154,10 +157,12 @@ func (r *ResultRepository) RemoveFromInprogAndClearLease(ctx context.Context, id
 	if err := b.Delete(KeyInprog(cmd, tenantID, id), nil); err != nil {
 		return err
 	}
-	if err := b.Delete(KeyLease(id), nil); err != nil {
+	// Phase 6 / M2: KeyLease eliminated.
+	if err := r.db.CommitBatch(b); err != nil {
 		return err
 	}
-	return r.db.CommitBatch(b)
+	r.db.Leases.Delete(id)
+	return nil
 }
 
 // DecodeBase64 mirrors the redis-side helper used by the result service
@@ -227,14 +232,18 @@ func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updat
 		if err := b.Delete(KeyInprog(t.Command, t.TenantID, u.ID), nil); err != nil {
 			return err
 		}
-		if err := b.Delete(KeyLease(u.ID), nil); err != nil {
-			return err
-		}
+		// Phase 6 / M2: KeyLease eliminated.
 		if err := b.Set(KeyTTLIndex(ttlScore, u.ID), nil, nil); err != nil {
 			return err
 		}
 	}
-	return r.db.CommitBatch(b)
+	if err := r.db.CommitBatch(b); err != nil {
+		return err
+	}
+	for _, u := range updates {
+		r.db.Leases.Delete(u.ID)
+	}
+	return nil
 }
 
 func (r *ResultRepository) BatchRemoveFromInprogAndClearLease(ctx context.Context, deletes []domain.TaskDeleteInfo) error {
@@ -247,9 +256,13 @@ func (r *ResultRepository) BatchRemoveFromInprogAndClearLease(ctx context.Contex
 		if err := b.Delete(KeyInprog(d.Command, d.TenantID, d.ID), nil); err != nil {
 			return err
 		}
-		if err := b.Delete(KeyLease(d.ID), nil); err != nil {
-			return err
-		}
+		// Phase 6 / M2: KeyLease eliminated.
 	}
-	return r.db.CommitBatch(b)
+	if err := r.db.CommitBatch(b); err != nil {
+		return err
+	}
+	for _, d := range deletes {
+		r.db.Leases.Delete(d.ID)
+	}
+	return nil
 }
