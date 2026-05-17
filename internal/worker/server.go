@@ -324,24 +324,34 @@ func (s *Server) handleReadyOne(ctx context.Context, sess *streamSession, comman
 }
 
 // handleReadyBatch claims up to `count` tasks and sends them as one
-// TaskBatch. First task waits up to MaxClaimRetries × ClaimPollDelay so
-// idle workers don't busy-loop; subsequent tasks pull only if the
-// scheduler returns immediately — we never block waiting for the second
-// task once the batch has one, because the worker would rather start
-// processing the partial batch than wait for the queue to fill.
+// TaskBatch. Phase 7 swap: instead of N serial ClaimTask calls (each
+// committing its own Pebble batch), we issue a single ClaimManyTasks
+// which the Pebble backend services with one pop loop + one batch
+// commit. On Redis the service falls back to the N-call loop so the
+// behavior degrades cleanly.
+//
+// Poll loop preserves the "wait if queue is empty" semantics for idle
+// workers — first ClaimMany may come back empty, in which case we
+// sleep and retry until we get something or hit the retry budget.
+// Once the first batch returns we send TaskBatch immediately; we
+// don't keep pulling while-we-have-tasks because ClaimMany already
+// drained the channels in one shot.
 func (s *Server) handleReadyBatch(ctx context.Context, sess *streamSession, commands []domain.Command, lease, count int) {
-	tasks := make([]*workerpb.Task, 0, count)
-	for attempt := 0; attempt <= s.MaxClaimRetries && len(tasks) == 0; attempt++ {
+	var tasks []*workerpb.Task
+	for attempt := 0; attempt <= s.MaxClaimRetries; attempt++ {
 		if ctx.Err() != nil {
 			return
 		}
-		task, ok, err := s.Scheduler.ClaimTask(ctx, sess.workerID, commands, lease, 0, sess.tenantID)
+		got, err := s.Scheduler.ClaimManyTasks(ctx, sess.workerID, commands, lease, count, sess.tenantID)
 		if err != nil {
 			_ = sess.sendError(codes.Internal, err.Error())
 			return
 		}
-		if ok && task != nil {
-			tasks = append(tasks, taskToProto(task))
+		if len(got) > 0 {
+			tasks = make([]*workerpb.Task, len(got))
+			for i, t := range got {
+				tasks[i] = taskToProto(t)
+			}
 			break
 		}
 		select {
@@ -349,17 +359,6 @@ func (s *Server) handleReadyBatch(ctx context.Context, sess *streamSession, comm
 			return
 		case <-time.After(s.ClaimPollDelay):
 		}
-	}
-	// Greedy drain — pull more tasks while the scheduler has them ready.
-	for len(tasks) < count {
-		if ctx.Err() != nil {
-			break
-		}
-		task, ok, err := s.Scheduler.ClaimTask(ctx, sess.workerID, commands, lease, 0, sess.tenantID)
-		if err != nil || !ok || task == nil {
-			break
-		}
-		tasks = append(tasks, taskToProto(task))
 	}
 	if len(tasks) == 0 {
 		return

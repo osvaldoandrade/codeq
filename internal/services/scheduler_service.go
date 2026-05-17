@@ -22,6 +22,13 @@ import (
 type SchedulerService interface {
 	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
 	ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error)
+	// ClaimManyTasks pops up to max tasks in one round-trip when the
+	// underlying repo supports batched claim (Pebble does via Phase 7's
+	// ClaimMany). Falls back to looping ClaimTask for repos that don't.
+	// Returns the claimed tasks in pop order; may return fewer than max
+	// (or nil) if the queue emptied. waitSeconds=0 — caller controls
+	// polling for the batch path.
+	ClaimManyTasks(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, max int, tenantID string) ([]*domain.Task, error)
 	Heartbeat(ctx context.Context, taskID, workerID string, extendSeconds int) error
 	Abandon(ctx context.Context, taskID, workerID string) error
 	NackTask(ctx context.Context, taskID, workerID string, delaySeconds int, reason string) (int, bool, error)
@@ -31,6 +38,13 @@ type SchedulerService interface {
 
 	// Novo: limpeza administrativa por índice Z
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
+}
+
+// batchClaimer is the optional repo interface implemented by Pebble's
+// TaskRepository (Phase 7). Redis-backed repos don't implement it and
+// fall back to the loop in ClaimManyTasks.
+type batchClaimer interface {
+	ClaimMany(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, max int, inspectLimit int, maxAttemptsDefault int, tenantID string) ([]*domain.Task, error)
 }
 
 type schedulerService struct {
@@ -124,6 +138,47 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 		s.notifier.NotifyQueueReady(ctx, cmd)
 	}
 	return task, nil
+}
+
+// ClaimManyTasks dispatches to repo.ClaimMany when the backend supports
+// it (Pebble), or falls back to looping ClaimTask. The fast path packs
+// up to `max` claims into one Pebble batch with one commit. Single-RTT
+// regardless of N, which is what makes Phase 6 Q2's worker batch
+// actually faster instead of just structurally batched.
+func (s *schedulerService) ClaimManyTasks(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, max int, tenantID string) ([]*domain.Task, error) {
+	if workerID == "" {
+		return nil, errors.New("workerId is required")
+	}
+	if max <= 0 {
+		return nil, nil
+	}
+	if len(commands) == 0 {
+		commands = []domain.Command{domain.CmdGenerateMaster, domain.CmdGenerateCreative}
+	}
+	if leaseSeconds <= 0 {
+		leaseSeconds = s.defaultLease
+	}
+	if bc, ok := s.repo.(batchClaimer); ok {
+		tasks, err := bc.ClaimMany(ctx, workerID, commands, leaseSeconds, max, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
+		for _, t := range tasks {
+			metrics.TaskClaimedTotal.WithLabelValues(string(t.Command)).Inc()
+		}
+		return tasks, err
+	}
+	// Fallback: loop ClaimTask (no batch optimisation on this backend).
+	out := make([]*domain.Task, 0, max)
+	for range max {
+		t, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
+		if err != nil {
+			return out, err
+		}
+		if !ok || t == nil {
+			break
+		}
+		metrics.TaskClaimedTotal.WithLabelValues(string(t.Command)).Inc()
+		out = append(out, t)
+	}
+	return out, nil
 }
 
 func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error) {

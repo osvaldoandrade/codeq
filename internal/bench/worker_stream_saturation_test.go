@@ -3,6 +3,8 @@ package bench
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,11 +35,13 @@ func TestSaturation_StreamPath(t *testing.T) {
 	concurrencies := []int{1, 4, 16, 32, 64, 128, 256, 512}
 	for _, c := range concurrencies {
 		t.Run(fmt.Sprintf("concurrency=%d", c), func(t *testing.T) {
+			batchSize, _ := strconv.Atoi(os.Getenv("PHASE6_BATCH"))
 			cli, err := workerclient.New(workerclient.Config{
 				Addr:         streamAddr,
 				Token:        phase2WorkerToken,
 				Commands:     []string{"GENERATE_MASTER"},
 				Concurrency:  c,
+				BatchSize:    batchSize,
 				LeaseSeconds: 300,
 			})
 			if err != nil {
