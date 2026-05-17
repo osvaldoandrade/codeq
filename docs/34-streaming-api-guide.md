@@ -13,6 +13,118 @@ The codeQ streaming API provides high-throughput alternatives to the HTTP API fo
 
 ---
 
+## Diagrams
+
+The three sequence diagrams below summarise the streaming protocol at a
+glance: how the producer pipelines `CreateTask` messages on a single
+stream, how a single-mode worker loops Ready → Task → Result, and how a
+batch-mode worker (Phase 6 Q2 + Phase 7) drains many tasks per round
+trip. For the full SDK surfaces, see
+[Producer streaming SDK](./35-producer-streaming-sdk.md) (U8) and
+[Worker streaming SDK](./36-worker-streaming-sdk.md) (U9).
+
+### Diagram 1: Producer pipeline (3 in-flight CreateTask)
+
+A producer `Session` keeps a bidirectional gRPC stream open and can have
+multiple `CreateTask` messages in flight before any `CreateAck` arrives.
+The server fans each message into the `SchedulerService`, which writes
+to Pebble; acknowledgments come back asynchronously and may arrive
+out-of-order relative to submission.
+
+```mermaid
+sequenceDiagram
+  participant Session as Producer Session
+  participant Stream as Server Stream
+  participant Scheduler as SchedulerService
+  participant Pebble
+  Session->>Stream: CreateTask{seq=1}
+  Session->>Stream: CreateTask{seq=2}
+  Session->>Stream: CreateTask{seq=3}
+  Stream->>Scheduler: dispatch(seq=1)
+  Stream->>Scheduler: dispatch(seq=2)
+  Stream->>Scheduler: dispatch(seq=3)
+  Scheduler->>Pebble: BatchCommit(seq=2)
+  Pebble-->>Scheduler: ok
+  Scheduler-->>Stream: ack(seq=2)
+  Stream-->>Session: CreateAck{seq=2}
+  Scheduler->>Pebble: BatchCommit(seq=1)
+  Pebble-->>Scheduler: ok
+  Scheduler-->>Stream: ack(seq=1)
+  Stream-->>Session: CreateAck{seq=1}
+  Scheduler->>Pebble: BatchCommit(seq=3)
+  Pebble-->>Scheduler: ok
+  Scheduler-->>Stream: ack(seq=3)
+  Stream-->>Session: CreateAck{seq=3}
+```
+
+The producer correlates each `CreateAck` to the originating `Produce`
+call via `seq`, so callers see the right `taskID` even though the
+acknowledgments are interleaved. See
+[Producer streaming SDK](./35-producer-streaming-sdk.md) (U8) for the
+matching client API.
+
+### Diagram 2: Worker Ready → Task → Result loop (single mode, count=1)
+
+A worker opens one stream, completes the `Hello` / `HelloAck` handshake
+once, and then loops: declare capacity with `Ready{count=1}`, wait for
+a `Task`, process it, send a `Result`, and read the `ResultAck` before
+asking for the next task.
+
+```mermaid
+sequenceDiagram
+  participant Worker
+  participant Server
+  Worker->>Server: Hello{token, worker_id}
+  Server-->>Worker: HelloAck{tenant_id}
+  loop Ready -> Task -> Result
+    Worker->>Server: Ready{count=1}
+    Server-->>Worker: Task{id, command, payload}
+    Note over Worker: Handler runs
+    Worker->>Server: Result{id, status}
+    Server-->>Worker: ResultAck{id}
+  end
+```
+
+This is the path used when `Config.BatchSize <= 1`. See
+[Worker streaming SDK](./36-worker-streaming-sdk.md) (U9) for the slot
+model and reconnection rules.
+
+### Diagram 3: Worker batch loop (Phase 6 Q2 + Phase 7)
+
+When `Config.BatchSize > 1`, the worker advertises capacity with
+`Ready{count=32}`. The server calls `ClaimManyTasks` against a single
+Pebble batch, returns up to 32 tasks in one `TaskBatch`, and the worker
+processes them locally before submitting a `ResultBatch`. Pebble commits
+once for the whole batch on the way in and once on the way out.
+
+```mermaid
+sequenceDiagram
+  participant Worker
+  participant Server
+  participant Pebble
+  Worker->>Server: Hello{token, worker_id}
+  Server-->>Worker: HelloAck{tenant_id}
+  loop Batch claim -> process -> submit
+    Worker->>Server: Ready{count=32}
+    Server->>Pebble: ClaimManyTasks(count=32)
+    Pebble-->>Server: BatchCommit(N tasks)
+    Server-->>Worker: TaskBatch{tasks[N<=32]}
+    Note over Worker: Handler processes N tasks
+    Worker->>Server: ResultBatch{results[N]}
+    Server->>Pebble: BatchSubmit(results[N])
+    Pebble-->>Server: ok
+    Server-->>Worker: ResultAckBatch{N}
+  end
+```
+
+The batch path is the one measured at 23,518 tasks/s in
+`internal/bench/worker_stream_saturation_test.go::TestSaturation_StreamPath`
+(c=4, `PHASE6_BATCH=32`). See
+[Worker streaming SDK](./36-worker-streaming-sdk.md) (U9) for how
+`Concurrency` and `BatchSize` combine to bound in-flight tasks.
+
+---
+
 ## Part 1: Tutorials (Learning-Oriented)
 
 ### Producer Streaming Tutorial
@@ -845,12 +957,14 @@ func isPermanent(err error) bool {
 
 ---
 
-## See Also
+## See also
 
-- `docs/03-architecture.md` - System architecture overview; includes gRPC Streaming Flows section
-- `docs/04-http-api.md` - HTTP REST API reference (streaming mentioned as alternative)
-- `docs/09-security.md` - Authentication and bearer token configuration
-- `pkg/producerclient/client.go` - Producer client source code
-- `pkg/workerclient/client.go` - Worker client source code
-- `internal/producer/proto/producerpb.proto` - Producer protocol definition
-- `internal/worker/proto/workerpb.proto` - Worker protocol definition
+- [Producer streaming SDK](./35-producer-streaming-sdk.md) — client API
+  behind Diagram 1 (U8).
+- [Worker streaming SDK](./36-worker-streaming-sdk.md) — client API
+  behind Diagrams 2 and 3 (U9).
+- [HTTP API](./04-http-api.md) — REST surface; streaming is an opt-in
+  alternative for hot paths.
+- [Performance tuning](./17-performance-tuning.md) — knobs that govern
+  `Concurrency`, `BatchSize`, and the Pebble commit coalescer cited in
+  Diagram 3.
