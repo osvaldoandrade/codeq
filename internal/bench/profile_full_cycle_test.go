@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -177,13 +177,39 @@ func writeProfile(path, kind string) error {
 
 // startProducerLoad launches `n` goroutines that pump creates through
 // the producer session until ctx is cancelled. Returns the counter that
-// tracks accepted creates.
+// tracks accepted creates. PHASE6_PROD_BATCH env > 1 switches each
+// goroutine to ProduceBatch with that batch size — the Phase 6 / Q3
+// producer-side batch path.
 func startProducerLoad(t *testing.T, sess *producerclient.Session, ctx context.Context, n int) *atomic.Int64 {
 	t.Helper()
 	body := []byte(`{"bench":true}`)
+	batchSize, _ := strconv.Atoi(os.Getenv("PHASE6_PROD_BATCH"))
 	var created atomic.Int64
 	var wg sync.WaitGroup
 	for range n {
+		if batchSize > 1 {
+			wg.Go(func() {
+				reqs := make([]producerclient.CreateRequest, batchSize)
+				for i := range reqs {
+					reqs[i] = producerclient.CreateRequest{
+						Command: "GENERATE_MASTER",
+						Payload: body,
+					}
+				}
+				for ctx.Err() == nil {
+					results, err := sess.ProduceBatch(ctx, reqs)
+					if err != nil {
+						return
+					}
+					for _, r := range results {
+						if r.Err == nil {
+							created.Add(1)
+						}
+					}
+				}
+			})
+			continue
+		}
 		wg.Go(func() {
 			for ctx.Err() == nil {
 				_, err := sess.Produce(ctx, producerclient.CreateRequest{

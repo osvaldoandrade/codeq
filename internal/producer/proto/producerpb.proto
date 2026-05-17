@@ -51,10 +51,21 @@ message CreateTask {
   string trace_state = 11;
 }
 
+// CreateTaskBatch is a producer pipelining N CreateTasks into a single
+// stream message. Server processes them with one fan-out goroutine
+// instead of one per CreateTask, and emits a single CreateAckBatch
+// covering every seq. The Pebble commit coalescer (Phase 1.1) merges
+// the resulting writes into fewer commits; combined with the reduced
+// gRPC framing this is the Phase 6 / Q3 batch path for producers.
+message CreateTaskBatch {
+  repeated CreateTask tasks = 1;
+}
+
 message ProducerEvent {
   oneof event {
     Hello hello = 1;
     CreateTask create = 2;
+    CreateTaskBatch create_batch = 3;
   }
 }
 
@@ -80,11 +91,18 @@ message ServerError {
   string message = 2;
 }
 
+// CreateAckBatch acks every CreateTask in a CreateTaskBatch in one
+// message. Order matches the input order.
+message CreateAckBatch {
+  repeated CreateAck acks = 1;
+}
+
 message ServerEvent {
   oneof event {
     HelloAck hello_ack = 1;
     CreateAck create_ack = 2;
     ServerError error = 3;
+    CreateAckBatch create_ack_batch = 4;
   }
 }
 

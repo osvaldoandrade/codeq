@@ -273,3 +273,98 @@ func TestNewValidatesRequiredFields(t *testing.T) {
 		t.Error("missing Token should error")
 	}
 }
+
+// TestProduceBatch_HappyPath drives the Phase 6 / Q3 batch path
+// end-to-end: 16 CreateTasks in one CreateTaskBatch, server fans out
+// in parallel, replies with one CreateAckBatch. All results must come
+// back with non-empty task ids and no error.
+func TestProduceBatch_HappyPath(t *testing.T) {
+	f := newFixture(t)
+	defer f.stop()
+
+	c, err := producerclient.New(producerclient.Config{Addr: f.streamAddr, Token: "dev-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess, err := c.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer sess.Close()
+
+	const n = 16
+	reqs := make([]producerclient.CreateRequest, n)
+	for i := range n {
+		reqs[i] = producerclient.CreateRequest{
+			Command: "GENERATE_MASTER",
+			Payload: fmt.Appendf(nil, `{"i":%d}`, i),
+		}
+	}
+	results, err := sess.ProduceBatch(ctx, reqs)
+	if err != nil {
+		t.Fatalf("ProduceBatch: %v", err)
+	}
+	if len(results) != n {
+		t.Fatalf("results len=%d, want %d", len(results), n)
+	}
+	seenIDs := make(map[string]struct{}, n)
+	for i, r := range results {
+		if r.Err != nil {
+			t.Errorf("result[%d].Err=%v", i, r.Err)
+			continue
+		}
+		if r.TaskID == "" {
+			t.Errorf("result[%d] empty TaskID", i)
+			continue
+		}
+		if _, dup := seenIDs[r.TaskID]; dup {
+			t.Errorf("result[%d] duplicate TaskID %s", i, r.TaskID)
+		}
+		seenIDs[r.TaskID] = struct{}{}
+	}
+}
+
+// TestProduceBatch_RejectsInvalid mixes valid and invalid requests
+// (empty command) in one batch and verifies acks come back per-index
+// with the right ok/err split.
+func TestProduceBatch_RejectsInvalid(t *testing.T) {
+	f := newFixture(t)
+	defer f.stop()
+
+	c, err := producerclient.New(producerclient.Config{Addr: f.streamAddr, Token: "dev-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	sess, err := c.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer sess.Close()
+
+	reqs := []producerclient.CreateRequest{
+		{Command: "GENERATE_MASTER", Payload: []byte(`{"ok":1}`)},
+		{Command: "", Payload: []byte(`{"bad":1}`)}, // invalid
+		{Command: "GENERATE_MASTER", Payload: []byte(`{"ok":2}`)},
+	}
+	results, err := sess.ProduceBatch(ctx, reqs)
+	if err != nil {
+		t.Fatalf("ProduceBatch: %v", err)
+	}
+	if results[0].Err != nil || results[0].TaskID == "" {
+		t.Errorf("results[0] should succeed: %+v", results[0])
+	}
+	if results[1].Err == nil {
+		t.Errorf("results[1] should fail: %+v", results[1])
+	}
+	if results[2].Err != nil || results[2].TaskID == "" {
+		t.Errorf("results[2] should succeed: %+v", results[2])
+	}
+}

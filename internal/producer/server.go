@@ -110,16 +110,6 @@ func (s *streamSession) send(ev *producerpb.ServerEvent) error {
 	}
 }
 
-func (s *streamSession) sendAck(seq uint64, ok bool, taskID, errMsg string) error {
-	return s.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_CreateAck{
-		CreateAck: &producerpb.CreateAck{
-			Seq:          seq,
-			Ok:           ok,
-			TaskId:       taskID,
-			ErrorMessage: errMsg,
-		},
-	}})
-}
 
 // Stream is the bidirectional rpc. First message MUST be Hello; the
 // server validates the token and replies with HelloAck. Subsequent
@@ -167,6 +157,12 @@ func (s *Server) Stream(stream producerpb.ProducerStream_StreamServer) error {
 				defer wg.Done()
 				s.handleCreate(ctx, sess, req)
 			}(e.Create)
+		case *producerpb.ProducerEvent_CreateBatch:
+			wg.Add(1)
+			go func(req *producerpb.CreateTaskBatch) {
+				defer wg.Done()
+				s.handleCreateBatch(ctx, sess, req)
+			}(e.CreateBatch)
 		default:
 			_ = sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_Error{
 				Error: &producerpb.ServerError{Code: codes.InvalidArgument.String(), Message: "unknown-event"},
@@ -208,28 +204,32 @@ func (s *Server) handleHello(stream producerpb.ProducerStream_StreamServer) (*st
 }
 
 func (s *Server) handleCreate(ctx context.Context, sess *streamSession, req *producerpb.CreateTask) {
+	ack := s.processCreate(ctx, sess, req)
+	_ = sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_CreateAck{CreateAck: ack}})
+}
+
+// processCreate validates one CreateTask request, invokes the scheduler,
+// and returns the resulting CreateAck. Shared by handleCreate (single
+// ack) and handleCreateBatch (acks coalesced into CreateAckBatch).
+func (s *Server) processCreate(ctx context.Context, sess *streamSession, req *producerpb.CreateTask) *producerpb.CreateAck {
 	if req == nil {
-		return
+		return &producerpb.CreateAck{Ok: false, ErrorMessage: "nil request"}
 	}
 	cmd := domain.Command(strings.TrimSpace(req.Command))
 	if cmd == "" {
-		_ = sess.sendAck(req.Seq, false, "", "command is required")
-		return
+		return &producerpb.CreateAck{Seq: req.Seq, Ok: false, ErrorMessage: "command is required"}
 	}
 	if req.DelaySeconds < 0 {
-		_ = sess.sendAck(req.Seq, false, "", "delaySeconds must be >= 0")
-		return
+		return &producerpb.CreateAck{Seq: req.Seq, Ok: false, ErrorMessage: "delaySeconds must be >= 0"}
 	}
 	var runAt time.Time
 	if req.RunAt != nil {
 		runAt = req.RunAt.AsTime()
 	}
-
 	payload := string(req.Payload)
 	if payload == "" {
 		payload = "null"
 	}
-
 	task, err := s.Scheduler.CreateTask(
 		ctx,
 		cmd,
@@ -243,10 +243,35 @@ func (s *Server) handleCreate(ctx context.Context, sess *streamSession, req *pro
 		sess.tenantID,
 	)
 	if err != nil {
-		_ = sess.sendAck(req.Seq, false, "", err.Error())
+		return &producerpb.CreateAck{Seq: req.Seq, Ok: false, ErrorMessage: err.Error()}
+	}
+	return &producerpb.CreateAck{Seq: req.Seq, Ok: true, TaskId: task.ID}
+}
+
+// handleCreateBatch fans out N CreateTasks in parallel goroutines so
+// the Pebble write loop and notifier still process them concurrently
+// (the Phase 1.1 commit coalescer merges the writes into fewer Pebble
+// commits). All N results are then bundled into one CreateAckBatch
+// so the wire-side ack is a single Send instead of N. Net effect on
+// the producer hot path: one Recv + one fan-out goroutine + one Send,
+// vs N Recv + N fan-out goroutines + N Sends.
+func (s *Server) handleCreateBatch(ctx context.Context, sess *streamSession, req *producerpb.CreateTaskBatch) {
+	if req == nil || len(req.Tasks) == 0 {
 		return
 	}
-	_ = sess.sendAck(req.Seq, true, task.ID, "")
+	acks := make([]*producerpb.CreateAck, len(req.Tasks))
+	var wg sync.WaitGroup
+	for i, t := range req.Tasks {
+		wg.Add(1)
+		go func(idx int, tk *producerpb.CreateTask) {
+			defer wg.Done()
+			acks[idx] = s.processCreate(ctx, sess, tk)
+		}(i, t)
+	}
+	wg.Wait()
+	_ = sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_CreateAckBatch{
+		CreateAckBatch: &producerpb.CreateAckBatch{Acks: acks},
+	}})
 }
 
 // tenantIDFromClaims mirrors middleware/tenant.go's extractTenantID but
