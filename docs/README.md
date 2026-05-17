@@ -21,13 +21,15 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
 30. `docs/30-performance-baselines.md` - Baseline load test results and regression benchmarks
 33. `docs/33-staging-validation-runbook.md` - Staging performance validation runbook
+34. `docs/34-streaming-api-guide.md` - gRPC streaming APIs for high-throughput producers and workers
 
 ### Technical Reference (Information-Oriented)
 
 1. `docs/01-overview.md` - System overview and goals
 2. `docs/02-domain-model.md` - Core entities and relationships
 3. `docs/03-architecture.md` - System architecture and components
-4. `docs/04-http-api.md` - HTTP API reference
+4. `docs/04-http-api.md` - HTTP API reference (REST endpoints)
+34. `docs/34-streaming-api-guide.md` - gRPC streaming API reference (producer and worker protocols)
 5. `docs/05-queueing-model.md` - Queue semantics and behavior
 6. `docs/06-sharding.md` - Sharding strategy and ShardSupplier interface
 7. `docs/07-storage-kvrocks.md` - KVRocks storage layout

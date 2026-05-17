@@ -1,5 +1,7 @@
 # HTTP API
 
+> **Note on Streaming APIs**: codeQ also provides high-performance gRPC streaming APIs for producers and workers. See [`docs/34-streaming-api-guide.md`](./34-streaming-api-guide.md) for tutorials, reference, and performance comparisons. Streaming achieves 2-3× higher throughput than REST by amortizing authentication and enabling async pipelining.
+
 All endpoints are under `/v1/codeq` except `/healthz` and `/metrics`.
 
 ## Common headers
