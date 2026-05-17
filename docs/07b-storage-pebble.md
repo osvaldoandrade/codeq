@@ -28,14 +28,56 @@ Pebble keys use a flat namespace with hierarchical prefixes optimized for LSM-tr
   - `{seq}`: 8-byte big-endian sequence number (enables FIFO ordering within priority)
   - `{id}`: Task ID (unique per task)
 - **In-progress tracking**: `codeq/q/{command}/{tenantID}/inprog/{id}`
-- **Delayed tasks**: `codeq/q/{command}/{tenantID}/delayed/{id}` (sorted by timestamp score)
+- **Delayed tasks**: `codeq/q/{command}/{tenantID}/delayed/{score}/{id}` (sorted by big-endian unix-second score)
 - **DLQ**: `codeq/q/{command}/{tenantID}/dlq/{id}`
 - **Task data**: `codeq/tasks/{id}` (JSON-encoded task metadata)
 - **Result data**: `codeq/results/{id}` (JSON-encoded result)
-- **TTL tracking**: `codeq/tasks/ttl/{id}` (retention epoch seconds)
+- **TTL tracking**: `codeq/ttl/{expire_unix}/{id}` (range-scan reaper)
 - **Leases**: `codeq/lease/{id}`
 - **Idempotency**: `codeq/idempo/{key}`
 - **Subscriptions**: `codeq/subs/{event}/{id}`
+
+### Keyspace map
+
+The diagram below groups every byte-prefix under the `codeq/` namespace by
+role. Three prefixes carry the bulk of the create → claim → complete
+cycle and are marked **hot-path** — every Enqueue writes `codeq/tasks/`
+plus `codeq/q/<cmd>/<tenant>/pending/`, and every Claim moves a key from
+`pending/` into `codeq/q/<cmd>/<tenant>/inprog/`. The remaining prefixes
+are written on slower paths (delayed delivery, DLQ promotion, TTL
+reaping, webhook subscriptions). Source of truth:
+[`internal/repository/pebble/keys.go`](../internal/repository/pebble/keys.go).
+
+```mermaid
+graph TB
+  subgraph NS[codeq/ namespace]
+    subgraph Hot[Hot-path prefixes]
+      TASKS[codeq/tasks/&lt;id&gt;<br/>task JSON]
+      PENDING[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/pending/<br/>&lt;prio_be1&gt;/&lt;seq_be8&gt;/&lt;id&gt;]
+      INPROG[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/inprog/&lt;id&gt;]
+    end
+    subgraph Results[Result and idempotency]
+      RES[codeq/r/&lt;id&gt;<br/>result JSON]
+      IDEM[codeq/idempo/&lt;key&gt;<br/>idempotency map to task id]
+    end
+    subgraph Slow[Slow-path queues]
+      DELAYED[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/delayed/<br/>&lt;score_be8&gt;/&lt;id&gt;]
+      DLQ[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/dlq/&lt;id&gt;]
+    end
+    subgraph Reapers[Indexes scanned by reapers]
+      TTL[codeq/ttl/&lt;expire_be8&gt;/&lt;id&gt;]
+      LEASE[codeq/lease/&lt;id&gt;]
+    end
+    subgraph Subs[Webhook subscriptions]
+      SUB[codeq/subs/&lt;event&gt;/&lt;id&gt;]
+    end
+  end
+  PENDING -- Claim --> INPROG
+  INPROG -- SubmitResult --> RES
+  INPROG -- maxAttempts --> DLQ
+  DELAYED -- MoveDueDelayed --> PENDING
+  TASKS -. TTL register .-> TTL
+```
 
 ## Multi-tenancy
 
@@ -61,6 +103,57 @@ Pebble commits are atomic at the batch level. A batch can contain multiple puts,
 - Task finalization (save result + remove from in-progress + delete lease + update TTL)
 - Lease repair (multiple TTL checks and requeue operations)
 - Bulk operations (batch enqueue, batch result submission)
+
+### Batch commit and the group-commit coalescer
+
+Pre-Phase 1.1, every `CommitBatch` caller contended on Pebble's internal
+commit pipeline mutex; under N concurrent goroutines this serialized N
+commits and bounded throughput by the lock wait, not the disk. The
+Phase 1.1 win replaces that contention with a single coalescer
+goroutine that owns the write side: callers hand their batch to a
+channel, the coalescer pops the first request, opportunistically drains
+up to `maxMergeBatch=64` more requests already queued, merges them with
+`Batch.Apply` into one large batch, issues a single `Commit`, and fans
+the resulting error back to every joined caller through their per-call
+`done` channel. From the caller's perspective the contract is
+unchanged — `CommitBatch` is still synchronous, still atomic, still
+returns the commit error if any — but the underlying Pebble commit
+runs once for up to 64 logically independent batches.
+
+Source: [`internal/repository/pebble/db.go`](../internal/repository/pebble/db.go)
+(`commitLoop`, `CommitBatch`, `maxMergeBatch`).
+
+```mermaid
+sequenceDiagram
+  participant G1 as Goroutine 1
+  participant G2 as Goroutine 2
+  participant GN as Goroutine N
+  participant CH as commitCh (buffered)
+  participant CO as Coalescer goroutine
+  participant PB as Pebble
+
+  G1->>CH: send commitReq{batch1, done1}
+  G2->>CH: send commitReq{batch2, done2}
+  GN->>CH: send commitReq{batchN, doneN}
+  CO->>CH: recv first req (blocking)
+  CO->>CO: merged := NewBatch; Apply(batch1)
+  loop drain up to maxMergeBatch=64
+    CO->>CH: non-blocking recv next req
+    CO->>CO: merged.Apply(batchK)
+  end
+  CO->>PB: merged.Commit(NoSync)
+  PB-->>CO: err (nil on success)
+  CO-->>G1: done1 <- err
+  CO-->>G2: done2 <- err
+  CO-->>GN: doneN <- err
+```
+
+> **Performance**: the coalescer trades a single channel hop of latency
+> for one Pebble commit shared across up to 64 callers. On `-cpu 1` the
+> extra hop is net-neutral or slightly negative; on `-cpu high` it
+> scales near-linearly until the merge cap. See
+> `BenchmarkEnqueueParallel_*` in
+> [`internal/repository/pebble/bench_test.go`](../internal/repository/pebble/bench_test.go).
 
 ## Bloom Filters and Caching
 
@@ -91,6 +184,54 @@ Pebble's embedded design means only one process may hold the database lock at a 
 - **Writes**: O(1) amortized with write batching
 - **Compaction**: Background, ~10-15% slowdown during heavy merging
 
+## Phase 8 sharded routing
+
+The single-process bottleneck after Phase 1.1 was that one Pebble DB
+still owned one commit pipeline and one compaction worker. Phase 8
+splits the Pebble layer into N independent shards, each with its own
+DB, own commit coalescer, and own compaction. The
+[`ShardedTaskRepository`](../internal/repository/pebble/sharded_task_repository.go)
+wraps the N per-shard `TaskRepository` instances and routes every
+task-keyed call by `fnv1a64(taskID) % N`. Because every key derived
+from a single task ID (`KeyTask`, `KeyPending`, `KeyInprog`, `KeyDLQ`,
+`KeyDelayed`, `KeyTTLIndex`) hashes to the same shard, each individual
+task operation still commits in one Pebble batch — there are no
+cross-shard transactions on the hot path.
+
+Cross-shard operations exist but are kept off the per-task fast path:
+`Claim`/`ClaimMany` round-robin across shards, `MoveDueDelayed` fans
+out per shard, and `AdminQueues`/`PendingLength`/`QueueStats` aggregate
+results. Idempotency lookups route on `hash(idempotencyKey) % N`, the
+same shard the original Enqueue wrote into, so replays land back on
+the right entry.
+
+```mermaid
+sequenceDiagram
+  participant Caller as Caller (producer goroutine)
+  participant Sharded as ShardedTaskRepository
+  participant Shard as shards[i].TaskRepository
+  participant Coal as Coalescer (shard i)
+  participant Pebble as Pebble (shard i)
+
+  Caller->>Sharded: Enqueue(cmd, payload, ..., taskID)
+  Sharded->>Sharded: i := fnv1a64(taskID) % N
+  Sharded->>Shard: shards[i].EnqueueWithID(taskID, ...)
+  Shard->>Shard: build batch (KeyTask + KeyPending + idempo)
+  Shard->>Coal: CommitBatch(batch) via commitCh
+  Coal->>Coal: merge with peers on shard i (cap 64)
+  Coal->>Pebble: merged.Commit(NoSync)
+  Pebble-->>Coal: err
+  Coal-->>Shard: done <- err
+  Shard-->>Sharded: task, err
+  Sharded-->>Caller: task, err
+```
+
+> **Note**: cluster mode and intra-process sharding (`numShards > 1`)
+> are mutually exclusive — startup panics if both are enabled. Pick
+> one: multi-node across machines, or multi-shard inside one process.
+> See [Pebble sharding internals](./08b-pebble-sharding-internals.md)
+> for the per-shard component layout.
+
 ## Comparison with Redis/KVRocks
 
 | Feature | Pebble | Redis/KVRocks |
@@ -116,3 +257,14 @@ Pebble's embedded design means only one process may hold the database lock at a 
 - **High availability**: Cluster replication and failover
 - **Large scale**: Horizontal scaling, sharding support
 - **Existing infrastructure**: Leverage existing Redis/KVRocks clusters
+
+## See also
+
+- [Storage layout (Redis/KVRocks)](./07-storage-kvrocks.md) — the
+  network-backed alternative with the same data model.
+- [Pebble sharding internals](./08b-pebble-sharding-internals.md) —
+  per-shard component layout behind `ShardedTaskRepository`.
+- [Persistence plugin system](./27-persistence-plugin-system.md) — how
+  Pebble plugs into the repository interface alongside Redis.
+- [Performance tuning](./17-performance-tuning.md) — knobs for shard
+  count, batch sizes, and the coalescer in the field.
