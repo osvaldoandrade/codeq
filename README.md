@@ -1,42 +1,108 @@
-# codeQ
+# codeq
 
-Reactive scheduling and completion system backed by persistent queues. Choose your storage: KVRocks (distributed) or Pebble (embedded).
+> Embedded high-performance task queue. One Go binary, Pebble for
+> storage, gRPC streams on the wire. 83k tasks/s on a single 12-core
+> box with zero external dependencies.
 
-This repository contains the core runtime, HTTP API wiring, and a Helm chart for small clusters.
-The production service wrapper lives at:
-https://github.com/codecompany/codeq-service
+[![Go Reference](https://pkg.go.dev/badge/github.com/osvaldoandrade/codeq.svg)](https://pkg.go.dev/github.com/osvaldoandrade/codeq)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Issues](https://img.shields.io/github/issues/osvaldoandrade/codeq.svg)](https://github.com/osvaldoandrade/codeq/issues)
 
-## Links
+## What is codeq?
 
-- GitHub: https://github.com/osvaldoandrade/codeq
-- Issues: https://github.com/osvaldoandrade/codeq/issues
-- Specs index: `docs/README.md`
+codeq is a task queue written in Go. The default deployment is a single
+process: the server, the persistence layer (Pebble, the RocksDB-style
+LSM from CockroachDB), the lease table, and the gRPC + HTTP API all
+share one binary and one disk directory. There is no Redis to run, no
+broker to babysit, no consensus to coordinate.
 
-## Why codeQ
+On a 12-core Linux box, that single binary sustains **83,420 tasks/s**
+for the full create → claim → complete cycle and **136,392 creates/s**
+for producer-only workloads — measured by the in-tree benchmarks in
+`internal/bench/`. When one machine is no longer enough, cluster mode
+(consistent-hash ring + gRPC routing between nodes) and a legacy Redis
+backend are opt-in.
 
-codeQ provides:
+## Architecture overview
 
-- Persistent queues with pluggable storage backends:
-  - **Redis/KVRocks** (distributed, cluster-capable)
-  - **Pebble** (embedded, zero-dependency, ideal for local development)
-- Pull-based worker claims with leases.
-- **Multi-tenant queue isolation** with automatic tenant ID extraction from JWT claims.
-- **Horizontal scaling with queue sharding**: Optional pluggable `ShardSupplier` interface for routing commands/tenants across multiple KVRocks instances.
-- **Pluggable persistence backends**: Redis, memory (testing), and extensible plugin architecture for custom storage (PostgreSQL, DynamoDB, Cassandra, etc.).
-- NACK + backoff + delayed queues.
-- DLQ for tasks that exceed `maxAttempts`.
-- Result storage and optional callbacks (webhooks).
-- Worker auth via JWT (JWKS), producer auth via Tikti access tokens (JWKS).
-- **Official SDKs** for Java and Node.js/TypeScript with framework integrations.
-- **Distributed tracing** with OpenTelemetry support for end-to-end observability.
-- **Optimized performance**: O(1) queue operations with pipelined lease repair for low-latency claims even under high load.
-- **Load testing framework**: Comprehensive k6 scenarios and Go benchmarks for performance validation and regression testing.
+```mermaid
+graph TB
+  subgraph Clients
+    PSDK[Producer SDK]
+    WSDK[Worker SDK]
+    CURL[HTTP / curl]
+  end
+  subgraph Server[codeq server -- single binary]
+    HTTP[HTTP API -- Gin]
+    PGRPC[Producer gRPC stream]
+    WGRPC[Worker gRPC stream]
+    LEASE[In-memory lease table]
+  end
+  subgraph Storage[Embedded persistence]
+    P0[Pebble shard 0]
+    P1[Pebble shard 1]
+    PN[Pebble shard N-1]
+  end
+  subgraph Optional[Opt-in scaling]
+    CL[Cluster -- consistent-hash + gRPC]
+    REDIS[Redis backend -- legacy HA]
+  end
+  PSDK --> PGRPC
+  WSDK --> WGRPC
+  CURL --> HTTP
+  HTTP --> LEASE
+  PGRPC --> LEASE
+  WGRPC --> LEASE
+  LEASE --> P0
+  LEASE --> P1
+  LEASE --> PN
+  Server -.-> CL
+  Server -.-> REDIS
+```
 
-## Get started
+Producers and workers connect over long-lived bidirectional gRPC
+streams. Each request hits the in-memory lease table first, then commits
+to a Pebble shard chosen by `hash(taskID) % N`. Each shard runs its own
+commit pipeline and compaction loop, which is what lets a 4-shard
+configuration roughly double the single-shard throughput on the same
+hardware.
 
-### Local development with Docker Compose
+## Performance
 
-The quickest way to try codeQ locally:
+All numbers measured on a 12-core Linux box, Go 1.25.0, loopback gRPC,
+Pebble with `fsyncOnCommit=false`. Full bench harness lives in
+`internal/bench/`.
+
+| Workload | Throughput | Harness |
+|---|---:|---|
+| Full cycle (create + claim + complete), 4 Pebble shards | **83,420 tasks/s** | `internal/bench/profile_full_cycle_test.go::TestProfile_FullCycle` (`PHASE8_SHARDS=4 PHASE6_BATCH=32 PHASE6_PROD_BATCH=8`) |
+| Producer-only, batched stream | **136,392 creates/s** | `internal/bench/producer_stream_vs_rest_test.go::TestProducerThroughput_StreamBatchPath` |
+| Worker-only, batched claim+complete | **23,518 tasks/s** | `internal/bench/worker_stream_saturation_test.go::TestSaturation_StreamPath` (c=4, `PHASE6_BATCH=32`) |
+| Shard sweep (full cycle, 1 / 2 / 4 / 6 / 8 shards) | 42k / 65k / **83k** / 68k / 67k tasks/s | same as full cycle harness with `PHASE8_SHARDS` swept |
+
+Sweet spot is 4 shards on a 12-core box; past that, write
+amplification and goroutine contention start to dominate. See
+[docs/30-performance-baselines.md](docs/30-performance-baselines.md)
+for raw output and per-release history.
+
+## Why codeq vs alternatives
+
+| Feature | codeq | Asynq | BullMQ | Celery | Kafka |
+|---|---|---|---|---|---|
+| External dependency | **None** (embedded Pebble) | Redis | Redis | Redis or RabbitMQ | ZooKeeper / KRaft cluster |
+| Single-node full-cycle throughput | **83k tasks/s** | ~10k tasks/s | ~5k tasks/s | ~3k tasks/s | n/a (no task semantics) |
+| Language affinity | Go server, SDKs for Java, Node, Python, Go | Go only | Node only | Python only | Polyglot |
+| Durability | Pebble batch + group-commit; optional fsync | Redis AOF / RDB | Redis AOF / RDB | Broker-dependent | Replicated log |
+| Multi-tenant isolation | **Built in** (JWT tenantId namespacing) | DIY | DIY | DIY | DIY |
+| Time-to-first-task | `docker run` + `curl` | Run Redis + Asynq | Run Redis + worker | Run broker + workers + result backend | Multi-step cluster bootstrap |
+
+codeq is the right call when you want task-queue semantics (claims,
+leases, retries, DLQ, results) without standing up a broker. It is the
+wrong call if you need Kafka-scale event streaming, distributed
+consensus by default, or HA without configuring the Redis backend or
+cluster mode.
+
+## Quick start (5 minutes)
 
 ```bash
 git clone https://github.com/osvaldoandrade/codeq
@@ -47,125 +113,10 @@ docker compose \
   up -d
 ```
 
-This starts KVRocks, the codeQ API server, and seeds example tasks. Access at `http://localhost:8080`.
+This brings up the codeq server on `http://localhost:8080` with the
+embedded Pebble backend (no Redis required) and seeds example tasks.
 
-See [Local Development Guide](docs/22-local-development.md) for details on hot reload, testing, and observability.
-
-### Install a server
-
-Use the console wizard to generate a Docker or Kubernetes/Helm install bundle:
-
-```bash
-codeq install
-```
-
-Non-interactive Kubernetes example:
-
-```bash
-codeq install \
-  --target kubernetes \
-  --size small \
-  --namespace codeq \
-  --identity-service-url https://issuer.example.com \
-  --worker-jwks-url https://issuer.example.com/.well-known/jwks.json \
-  --worker-issuer https://issuer.example.com
-```
-
-### Install CLI (macOS/Linux/Windows via Git Bash)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.sh | sh
-```
-
-Requires `git` and `go`.
-
-### Install CLI via npm (npmjs)
-
-```bash
-npm i -g @osvaldoandrade/codeq
-codeq --help
-```
-
-Upgrade:
-
-```bash
-npm i -g @osvaldoandrade/codeq@latest
-```
-
-### Use SDKs for Java, Node.js, Python, and Go
-
-Integrate codeQ into your microservices with official SDKs:
-
-**Java** (Spring Boot, Quarkus, Micronaut):
-```xml
-<dependency>
-    <groupId>io.codeq</groupId>
-    <artifactId>codeq-sdk-java</artifactId>
-    <version>1.0.0</version>
-</dependency>
-```
-
-**Node.js/TypeScript** (Express, NestJS):
-```bash
-npm install @osvaldoandrade/codeq-client
-```
-
-**Python** (FastAPI, Django, Flask):
-```bash
-pip install codeq-client
-```
-
-**Go** (Gin, Echo, stdlib):
-```bash
-go get github.com/osvaldoandrade/codeq/sdks/go
-```
-
-📚 **SDK Documentation**:
-- [SDK Overview & Quick Start](sdks/README.md)
-- [Java SDK](sdks/java/README.md)
-- [Node.js SDK](sdks/nodejs/README.md)
-- [Python SDK](sdks/python/README.md)
-- [Go SDK](sdks/go/README.md)
-- [Integration Guides](docs/integrations/)
-- [Example Applications](examples/)
-
-### Helm
-
-The chart in this repo deploys codeQ and, by default in the small profile, a single-node KVRocks instance.
-
-```bash
-git clone https://github.com/osvaldoandrade/codeq
-cd codeq
-
-helm upgrade --install codeq ./helm/codeq \
-  -f ./helm/codeq/values-small.yaml \
-  --namespace codeq --create-namespace \
-  --set secrets.enabled=true \
-  --set secrets.webhookHmacSecret=YOUR_SECRET \
-  --set config.identityServiceUrl=https://your-auth-server.com \
-  --set config.workerJwksUrl=https://your-jwks \
-  --set config.workerIssuer=https://issuer
-```
-
-Disable embedded KVRocks and point to your own:
-
-```bash
-helm upgrade --install codeq ./helm/codeq \
-  -f ./helm/codeq/values-medium.yaml \
-  --set kvrocks.enabled=false \
-  --set config.redisAddr=your-kvrocks:6666
-```
-
-### 2) Service runtime
-
-The API server and Dockerfile are in the service repo:
-https://github.com/codecompany/codeq-service
-
-That repo consumes this module and exposes the HTTP API.
-
-## Quick API flow
-
-Create a task (producer token):
+Create a task:
 
 ```bash
 curl -X POST http://localhost:8080/v1/codeq/tasks \
@@ -174,7 +125,7 @@ curl -X POST http://localhost:8080/v1/codeq/tasks \
   -d '{"command":"GENERATE_MASTER","payload":{"jobId":"j-123"},"priority":3}'
 ```
 
-Claim a task (worker JWT):
+Claim a task (as a worker):
 
 ```bash
 curl -X POST http://localhost:8080/v1/codeq/tasks/claim \
@@ -183,7 +134,7 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/claim \
   -d '{"commands":["GENERATE_MASTER"],"leaseSeconds":120,"waitSeconds":10}'
 ```
 
-Submit result:
+Submit a result:
 
 ```bash
 curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
@@ -192,49 +143,95 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
   -d '{"status":"COMPLETED","result":{"ok":true}}'
 ```
 
-## Specs and docs
+For high-throughput producers and workers, use the gRPC streaming API
+(2-3x the HTTP throughput, amortized auth, pipelined acks): see
+[docs/34-streaming-api-guide.md](docs/34-streaming-api-guide.md).
 
-Start here: `docs/README.md`
+## Where next
 
-Key references:
+- [Getting started tutorial](docs/00-getting-started.md) — your first
+  task, end to end.
+- [Overview](docs/01-overview.md) — goals, non-goals, when (and when
+  not) to pick codeq.
+- [Architecture](docs/03-architecture.md) — package layout and request
+  flows.
+- [Performance tuning](docs/17-performance-tuning.md) — shard counts,
+  batch sizes, fsync trade-offs.
+- [Operational runbooks](docs/29-operational-runbooks.md) — on-call
+  procedures for the common failure modes.
+- [Streaming API guide](docs/34-streaming-api-guide.md) — gRPC
+  producer and worker streams.
+- [Cluster architecture](docs/05-cluster-architecture.md) — multi-node
+  consistent-hash deployment.
+- [Style guide](docs/_STYLE.md) — voice, numbers, diagrams, links.
 
-- **Getting Started Tutorial**: `docs/00-getting-started.md` - **Start here for your first experience with codeQ**
-- **Overview**: `docs/01-overview.md` - System goals and design principles
-- **Architecture**: `docs/03-architecture.md` - System components and multi-tenant architecture
-- **Security**: `docs/09-security.md` - Authentication, authorization, and tenant isolation
-- **HTTP API**: `docs/04-http-api.md` - Complete API reference
-- **CLI Reference**: `docs/15-cli-reference.md` - CLI command documentation
-- **SDK Integration**: `sdks/README.md` - Official Java and Node.js SDKs
-  - [Java Integration](docs/integrations/java-integration.md) - Spring Boot, Quarkus, Micronaut
-  - [Node.js Integration](docs/integrations/nodejs-integration.md) - Express, NestJS, React
-- **Examples**: `examples/` - Working examples with Java and Node.js frameworks
-- **Developer Guide**: `docs/21-developer-guide.md` - Contributing and internal architecture
-- **Queue model**: `docs/05-queueing-model.md` - Queue semantics
-- **Storage layout**: `docs/07-storage-kvrocks.md` - KVRocks data structures
-- **Backoff and retries**: `docs/11-backoff.md` - Retry logic
-- **Webhooks**: `docs/12-webhooks.md` - Push notifications
-- **Configuration**: `docs/14-configuration.md` - Config reference
-- **Operations**: `docs/10-operations.md` - Metrics, health checks, and tracing
-- **Workflows**: `docs/16-workflows.md` - GitHub Actions automation
-- **Performance**: `docs/17-performance-tuning.md` - Optimization guide
-- **Load Testing**: `docs/26-load-testing.md` - Load testing framework and benchmarks
-- **Testing**: `docs/19-testing.md` - Test coverage and strategy
-- **Authentication Plugins**: `docs/20-authentication-plugins.md` - Plugin system for custom auth
-- **Persistence Plugins**: `docs/27-persistence-plugin-system.md` - Pluggable storage backends (Redis, Memory, and more)
-- **Design Documents**:
-  - `docs/24-queue-sharding-hld.md` - Queue sharding high-level design
-  - `docs/25-plugin-architecture-hld.md` - Plugin architecture for persistence and auth
-- **Migration**: `docs/migration.md` - Upgrade guide
-- **Contributing**: `CONTRIBUTING.md` - Contribution guidelines
+## SDKs
+
+Official client libraries for the languages most likely to talk to
+codeq from application code:
+
+- **Go** — `go get github.com/osvaldoandrade/codeq/sdks/go` ([README](sdks/go/README.md))
+- **Java** (Spring Boot, Quarkus, Micronaut) — [sdks/java/README.md](sdks/java/README.md)
+- **Node.js / TypeScript** (Express, NestJS) — [sdks/nodejs/README.md](sdks/nodejs/README.md)
+- **Python** (FastAPI, Django, Flask) — [sdks/python/README.md](sdks/python/README.md)
+
+Integration recipes per framework live under
+[docs/integrations/](docs/integrations/). End-to-end example apps live
+under [examples/](examples/).
 
 ## Repo layout
 
-- `pkg/`: public packages (`app`, `config`, `domain`)
-- `internal/`: controllers, middleware, services, repositories, providers
-- `deploy/`: Docker Compose, Kubernetes, and config examples
-- `helm/codeq`: Helm chart and size profiles
-- `docs/`: full specification
+```text
+cmd/                  CLI entrypoints (codeq install, server)
+internal/             unexported packages
+  bench/              throughput + latency benchmarks (source of truth for perf claims)
+  cluster/            consistent-hash ring, gRPC router, bloom gossip
+  controllers/        HTTP handlers (Gin)
+  middleware/         auth, tracing, rate-limit, tenant extraction
+  producer/           gRPC producer-stream server
+  worker/             gRPC worker-stream server
+  repository/         persistence implementations (Redis legacy + Pebble)
+  services/           scheduler, results, callbacks, subscriptions
+pkg/                  public packages (app, auth, config, domain,
+                      producerclient, workerclient)
+sdks/                 official SDKs (go, java, nodejs, python)
+deploy/               docker-compose and Kubernetes config
+helm/codeq/           Helm chart and size profiles
+docs/                 specifications, runbooks, performance baselines
+examples/             end-to-end example applications
+```
+
+## Install the CLI
+
+macOS, Linux, or Windows via Git Bash:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.sh | sh
+```
+
+Or via npm:
+
+```bash
+npm i -g @osvaldoandrade/codeq
+codeq --help
+```
+
+To generate a Docker or Kubernetes install bundle (with embedded Pebble
+by default, no Redis required):
+
+```bash
+codeq install
+```
+
+See [docs/15-cli-reference.md](docs/15-cli-reference.md) for the full
+CLI surface.
+
+## Contributing
+
+Issues and PRs are welcome. Before opening a PR, read
+[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, and
+[docs/_STYLE.md](docs/_STYLE.md) for the documentation style.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).
