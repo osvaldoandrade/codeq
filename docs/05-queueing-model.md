@@ -6,12 +6,79 @@ All queues are isolated per tenant. Each tenant has dedicated queue structures t
 
 ## Queue types
 
-Each command and tenant combination is represented by a set of queues:
+Each `(cmd, tenantID)` combination is represented by four logical queues. On
+the Pebble backend they are encoded as four ordered key ranges under the
+`codeq/q/<cmd>/<tenant>/` prefix (see [`internal/repository/pebble/keys.go`](../internal/repository/pebble/keys.go)).
 
-- Pending queue: list of IDs available for claim.
-- In-progress queue: set of IDs currently leased (implemented as Redis SET for O(1) operations).
-- Delayed queue: ZSET of IDs with `visibleAt` as score.
-- Dead-letter queue: SET of IDs for tasks that exceeded `maxAttempts` (implemented as Redis SET for O(1) operations).
+- Pending: ordered by `(priority, seq)` — higher priority drained first,
+  FIFO within a priority bucket.
+- In-progress: set of IDs currently leased. See [Lease management](./06b-lease-management.md).
+- Delayed: ordered by `visibleAt` (Unix seconds, big-endian) — used for
+  retries and scheduled tasks.
+- Dead-letter: set of IDs that exhausted `maxAttempts` or whose lease
+  expired after the final attempt.
+
+```mermaid
+graph TB
+  subgraph Tenant["(cmd, tenantID)"]
+    subgraph Pending["Pending — priority list"]
+      P0["codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/pending/&lt;prio_be1&gt;/&lt;seq_be8&gt;/&lt;id&gt;"]
+    end
+    subgraph Inprog["In-progress — set"]
+      I0["codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/inprog/&lt;id&gt;"]
+    end
+    subgraph Delayed["Delayed — sorted by visibleAt"]
+      D0["codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/delayed/&lt;score_be8&gt;/&lt;id&gt;"]
+    end
+    subgraph DLQ["Dead-letter — set"]
+      X0["codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/dlq/&lt;id&gt;"]
+    end
+  end
+  Pending -->|claim| Inprog
+  Inprog -->|nack with retries| Delayed
+  Delayed -->|visibleAt &le; now| Pending
+  Inprog -->|nack max attempts / lease expired final| DLQ
+```
+
+Empty tenants are encoded as the literal `_` so the key parser can split
+on `/` without losing the empty position. Commands are lowercased.
+
+## Task lifecycle
+
+A task moves between four terminal-or-transient states. `DELAYED` is a
+sub-state of `PENDING` reserved for tasks whose `visibleAt` lies in the
+future — they live in the delayed range and migrate to the pending range
+once due.
+
+```mermaid
+stateDiagram-v2
+  [*] --> PENDING: produce
+  state PENDING {
+    [*] --> ready
+    ready --> DELAYED: visibleAt &gt; now
+    DELAYED --> ready: visibleAt &le; now (MoveDueDelayed)
+  }
+  PENDING --> IN_PROGRESS: claim
+  IN_PROGRESS --> COMPLETED: submit completed
+  IN_PROGRESS --> FAILED: submit failed
+  IN_PROGRESS --> PENDING: nack (retries left)
+  IN_PROGRESS --> DLQ: nack (no retries) / lease expired final
+  COMPLETED --> [*]
+  FAILED --> [*]
+  DLQ --> [*]
+```
+
+Triggers:
+
+- `claim` — worker pops one ID from pending and acquires a lease.
+- `submit completed` / `submit failed` — worker reports terminal result
+  via `SubmitResult`.
+- `nack` — worker explicitly rejects; `attempts++`. If `attempts &lt; maxAttempts`
+  the task goes back to pending (or delayed, with backoff). Otherwise it
+  lands in DLQ.
+- `lease expired` — the reaper / claim-time repair finds a stale lease
+  and runs the implicit `nack` path. See [Lease management](./06b-lease-management.md)
+  and [Backoff and retries](./11-backoff.md).
 
 ## Time-based scheduling
 
@@ -50,7 +117,10 @@ Alternative: store ready tasks in a ZSET with score `(priority, sequence)` but t
 
 ### Claim-time repair (expired lease detection)
 
-Before claiming a task, the system repairs expired leases using a sampling algorithm:
+Before claiming a task, the system repairs expired leases using a sampling
+algorithm. The detailed lease lifecycle, TTL, and renewal rules live in
+[Lease management](./06b-lease-management.md); the summary below covers
+only the claim-time interaction.
 
 1. **Sample in-progress tasks**: Use `SRANDMEMBER` to randomly sample up to `inspectLimit` task IDs from the in-progress SET
 2. **Check lease expiration**: Use pipelined `TTL` commands to efficiently check all sampled lease keys in a single round-trip
@@ -73,7 +143,13 @@ Acknowledgement is equivalent to result submission. On success the task is remov
 
 ## Unack and retry
 
-If the lease expires before completion or a worker sends `nack`, the task is retried. `attempts` is incremented on retry. If `attempts >= maxAttempts`, the task is moved to the dead-letter queue and marked `FAILED` with `error=MAX_ATTEMPTS`. Otherwise the task is moved to the delayed queue using the computed backoff delay.
+If the lease expires before completion or a worker sends `nack`, the task
+is retried. `attempts` is incremented on retry. If `attempts >= maxAttempts`,
+the task is moved to the dead-letter queue and marked `FAILED` with
+`error=MAX_ATTEMPTS`. Otherwise the task is moved to the delayed queue
+using the computed backoff delay — see [Backoff and retries](./11-backoff.md)
+for the schedule and [Lease management](./06b-lease-management.md) for how
+expired leases are detected.
 
 ## Idempotency
 
@@ -150,3 +226,14 @@ Prevents redundant cleanup work by tracking already-removed task IDs across conc
 - Most effective when cleanup is triggered frequently or runs concurrently
 - Reduces Redis load during large-scale expiration processing
 - No benefit for fresh systems without cleanup history
+
+## See also
+
+- [Lease management](./06b-lease-management.md) — lease TTL, renewal, and
+  expiry reaper.
+- [Backoff and retries](./11-backoff.md) — how `visibleAt` is computed
+  for delayed re-enqueues.
+- [Storage layout (Pebble)](./07b-storage-pebble.md) — the underlying
+  key layout (`codeq/q/<cmd>/<tenant>/...`).
+- [Domain model](./02-domain-model.md) — task fields (`status`,
+  `attempts`, `visibleAt`, `leaseUntil`) referenced by the lifecycle.
