@@ -23,15 +23,17 @@ Docker Compose and Helm examples live under `deploy/docker-compose` and
 
 codeQ uses a pluggable persistence architecture allowing different storage backends. See `docs/27-persistence-plugin-system.md` for detailed information.
 
-- `persistenceProvider` (string): Storage backend type, one of: `redis`, `memory`
+- `persistenceProvider` (string): Storage backend type, one of: `redis`, `pebble`, `memory`
   - Environment variable: `PERSISTENCE_PROVIDER`
   - Default: `redis` (for backward compatibility)
-  - `redis`: Production-ready persistence using Redis or KVRocks
+  - `redis`: Production-ready persistence using Redis or KVRocks (distributed, HA-capable)
+  - `pebble`: Embedded key-value store with intra-process sharding (single-node, high throughput)
   - `memory`: In-memory storage for testing only (data lost on restart)
 - `persistenceConfig` (JSON object): Provider-specific configuration
   - Environment variable: `PERSISTENCE_CONFIG` (JSON string)
   - Format varies by provider:
     - **Redis**: `{"addr":"localhost:6379","password":""}`
+    - **Pebble**: `{"path":"./codeq-pebble","fsyncOnCommit":false,"numShards":4}`
     - **Memory**: `{}`
 
 ### Backward Compatibility
@@ -53,6 +55,58 @@ persistenceConfig:
   addr: localhost:6379
   password: ""  # optional
 ````
+
+### Example: Pebble Plugin (Embedded, Single-Node)
+
+**Development (fast, non-durable):**
+
+````yaml
+persistenceProvider: pebble
+persistenceConfig:
+  path: ./codeq-pebble
+  fsyncOnCommit: false
+  numShards: 1
+````
+
+**Production (4-shard, high throughput):**
+
+````yaml
+persistenceProvider: pebble
+persistenceConfig:
+  path: /var/lib/codeq/pebble
+  fsyncOnCommit: false
+  numShards: 4
+````
+
+**Durability-critical (4-shard, durable):**
+
+````yaml
+persistenceProvider: pebble
+persistenceConfig:
+  path: /var/lib/codeq/pebble
+  fsyncOnCommit: true
+  numShards: 4
+````
+
+**Pebble configuration details:**
+
+- `path` (string, required): Directory where Pebble databases are stored. Will be created if it doesn't exist. For `numShards > 1`, subdirectories `shard0/`, `shard1/`, etc. are created automatically.
+- `fsyncOnCommit` (bool, optional, default: false):
+  - `false`: Writes are buffered; faster (~83k tasks/sec), data lost on process crash
+  - `true`: Writes are synced to disk; slower (~67k tasks/sec), durable across process restarts
+- `numShards` (int, optional, default: 1): Number of independent Pebble instances for intra-process sharding (Phase 8)
+  - `1`: Single database, traditional behavior
+  - `2–4`: Recommended range; parallelizes commit pipelines and compaction
+  - `8+`: Diminishing returns; scheduling overhead may exceed parallelism gains
+  - Best practice: Set to CPU core count (e.g., 4 cores → `numShards: 4`)
+
+**Use cases:**
+
+- **`numShards: 1, fsyncOnCommit: false`**: Development, testing, evaluation
+- **`numShards: 4, fsyncOnCommit: false`**: Single-node production, throughput-optimized (45k–83k tasks/sec)
+- **`numShards: 4, fsyncOnCommit: true`**: Single-node production, durability-critical (~67k tasks/sec)
+
+See `docs/30-performance-baselines.md` (section "Phase 8: Pebble Intra-Process Sharding") for detailed performance characteristics and benchmarks.
 
 ### Example: Memory Plugin (Testing)
 
