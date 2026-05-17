@@ -92,13 +92,80 @@
 - Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
 - Result processor: validates completion payloads and stores results.
-- Storage: Pluggable persistence backends (Redis/KVRocks for distributed, Pebble for embedded single-machine).
+- Storage: Pluggable persistence backends — Pebble (primary) or Redis (legacy HA).
 - Artifact storage: local filesystem uploader.
 - Notifier: optional webhook signal dispatcher.
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
 - Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
-- Clustering: Optional horizontal scaling via consistent-hash ring and gRPC routing across multiple nodes (see [05-cluster-architecture.md](05-cluster-architecture.md)).
+- Clustering: Optional horizontal scaling via consistent-hash ring and gRPC routing across multiple nodes (see [05-cluster-architecture.md](./05-cluster-architecture.md)).
+
+## Layered architecture
+
+The server is organized in four layers plus an optional cluster wrapper. The
+HTTP API (Gin) and the two gRPC bidirectional stream listeners (producer and
+worker) share the same service layer; services depend only on repository
+interfaces; the active provider — Pebble shards, Redis, or in-memory — is
+selected at bootstrap. When cluster mode is enabled, `internal/cluster` wraps
+the repository interface and routes by ID owner over gRPC.
+
+```mermaid
+graph TB
+  subgraph Listeners[Listeners]
+    HTTP[HTTP API - Gin]
+    PSTREAM[Producer gRPC stream]
+    WSTREAM[Worker gRPC stream]
+  end
+  subgraph Handlers[Handlers]
+    CTL[HTTP controllers]
+    PSRV[Producer stream server]
+    WSRV[Worker stream server]
+  end
+  subgraph Services[Services]
+    SCH[Scheduler]
+    RES[Results]
+    NOT[Notifier]
+  end
+  subgraph Repos[Repository interfaces]
+    TR[TaskRepository]
+    RR[ResultRepository]
+    SR[SubscriptionRepository]
+  end
+  subgraph Cluster[internal/cluster - optional wrapper]
+    RING[Ring + Router]
+  end
+  subgraph Providers[Providers]
+    PEB[Pebble shards]
+    RED[Redis - legacy HA]
+    MEM[Memory - tests]
+  end
+  HTTP --> CTL
+  PSTREAM --> PSRV
+  WSTREAM --> WSRV
+  CTL --> SCH
+  CTL --> RES
+  PSRV --> SCH
+  WSRV --> SCH
+  WSRV --> RES
+  SCH --> TR
+  RES --> RR
+  NOT --> SR
+  TR --> RING
+  RR --> RING
+  RING --> PEB
+  TR --> PEB
+  TR --> RED
+  TR --> MEM
+  RR --> PEB
+  RR --> RED
+```
+
+The wrapper edges from `TaskRepository` and `ResultRepository` into
+`internal/cluster` are mutually exclusive with the direct provider edges:
+cluster mode wraps the repository, single-node mode binds it directly. See
+[05-cluster-architecture.md](./05-cluster-architecture.md) and
+[18-package-reference.md](./18-package-reference.md) for the package-level
+breakdown.
 
 ## Pluggable Persistence Layer
 
@@ -106,45 +173,108 @@ The storage layer is pluggable via the persistence plugin system. codeQ includes
 
 ### Storage Options
 
-- **Redis/KVRocks** (default): Network-based persistence using Redis protocol. Suitable for distributed deployments, high-availability setups, and multi-node clustering.
+- **Pebble** (primary): Embedded key-value store with intra-process sharding. Default choice for single-node, throughput-critical deployments.
+  - Throughput: 45k–83k tasks/sec (single-shard to 4-shard configuration)
+  - HA: None (single process). Pair with `internal/cluster` (consistent-hash + gRPC routing) for multi-node.
+  - Sharding: Intra-process only; parallelizes write commits and compaction across N shards (see [08b-pebble-sharding-internals.md](./08b-pebble-sharding-internals.md)).
+
+- **Redis** (legacy HA): Network-based persistence using Redis protocol. Retained for deployments that already depend on Redis Sentinel or Cluster for HA.
   - Throughput: 1.5–2k tasks/sec (single instance, network latency)
   - HA: Native support with replication and Sentinel failover
-  - Cluster: Full support via ShardSupplier (see `docs/06-sharding.md`)
+  - Cluster: Full support via ShardSupplier (see [06-sharding.md](./06-sharding.md))
 
-- **Pebble** (embedded): Embedded key-value store with intra-process sharding (Phase 8). Optimized for single-node, throughput-critical deployments.
-  - Throughput: 45k–83k tasks/sec (single-shard to 4-shard configuration)
-  - HA: None (single process); use Redis for multi-node HA
-  - Sharding: Intra-process only; parallelizes write commits and compaction across N shards
-
-See `docs/27-persistence-plugin-system.md` for configuration details, performance characteristics, and use case guidance.
+See [27-persistence-plugin-system.md](./27-persistence-plugin-system.md) for configuration details, performance characteristics, and use case guidance.
 
 ## Enqueue flow
+
+The REST enqueue path (`POST /tasks`) goes through the Gin controller, the
+scheduler service, the repository (under the active provider, typically
+Pebble), and optionally the notifier when there are subscribed workers
+waiting on the event type.
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Gin as Gin controller
+  participant Svc as Scheduler service
+  participant Repo as TaskRepository
+  participant Pebble as Pebble batch
+  participant Notif as Notifier
+  Client->>Gin: POST /tasks
+  Gin->>Svc: CreateTask(cmd, payload, opts)
+  Svc->>Repo: EnqueueWithReady(task)
+  Repo->>Pebble: BatchCommit (task + pending + retention)
+  Pebble-->>Repo: ack
+  Repo-->>Svc: TaskID
+  Svc->>Notif: NotifyQueueReady (if subscribed)
+  Svc-->>Gin: TaskID
+  Gin-->>Client: 202 Accepted
+```
 
 1. Producer submits `command`, `payload`, `priority`, and optional `webhook`.
 2. Service validates fields and normalizes the payload to a JSON string.
 3. If `idempotencyKey` is provided:
-   - **Bloom filter fast-path**: Check in-process probabilistic filter; if key is definitely absent, skip Redis GET
-   - **Redis-based deduplication**: Use SETNX on idempotency key mapping to ensure uniqueness
+   - **Bloom filter fast-path**: Check in-process probabilistic filter; if key is definitely absent, skip the backend GET
+   - **Backend deduplication**: SETNX (Redis) or batched conditional write (Pebble) on idempotency key mapping to ensure uniqueness
    - Return existing task if conflict detected
-4. Service writes the task record and inserts the task ID into the pending list.
+4. Service writes the task record and inserts the task ID into the pending list within a single batch commit (Pebble) or pipeline (Redis).
 5. Service updates the retention index.
+6. If any worker subscription matches the event type, the notifier dispatches an advisory signal so the worker pulls.
 
-## Claim flow (pull)
+## Claim and result flow (REST)
+
+A worker pulls work with `POST /tasks/claim` and reports the outcome with
+`POST /tasks/:id/result`. On Pebble, the claim is a single batch that deletes
+the ID from pending, adds it to in-progress, updates task status, sets the
+TTL, and writes the in-memory lease table entry. The result write is a
+similarly atomic batch covering result storage and task completion.
+
+```mermaid
+sequenceDiagram
+  participant Worker
+  participant Gin as Gin controller
+  participant Svc as Scheduler / Results service
+  participant Repo as TaskRepository
+  participant Pebble as Pebble batch
+  participant CB as Callback (webhook)
+  Worker->>Gin: POST /tasks/claim
+  Gin->>Svc: ClaimTask(commands, leaseSec)
+  Svc->>Repo: Claim
+  Repo->>Pebble: Batch (pending del + inprog set + task update + ttl + leaseTable set)
+  Pebble-->>Repo: ack
+  Repo-->>Svc: Task
+  Svc-->>Gin: Task
+  Gin-->>Worker: 200 OK (or 204 if empty)
+  Worker->>Gin: POST /tasks/:id/result
+  Gin->>Svc: Submit(result)
+  Svc->>Repo: SaveResult + UpdateTaskOnComplete
+  Repo->>Pebble: Batch (result + task status + lease clear + inprog del)
+  Pebble-->>Repo: ack
+  Svc->>CB: POST callback (if webhook on task)
+  Svc-->>Gin: ok
+  Gin-->>Worker: 200 OK
+```
+
+The lease table is in-memory and rebuilt on startup from the in-progress
+keyspace; see [06b-lease-management.md](./06b-lease-management.md) for the
+recovery path and lease semantics.
+
+### Claim flow (pull)
 
 1. Worker submits claim request with `commands` and optional `leaseSeconds`.
 2. Service validates token and filters event types by token claims.
-3. Service runs the requeue logic for each command.
-4. Service atomically pops one ID from pending and tracks it in in-progress via Lua (`RPOP` + `SADD`).
-5. **Ghost Bloom filter check**: If ID is in ghost filter (deleted by admin), skip HGET and clean up queue references.
-6. Service loads task JSON with `HGET`; if nil (ghost task), adds ID to ghost filter and retries.
-7. Service sets a lease key with `SETEX` and updates task status to `IN_PROGRESS`.
+3. Service runs the requeue logic for each command (move-due-delayed fast-path on Pebble).
+4. Service atomically moves one ID from pending to in-progress. On Pebble this is a single batch commit; on Redis it is a Lua script (`RPOP` + `SADD`).
+5. **Ghost Bloom filter check**: If ID is in ghost filter (deleted by admin), skip the task GET and clean up queue references.
+6. Service loads the task record; if absent (ghost task), adds ID to ghost filter and retries.
+7. Service sets a lease (Pebble lease table + TTL key, or `SETEX` on Redis) and updates task status to `IN_PROGRESS`.
 8. Service returns the task record. If no task is available, returns `204`.
 
-## Completion flow
+### Completion flow
 
 1. Worker submits result with `COMPLETED` or `FAILED`.
 2. Service verifies task ownership and status.
-3. Service persists artifacts (optional), stores the result record, updates task status, and clears the lease.
+3. Service persists artifacts (optional), stores the result record, updates task status, and clears the lease — atomically batched on Pebble.
 4. Service removes the task from the in-progress set.
 5. Service posts webhook if the task contains a webhook URL.
 
@@ -212,7 +342,7 @@ Standard HTTP attributes are automatically added:
    - Stores in Redis alongside task data
    - Enables cross-service correlation
 
-For configuration details, see `docs/14-configuration.md` (Tracing section) and `docs/10-operations.md` (Tracing setup).
+For configuration details, see [14-configuration.md](./14-configuration.md) (Tracing section) and [10-operations.md](./10-operations.md) (Tracing setup).
 
 ## NACK flow
 
@@ -257,9 +387,9 @@ Tenant isolation does not significantly impact performance:
 - Each tenant's queues are independent (no cross-tenant contention)
 
 For deployment guidance and multi-tenant configuration, see:
-- Security configuration: `docs/09-security.md`
-- Storage layout: `docs/07-storage-kvrocks.md`
-- Queue semantics: `docs/05-queueing-model.md`
+- Security configuration: [09-security.md](./09-security.md)
+- Storage layout: [07b-storage-pebble.md](./07b-storage-pebble.md) (primary) or [07-storage-kvrocks.md](./07-storage-kvrocks.md) (legacy Redis)
+- Queue semantics: [05-queueing-model.md](./05-queueing-model.md)
 
 ## Repair flows
 
@@ -306,4 +436,11 @@ Queue depth metrics are gathered dynamically during Prometheus scrapes rather th
 - All API replicas report the same queue depth values (Redis is the single source of truth)
 - Use `max by (...)` aggregation in PromQL to deduplicate when multiple replicas are scraped
 
-See `docs/10-operations.md` for complete metric reference.
+See [10-operations.md](./10-operations.md) for complete metric reference.
+
+## See also
+
+- [Cluster architecture](./05-cluster-architecture.md) — consistent-hash ring, gRPC routing, and how `internal/cluster` wraps the repository.
+- [Package reference](./18-package-reference.md) — file-by-file map of the layers shown in the layered architecture diagram.
+- [Persistence plugin system](./27-persistence-plugin-system.md) — how providers (Pebble, Redis, Memory) plug into the repository interfaces.
+- [Streaming API guide](./34-streaming-api-guide.md) — the gRPC bidirectional stream paths that share the same service layer as the REST flows.
