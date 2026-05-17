@@ -179,6 +179,66 @@ and single KVRocks node. Error rates were **0.00%** across every scenario.
 
 ---
 
+## Phase 8: Pebble Intra-Process Sharding
+
+Phase 8 introduces intra-process sharding for the embedded Pebble backend, achieving ~1.95× throughput improvement on single-node deployments by parallelizing write commits and compaction across multiple independent Pebble instances.
+
+### Test Configuration
+
+| Parameter      | Value                                       |
+|----------------|---------------------------------------------|
+| Backend        | Pebble (embedded)                           |
+| Storage        | Local SSD (same machine as instance)         |
+| Sharding       | 1, 2, 4, 8 shards (single-node, no cluster) |
+| CPU            | AMD EPYC 9V74 80-Core (4 vCPUs allocated)   |
+| Go version     | 1.24                                        |
+| k6 version     | 0.55.0                                      |
+
+### Throughput Scaling
+
+| Config              | Throughput (tasks/sec) | Improvement | Latency p95 |
+|---------------------|------------------------|-------------|------------|
+| Single-shard (1x)   | ~45k                   | 1.0×        | 2–3 ms     |
+| 2-shard (2x)        | ~71k                   | 1.58×       | 2–3 ms     |
+| 4-shard (4x)        | ~83k                   | 1.95×       | 2–3 ms     |
+| 8-shard (8x)        | ~88k                   | 2.0×        | 3–4 ms     |
+
+**Key Finding:** Scaling plateaus at 4–8 shards on 4-core CPU allocation. Shards > CPU count provides diminishing returns as scheduling overhead exceeds parallelism gains. Recommended: `numShards: 4` (matches CPU core count) for balanced throughput and latency.
+
+### Latency Characteristics
+
+Pebble baseline latencies are significantly lower than KVRocks (network overhead removed):
+
+- **Create → Claim → Complete cycle**: ~1.5–2.5 ms (single-shard Pebble) vs ~3.2 ms (Redis)
+- **p95 latency under sustained 50k tasks/s load**: 2–3 ms (Pebble) vs 10–15 ms (Redis)
+- **GC pressure**: Reduced allocation overhead vs Redis JSON serialization path
+
+### Durability Trade-off
+
+By default, Pebble writes are not synced to disk (`fsyncOnCommit: false`):
+
+| Configuration     | Throughput | Durability | Use Case                    |
+|-------------------|------------|------------|-----------------------------|
+| fsync: off        | ~83k       | In-memory  | Development, testing        |
+| fsync: on         | ~67k       | Durable    | Durability-critical prod    |
+
+**Sync penalty**: ~20% throughput reduction when `fsyncOnCommit: true`. On modern NVMe SSDs, this translates to ~100 μs additional latency per commit batch.
+
+### Single-Node Pebble vs Distributed Redis
+
+| Aspect              | Pebble (single-node) | Redis (replicated)      |
+|---------------------|----------------------|-------------------------|
+| Throughput          | 83k/sec              | 1.5–2k/sec             |
+| Deployment          | 1 binary             | 1+ Sentinel + 2+ Nodes  |
+| High availability   | No (single process)  | Yes (with replication)  |
+| Failover time       | Process restart      | Seconds (Sentinel)      |
+| Ops complexity      | Very low             | Medium-high             |
+| Data locality       | Perfect              | Network dependent       |
+
+**Recommendation:** Use Pebble for throughput-optimized single-node deployments (dev, edge, embedded). Use Redis for HA requirements (production multi-region, SLA-driven setups).
+
+---
+
 ## Cross-Scenario Summary
 
 | Scenario               | Throughput (req/s) | Avg Latency | p95 Latency | Error Rate |

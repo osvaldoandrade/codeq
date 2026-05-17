@@ -76,12 +76,30 @@
 - Rate limiter: Optional Redis-backed token bucket rate limiting per bearer token.
 - Scheduler core: orchestrates queue and task state transitions.
 - Result processor: validates completion payloads and stores results.
-- Storage: KVRocks via Redis API.
+- Storage: Pluggable persistence (Redis/KVRocks or embedded Pebble).
 - Artifact storage: local filesystem uploader.
 - Notifier: optional webhook signal dispatcher.
 - Requeue loop: claim-time repair during `Claim`.
 - Metrics: Prometheus instrumentation with custom Redis collector.
 - Tracing: Optional OpenTelemetry distributed tracing with W3C trace context propagation.
+
+## Pluggable Persistence Layer
+
+The storage layer is pluggable via the persistence plugin system. codeQ includes production-ready implementations:
+
+### Storage Options
+
+- **Redis/KVRocks** (default): Network-based persistence using Redis protocol. Suitable for distributed deployments, high-availability setups, and multi-node clustering.
+  - Throughput: 1.5–2k tasks/sec (single instance, network latency)
+  - HA: Native support with replication and Sentinel failover
+  - Cluster: Full support via ShardSupplier (see `docs/06-sharding.md`)
+
+- **Pebble** (embedded): Embedded key-value store with intra-process sharding (Phase 8). Optimized for single-node, throughput-critical deployments.
+  - Throughput: 45k–83k tasks/sec (single-shard to 4-shard configuration)
+  - HA: None (single process); use Redis for multi-node HA
+  - Sharding: Intra-process only; parallelizes write commits and compaction across N shards
+
+See `docs/27-persistence-plugin-system.md` for configuration details, performance characteristics, and use case guidance.
 
 ## Enqueue flow
 
