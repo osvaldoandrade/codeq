@@ -435,6 +435,14 @@ func newPebbleApplication(
 		TZ:          loc,
 		RateLimiter: limiter,
 	}
+	if cfg.Raft.Enabled {
+		app.RaftGroups = make([]RaftGroupStatus, 0, len(raftNodes))
+		for _, r := range raftNodes {
+			if r != nil {
+				app.RaftGroups = append(app.RaftGroups, r)
+			}
+		}
+	}
 
 	cleanupStartupFailure := func() {
 		bgCancel()

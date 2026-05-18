@@ -32,6 +32,12 @@ func SetupMappings(app *Application) {
 		anyAuth.GET("/tasks/:id", controllers.NewGetTaskController(app.Scheduler).Handle)
 		anyAuth.GET("/tasks/:id/result", controllers.NewGetResultController(app.Results).Handle)
 
+		// Raft status — local-node view of per-shard leadership.
+		// Public (anyAuth) so ops tooling and Prometheus scrapers
+		// can poll without an admin token. The payload reveals no
+		// task data, only routing metadata (peer IDs + bind addrs).
+		anyAuth.GET("/raft/status", controllers.NewRaftStatusController(adaptRaftGroups(app.RaftGroups)).Handle)
+
 		admin := producer.Group("/admin", middleware.RequireAdmin())
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
 		admin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
@@ -39,4 +45,18 @@ func SetupMappings(app *Application) {
 		// Novo: limpeza administrativa de tasks expiradas no índice Z
 		admin.POST("/tasks/cleanup", middleware.RateLimitAdminCleanup(app.RateLimiter, app.Config), controllers.NewCleanupExpiredController(app.Scheduler).Handle)
 	}
+}
+
+// adaptRaftGroups converts the public app.RaftGroupStatus slice to the
+// controllers package's mirror interface. Both have the same method
+// set so the conversion is a no-op wrapper.
+func adaptRaftGroups(in []RaftGroupStatus) []controllers.RaftGroupStatus {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]controllers.RaftGroupStatus, len(in))
+	for i, g := range in {
+		out[i] = g
+	}
+	return out
 }

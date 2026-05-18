@@ -24,6 +24,17 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
+// RaftGroupStatus is the small slice of raft state the status endpoint
+// + observability surfaces need. *internal/raft.DB satisfies it.
+// Defined here (not in the raft package) so the public Application
+// type avoids importing internal/raft transitively.
+type RaftGroupStatus interface {
+	IsLeader() bool
+	SelfID() string
+	BindAddr() string
+	LeaderInfo() (id, addr string)
+}
+
 type Application struct {
 	Config            *config.Config
 	Engine            *gin.Engine
@@ -35,7 +46,10 @@ type Application struct {
 	ProducerValidator auth.Validator
 	WorkerValidator   auth.Validator
 	RateLimiter       ratelimit.Limiter
-	TracingShutdown   func(context.Context) error
+	// RaftGroups, when non-nil, is the per-shard raft state in raft
+	// mode. Index = shardIdx. Empty when raft is disabled.
+	RaftGroups      []RaftGroupStatus
+	TracingShutdown func(context.Context) error
 }
 
 // ApplicationOption configures the Application

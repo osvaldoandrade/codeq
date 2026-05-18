@@ -331,6 +331,24 @@ func (d *DB) IsLeader() bool {
 // becomes the leader, false when it loses leadership.
 func (d *DB) LeaderObservation() <-chan bool { return d.leaderCh }
 
+// LeaderInfo returns the current leader's id and bind address according
+// to local state. Both are empty if no leader is known (election in
+// progress). This is the local view — under network partition it can
+// disagree with other nodes for a brief window.
+func (d *DB) LeaderInfo() (id, addr string) {
+	if d.raft == nil {
+		return "", ""
+	}
+	rawAddr, rawID := d.raft.LeaderWithID()
+	return string(rawID), string(rawAddr)
+}
+
+// SelfID returns the configured raft ServerID for this node.
+func (d *DB) SelfID() string { return d.cfg.SelfID }
+
+// BindAddr returns the raft bind address configured for this node.
+func (d *DB) BindAddr() string { return d.cfg.BindAddr }
+
 // WaitLeader blocks until this node IS the leader, or ctx is done.
 // Useful in tests that bootstrap and then need to write.
 func (d *DB) WaitLeader(ctx context.Context) error {
