@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"errors"
 	"hash/fnv"
 	"sync/atomic"
 	"time"
@@ -11,6 +12,15 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
+
+// isNotLeader checks whether err is the local pebble.ErrNotLeader
+// sentinel. In raft mode, a shard's local writes return this when the
+// current node isn't the leader for that shard's raft group; the
+// fan-out methods below treat it as "skip this shard, try the next"
+// rather than a fatal error.
+func isNotLeader(err error) bool {
+	return errors.Is(err, ErrNotLeader)
+}
 
 // ShardedTaskRepository owns N TaskRepository instances (one per Pebble
 // shard) and routes every task-keyed operation by hash(task_id) % N.
@@ -93,6 +103,12 @@ func (s *ShardedTaskRepository) Claim(ctx context.Context, workerID string, comm
 		idx := (start + i) % n
 		t, ok, err := s.shards[idx].Claim(ctx, workerID, commands, leaseSeconds, inspectLimit, maxAttemptsDefault, tenantID)
 		if err != nil {
+			if isNotLeader(err) {
+				// In raft mode this shard is read-only on this node;
+				// try the next one. The wrapper's job is to find
+				// claimable work across whichever shards we lead.
+				continue
+			}
 			return nil, false, err
 		}
 		if ok && t != nil {
@@ -117,6 +133,9 @@ func (s *ShardedTaskRepository) ClaimMany(ctx context.Context, workerID string, 
 		remain := max - len(out)
 		got, err := s.shards[idx].ClaimMany(ctx, workerID, commands, leaseSeconds, remain, inspectLimit, maxAttemptsDefault, tenantID)
 		if err != nil {
+			if isNotLeader(err) {
+				continue
+			}
 			return out, err
 		}
 		out = append(out, got...)
@@ -141,6 +160,9 @@ func (s *ShardedTaskRepository) MoveDueDelayed(ctx context.Context, cmd domain.C
 	for _, sh := range s.shards {
 		n, err := sh.MoveDueDelayed(ctx, cmd, limit)
 		if err != nil {
+			if isNotLeader(err) {
+				continue
+			}
 			return total, err
 		}
 		total += n
@@ -204,6 +226,9 @@ func (s *ShardedTaskRepository) CleanupExpired(ctx context.Context, limit int, b
 	for _, sh := range s.shards {
 		n, err := sh.CleanupExpired(ctx, per, before)
 		if err != nil {
+			if isNotLeader(err) {
+				continue
+			}
 			return total, err
 		}
 		total += n
