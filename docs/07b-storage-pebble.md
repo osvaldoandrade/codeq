@@ -1,209 +1,323 @@
-# Storage layout (Pebble)
+# Storage: Pebble
 
-Pebble is an embedded key-value store (CockroachDB's RocksDB-style LSM) that runs inside the codeq process. It requires no external dependencies — server, persistence, and lease state share one binary and one data directory.
+Pebble is the LSM-tree key-value engine used by CockroachDB. codeQ links
+it in-process for two roles:
 
-## Keyspace
+1. **Durable task store** — every task, every queue index, every
+   idempotency mapping, every TTL record lives under the `codeq/`
+   namespace (see [`internal/repository/pebble/keys.go:25-59`](../internal/repository/pebble/keys.go)).
+2. **Raft state** — when raft replication is enabled, the same Pebble
+   directory also stores the raft log, stable store, and snapshots
+   under their own key prefixes. See
+   [docs/40-raft-replication.md](./40-raft-replication.md) for the wire
+   side; this doc covers the storage side.
 
-Pebble uses a hierarchical key structure with byte-prefixes. All keys follow the pattern:
+There is no external database, no broker, no Redis. Pebble holds an
+exclusive file lock on its data directory, so exactly one codeq
+process can open a given store.
 
-- `codeq/{command}/{tenantID}/...` (hierarchical prefix organization)
+## Why Pebble
 
-Data structures stored:
+The codeQ workload is write-heavy: every Enqueue produces 2-3 Put
+operations (KeyTask + KeyPending + optional KeyIdempo / KeyTTLIndex);
+every Claim is a Delete + Put; every result is 2 Puts + 1 Delete.
+Reads are mostly small range scans over pending priority buckets and
+point lookups by task id. An LSM (log-structured merge) tree turns
+every write into an append into a sorted in-memory buffer, which is
+the cheapest write path on both rotational and SSD media. Pebble was
+picked over RocksDB because it is pure Go (no cgo), and over BoltDB
+because B+tree engines pay random I/O on every write.
 
-- **Tasks hash**: Task metadata keyed by task ID
-- **Results hash**: Task results keyed by task ID
-- **Pending queues**: Priority-ordered lists per (command, tenantID, priority)
-- **In-progress set**: Task IDs currently claimed for execution
-- **Delayed queue**: ZSET for delayed task delivery with scores as epoch timestamps
-- **Dead Letter Queue (DLQ)**: Set of task IDs exceeding `maxAttempts`
-- **Leases**: Ephemeral records tracking worker ownership (key: `codeq/lease/{leaseID}`)
-- **Idempotency cache**: Deduplication records (key: `codeq/idempo/{idempotencyKey}`)
-- **Subscriptions**: Webhook registrations with TTL scores (key: `codeq/subs/{event}`)
+## LSM tree fundamentals
 
-### Key Organization
+A log-structured merge tree splits storage into one in-memory tier and
+several on-disk tiers. The shape of the codeQ Pebble store at steady
+state:
 
-Pebble keys use a flat namespace with hierarchical prefixes optimized for LSM-tree range scans:
-
-- **Pending queue**: `codeq/q/{command}/{tenantID}/pending/{priority}/{seq}/{id}`
-  - `{seq}`: 8-byte big-endian sequence number (enables FIFO ordering within priority)
-  - `{id}`: Task ID (unique per task)
-- **In-progress tracking**: `codeq/q/{command}/{tenantID}/inprog/{id}`
-- **Delayed tasks**: `codeq/q/{command}/{tenantID}/delayed/{score}/{id}` (sorted by big-endian unix-second score)
-- **DLQ**: `codeq/q/{command}/{tenantID}/dlq/{id}`
-- **Task data**: `codeq/tasks/{id}` (JSON-encoded task metadata)
-- **Result data**: `codeq/results/{id}` (JSON-encoded result)
-- **TTL tracking**: `codeq/ttl/{expire_unix}/{id}` (range-scan reaper)
-- **Leases**: `codeq/lease/{id}`
-- **Idempotency**: `codeq/idempo/{key}`
-- **Subscriptions**: `codeq/subs/{event}/{id}`
-
-### Keyspace map
-
-The diagram below groups every byte-prefix under the `codeq/` namespace by
-role. Three prefixes carry the bulk of the create → claim → complete
-cycle and are marked **hot-path** — every Enqueue writes `codeq/tasks/`
-plus `codeq/q/<cmd>/<tenant>/pending/`, and every Claim moves a key from
-`pending/` into `codeq/q/<cmd>/<tenant>/inprog/`. The remaining prefixes
-are written on slower paths (delayed delivery, DLQ promotion, TTL
-reaping, webhook subscriptions). Source of truth:
-[`internal/repository/pebble/keys.go`](../internal/repository/pebble/keys.go).
-
-```mermaid
-graph TB
-  subgraph NS[codeq/ namespace]
-    subgraph Hot[Hot-path prefixes]
-      TASKS[codeq/tasks/&lt;id&gt;<br/>task JSON]
-      PENDING[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/pending/<br/>&lt;prio_be1&gt;/&lt;seq_be8&gt;/&lt;id&gt;]
-      INPROG[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/inprog/&lt;id&gt;]
-    end
-    subgraph Results[Result and idempotency]
-      RES[codeq/r/&lt;id&gt;<br/>result JSON]
-      IDEM[codeq/idempo/&lt;key&gt;<br/>idempotency map to task id]
-    end
-    subgraph Slow[Slow-path queues]
-      DELAYED[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/delayed/<br/>&lt;score_be8&gt;/&lt;id&gt;]
-      DLQ[codeq/q/&lt;cmd&gt;/&lt;tenant&gt;/dlq/&lt;id&gt;]
-    end
-    subgraph Reapers[Indexes scanned by reapers]
-      TTL[codeq/ttl/&lt;expire_be8&gt;/&lt;id&gt;]
-      LEASE[codeq/lease/&lt;id&gt;]
-    end
-    subgraph Subs[Webhook subscriptions]
-      SUB[codeq/subs/&lt;event&gt;/&lt;id&gt;]
-    end
-  end
-  PENDING -- Claim --> INPROG
-  INPROG -- SubmitResult --> RES
-  INPROG -- maxAttempts --> DLQ
-  DELAYED -- MoveDueDelayed --> PENDING
-  TASKS -. TTL register .-> TTL
+```
+   write -->  +----------------+
+              | memtable (mem) |    sorted skip list, append-only
+              +----------------+
+                     |
+                     | flush when full
+                     v
+              +----------------+
+              | L0   SSTables  |    overlapping key ranges allowed
+              +----------------+
+                     |
+                     | leveled compaction
+                     v
+              +----------------+
+              | L1   SSTables  |    non-overlapping ranges, ~10x L0
+              +----------------+
+                     |
+                     v
+                    ...
+                     v
+              +----------------+
+              | L6   SSTables  |    largest tier, oldest data
+              +----------------+
 ```
 
-## Multi-tenancy
+Definitions:
 
-Like Redis storage, Pebble enforces tenant isolation via tenant ID inclusion in all queue keys. When `tenantID` is empty (legacy mode), it is omitted from keys for backward compatibility.
+- **Memtable** — sorted in-memory skip list. Writes hit the memtable
+  plus the WAL (write-ahead log) on disk for crash recovery. When the
+  memtable fills (configurable, low MiB), Pebble flushes it as an
+  **SST** (sorted string table) into L0.
+- **SST** — immutable on-disk file, keys sorted, index + bloom filter
+  block at the tail. Once written, an SST is never modified; it is
+  only either kept or merged into a higher level and deleted.
+- **Compaction** — background goroutines pick overlapping SSTs from
+  adjacent levels, merge-sort them into a new SST one level deeper,
+  and delete the inputs. This is how garbage (overwritten or deleted
+  keys) is eventually reclaimed.
+- **WAL** — a sequential file on disk; every batch is appended here
+  before the memtable is updated. On Open, Pebble replays the WAL into
+  a fresh memtable, so process crashes (panic, SIGKILL) lose no
+  acknowledged data even with `NoSync` writes.
 
-## Sequence Numbers
+Reads check tiers in order: memtable, then L0 (newest SSTs first),
+then L1, L2, etc. Bloom filters on each SST cheaply rule out levels
+that cannot contain the key, so a point lookup on a key that exists
+only in L6 still costs roughly one disk I/O on average. Range scans
+build a merging iterator across tiers and stream sorted results.
 
-Pebble uses process-wide sequence counters (atomic 64-bit integers) to assign unique ordering to pending queue entries within a priority bucket. This ensures FIFO ordering even after restart.
+Cost model: writes O(1) amortized (one append to memtable + one to
+WAL); point reads O(levels) bloom checks + one SST read on hit; range
+reads O(log N) seek + O(K) stream. This is the "writes cheap, reads
+still cheap" tradeoff that makes LSMs the standard for queue-like
+workloads.
 
-On startup, Pebble:
+## Write path inside codeQ
 
-1. Scans all pending queue keys
-2. Extracts sequence numbers from keys
-3. Recovers the high-water mark (max sequence seen)
-4. Sets internal counter to max+1
+A single Enqueue lands in Pebble through this sequence:
 
-This recovery is linear in the pending queue size; for extremely large queues (millions of entries), consider chunking.
+1. The repository builds a `pebble.Batch` with every Put for the new
+   task — KeyTask + KeyPending, optionally KeyIdempo + KeyTTLIndex.
+2. Caller calls `d.CommitBatch(b)` ([`db.go:322-339`](../internal/repository/pebble/db.go)).
+3. **Direct mode** (no replicator): the batch is sent to `commitCh`
+   (buffered 1024). The coalescer goroutine pops it, merges any
+   batches already queued (up to `maxMergeBatch=64`), and issues ONE
+   `merged.Commit(pebbledb.NoSync)`. The shared error fans out via
+   each caller's `done` channel.
+4. **Replication mode** (`AttachReplicator()` called): coalescer
+   bypassed. The batch's `.Repr()` goes through `repl.Replicate`.
+   Raft does its own log-entry batching; coalescing on top would just
+   add latency. See [docs/40-raft-replication.md](./40-raft-replication.md).
+
+Inside Pebble, `Commit` walks the commitPipeline: serialize, acquire
+a global pipeline mutex, append to WAL, insert into memtable, release.
+With `NoSync` the WAL append skips `fsync`; with `Sync` it fsyncs
+before Commit returns.
+
+## Group commit — why and how
+
+Pebble's `commitPipeline` acquires a global mutex on every `Commit()`.
+Phase 0 profiling at 26k req/s pinned that mutex at **96% of mutex
+profile** and **44% of block profile**
+([`db.go:71-82`](../internal/repository/pebble/db.go)). Every
+concurrent caller serialized on it. We could not parallelize the
+mutex itself, so we collapsed N acquisitions into one.
+
+The mechanism is the classic group commit pattern (MySQL, PostgreSQL):
+
+```
+caller G1 ----+
+caller G2 ----+--> commitCh (buf 1024) --> coalescer goroutine --> Pebble.Commit
+caller G3 ----+                                  |
+caller G4 ----+                                  +-- merges up to 64 batches
+   ...                                           +-- one Commit per merge
+caller G64 ---+                                  +-- err fans out via done<-
+```
+
+Pseudocode of `commitLoop`
+([`db.go:341-401`](../internal/repository/pebble/db.go)):
+
+```go
+for {
+  first := <-d.commitCh                 // block until first work
+  merged := d.db.NewBatch()
+  merged.Apply(first.batch, nil)
+  reqs := []*commitReq{first}
+
+  // opportunistic drain — up to 63 more already in flight
+  for len(reqs) < maxMergeBatch {
+    select {
+    case more := <-d.commitCh:
+      merged.Apply(more.batch, nil)
+      reqs = append(reqs, more)
+    default:
+      goto commit
+    }
+  }
+commit:
+  err := merged.Commit(pebbledb.NoSync) // ONE commitPipeline acquisition
+  for _, r := range reqs { r.done <- err }
+}
+```
+
+Constants ([`db.go:117-129`](../internal/repository/pebble/db.go)):
+
+- `maxMergeBatch = 64` — merged batch cap. Higher amortizes the mutex
+  over more ops but raises tail latency for the last joiner and the
+  merged batch's memory footprint.
+- `commitChanBuf = 1024` — producer queue depth. Sized for several
+  commit cycles at peak (≈90k commits/s observed); 1024 has never
+  blocked in practice.
+
+Trade: each caller pays one extra channel hop of latency. On `-cpu 1`
+this is net-neutral; on many cores it scales near-linearly with
+concurrency until the merge cap. See `BenchmarkEnqueueParallel_*` in
+[`internal/repository/pebble/bench_test.go`](../internal/repository/pebble/bench_test.go).
+
+## Key prefix layout
+
+All keys live under the `codeq/` namespace. Numeric components that
+must sort lexicographically are big-endian fixed-width bytes (8 bytes
+for unix-seconds / score / sequence, 1 byte for priority). Source of
+truth: [`internal/repository/pebble/keys.go:25-59`](../internal/repository/pebble/keys.go).
+
+| Prefix | Encodes | Role |
+|---|---|---|
+| `codeq/tasks/<id>` | JSON Task struct | Canonical task record. |
+| `codeq/results/<id>` | JSON result record | SubmitResult target. |
+| `codeq/idempo/<key>` | task id (raw bytes) | Idempotency lookup; replays return the original task. |
+| `codeq/lease/<id>` | worker id \| until-unix | Worker lease record (also mirrored in-memory). |
+| `codeq/ttl/<expire_unix_be8>/<id>` | empty value | TTL reaper index; range scan returns due tasks. |
+| `codeq/q/<cmd>/<tenant>/pending/<prio_be1>/<seq_be8>/<id>` | empty | Priority FIFO queue. Lower `prio` byte = higher priority; `seq` orders within bucket. |
+| `codeq/q/<cmd>/<tenant>/inprog/<id>` | empty | Claim lock. |
+| `codeq/q/<cmd>/<tenant>/delayed/<score_be8>/<id>` | empty | Delayed delivery; `MoveDueDelayed` scans `[base, base+(now+1))`. |
+| `codeq/q/<cmd>/<tenant>/dlq/<id>` | empty | Dead letter — task exceeded `maxAttempts`. |
+| `codeq/subs/<event>/<id>` | webhook record | Subscription registry. |
+
+`tenant==""` is encoded as the literal `_` so the key parser can split
+on `/` without losing the empty position. Commands are lowercased.
+
+Every key derived from one task ID — KeyTask, KeyPending, KeyInprog,
+KeyDLQ, KeyDelayed, KeyTTLIndex — shares the task ID at the tail but
+under different prefixes. A single task touches multiple keys per
+operation; co-locating them in one Pebble batch makes the operation
+atomic at the commit layer.
+
+## fsync tradeoff
+
+`fsyncOnCommit` in [`db.go:131-138`](../internal/repository/pebble/db.go):
+
+| Setting | Per-commit cost | Process crash | Host crash |
+|---|---|---|---|
+| `false` (default, `NoSync`) | No syscall after WAL append | Nothing — WAL replay on Open restores it | Last few seconds (OS page cache contents) |
+| `true` (`Sync`) | `fsync` per Commit | Nothing | Nothing |
+
+Mechanism: with `NoSync`, WAL bytes go to the OS page cache, not the
+disk device. A **process crash** (panic, SIGKILL) leaves the page
+cache intact; Pebble's WAL replay rebuilds the memtable on Open. A
+**host crash** (kernel panic, power loss) drops the page cache, so
+unflushed WAL bytes are gone.
+
+codeQ ships with `fsyncOnCommit=false` because the throughput
+difference is large (an `fsync` is typically tens to hundreds of
+microseconds even on NVMe) and lost tasks can be retried by the
+producer. Workloads that cannot tolerate any host-crash loss flip
+the knob.
+
+## Recovery on Open
+
+`Open` in [`db.go:140-173`](../internal/repository/pebble/db.go) does
+two things beyond `pebbledb.Open`:
+
+1. Pebble itself replays the WAL into a fresh memtable — automatic,
+   bounded by the size of the unflushed memtable.
+2. codeQ's `recoverSeq()` ([`db.go:200-230`](../internal/repository/pebble/db.go))
+   scans every `codeq/q/.../pending/` key, parses the embedded
+   `seq_be8`, and sets the in-memory `atomic.Uint64` counter to the
+   high-water mark + 1. New enqueues then sort **after** anything
+   restored from disk within the same priority bucket, preserving
+   FIFO across restart.
+
+The scan is linear in the pending-queue size; at the sizes codeQ
+targets it completes in sub-second range and is off the hot path.
+
+## Compaction overhead
+
+Background compaction does work proportional to write throughput: for
+every byte written, the LSM eventually rewrites it ~`fanout × levels`
+times as it sinks from L0 to L6. This **write amplification** is the
+price of being write-optimized; no LSM design avoids it.
+
+At the measured saturation point of **76,639 tasks/s** on a single
+node ([`internal/bench/profile_full_cycle_test.go`](../internal/bench/profile_full_cycle_test.go)),
+compaction work runs around 18.6% of total CPU. The rest is in
+producer goroutines, gRPC serialization, and the commitPipeline. If
+compaction falls behind, L0 grows and reads touch more SSTs, which
+self-throttles writes via Pebble's built-in stalls.
+
+The main tuning knob is the block cache, set at
+[`db.go:147`](../internal/repository/pebble/db.go) to **256 MiB**:
+
+```go
+pOpts := &pebbledb.Options{
+    Cache: pebbledb.NewCache(256 << 20), // 256 MiB block cache
+}
+for i := range pOpts.Levels {
+    pOpts.Levels[i].FilterPolicy = bloom.FilterPolicy(10) // 10 bits/key
+    pOpts.Levels[i].FilterType  = pebbledb.TableFilter
+}
+```
+
+The 10-bits-per-key bloom filter gives ~1% false positive rate per
+level, which is the standard SSTable tuning. `TableFilter` puts the
+bloom filter at table granularity (not block) so a single bloom check
+rules out an entire SST.
 
 ## Atomicity
 
-Pebble commits are atomic at the batch level. A batch can contain multiple puts, deletes, or range operations that commit as a single unit. codeQ uses batches for:
+Pebble's commit unit is the batch. Every operation that mutates more
+than one key — task finalization (result + inprog delete + lease
+clear + TTL index), lease repair, bulk result submission — builds a
+`pebble.Batch`, adds all Puts and Deletes, and submits via
+`CommitBatch`. Either every op in the batch lands or none does;
+readers never see a half-applied state. This is why the keyspace
+co-locates all keys for one task under one logical task ID even when
+the prefixes differ.
 
-- Task finalization (save result + remove from in-progress + delete lease + update TTL)
-- Lease repair (multiple TTL checks and requeue operations)
-- Bulk operations (batch enqueue, batch result submission)
+## When NOT to use Pebble
 
-### Batch commit and the group-commit coalescer
+Pebble works for codeQ because the workload is many small, single-task
+operations on a queue that fits on local disk. Three classes of
+workload break that assumption:
 
-Pre-Phase 1.1, every `CommitBatch` caller contended on Pebble's internal
-commit pipeline mutex; under N concurrent goroutines this serialized N
-commits and bounded throughput by the lock wait, not the disk. The
-Phase 1.1 win replaces that contention with a single coalescer
-goroutine that owns the write side: callers hand their batch to a
-channel, the coalescer pops the first request, opportunistically drains
-up to `maxMergeBatch=64` more requests already queued, merges them with
-`Batch.Apply` into one large batch, issues a single `Commit`, and fans
-the resulting error back to every joined caller through their per-call
-`done` channel. From the caller's perspective the contract is
-unchanged — `CommitBatch` is still synchronous, still atomic, still
-returns the commit error if any — but the underlying Pebble commit
-runs once for up to 64 logically independent batches.
-
-Source: [`internal/repository/pebble/db.go`](../internal/repository/pebble/db.go)
-(`commitLoop`, `CommitBatch`, `maxMergeBatch`).
-
-```mermaid
-sequenceDiagram
-  participant G1 as Goroutine 1
-  participant G2 as Goroutine 2
-  participant GN as Goroutine N
-  participant CH as commitCh (buffered)
-  participant CO as Coalescer goroutine
-  participant PB as Pebble
-
-  G1->>CH: send commitReq{batch1, done1}
-  G2->>CH: send commitReq{batch2, done2}
-  GN->>CH: send commitReq{batchN, doneN}
-  CO->>CH: recv first req (blocking)
-  CO->>CO: merged := NewBatch; Apply(batch1)
-  loop drain up to maxMergeBatch=64
-    CO->>CH: non-blocking recv next req
-    CO->>CO: merged.Apply(batchK)
-  end
-  CO->>PB: merged.Commit(NoSync)
-  PB-->>CO: err (nil on success)
-  CO-->>G1: done1 <- err
-  CO-->>G2: done2 <- err
-  CO-->>GN: doneN <- err
-```
-
-> **Performance**: the coalescer trades a single channel hop of latency
-> for one Pebble commit shared across up to 64 callers. On `-cpu 1` the
-> extra hop is net-neutral or slightly negative; on `-cpu high` it
-> scales near-linearly until the merge cap. See
-> `BenchmarkEnqueueParallel_*` in
-> [`internal/repository/pebble/bench_test.go`](../internal/repository/pebble/bench_test.go).
-
-## Bloom Filters and Caching
-
-Pebble's LSM-tree is tuned for codeQ's workload:
-
-- **Block cache**: 256 MiB (configurable) for hot data
-- **Bloom filters**: 10 bits per key (~1% false positive rate) on all levels to speed up negative lookups
-- **Compression**: Snappy (default) on lower levels
-
-## Retention and Cleanup
-
-Tasks are retained for 24 hours (configurable). The cleanup process:
-
-1. Scans TTL index for expired entries
-2. Removes task records, results, leases, and queue entries
-3. Compacts the LSM tree to reclaim space
-
-Cleanup runs periodically and can be triggered manually via admin API.
-
-## Single-writer Property
-
-Pebble's embedded design means only one process may hold the database lock at a time. This is enforced at the OS level (flock on the database directory). For multi-node deployments, run multiple codeq nodes joined by the consistent-hash ring (see [05-cluster-architecture.md](./05-cluster-architecture.md)); each node owns its own Pebble store.
-
-## Performance Characteristics
-
-- **Point lookups**: O(1) amortized, cached or single-level read
-- **Range scans**: O(log N) for initial seek + O(K) for K results
-- **Writes**: O(1) amortized with write batching
-- **Compaction**: Background, ~10-15% slowdown during heavy merging
+1. **Billion-task backlogs exceeding local disk.** Pebble scales to
+   the device under it. If the pending set outgrows the local NVMe
+   budget, use intra-process sharding ([08b-pebble-sharding-internals.md](./08b-pebble-sharding-internals.md))
+   or cluster mode ([05-cluster-architecture.md](./05-cluster-architecture.md)).
+2. **Cross-task atomicity.** Every Pebble batch is atomic, but codeQ
+   only batches keys for one task ID. There is no API to atomically
+   claim ten tasks across ten producers in one commit, because they
+   hash to different shards.
+3. **Strong cross-shard consistency without raft.** Direct mode commits
+   with `NoSync` and gives no cross-shard ordering guarantee. If you
+   need it, enable raft ([docs/40-raft-replication.md](./40-raft-replication.md));
+   the coalescer is bypassed and raft serializes log entries across
+   the quorum.
 
 ## Phase 8 sharded routing
 
-The single-process bottleneck after Phase 1.1 was that one Pebble DB
-still owned one commit pipeline and one compaction worker. Phase 8
-splits the Pebble layer into N independent shards, each with its own
-DB, own commit coalescer, and own compaction. The
+For workloads that saturate one Pebble store's commit pipeline,
 [`ShardedTaskRepository`](../internal/repository/pebble/sharded_task_repository.go)
-wraps the N per-shard `TaskRepository` instances and routes every
-task-keyed call by `fnv1a64(taskID) % N`. Because every key derived
-from a single task ID (`KeyTask`, `KeyPending`, `KeyInprog`, `KeyDLQ`,
-`KeyDelayed`, `KeyTTLIndex`) hashes to the same shard, each individual
-task operation still commits in one Pebble batch — there are no
-cross-shard transactions on the hot path.
+opens N independent Pebble stores under `path/shard<i>/`, each with
+its own coalescer and compaction worker, and routes every task-keyed
+call by `fnv1a64(taskID) % N`. Because every key derived from a task
+ID hashes to the same shard, each task operation still commits in one
+Pebble batch on one shard — no cross-shard transactions on the hot
+path.
 
 Cross-shard operations exist but are kept off the per-task fast path:
-`Claim`/`ClaimMany` round-robin across shards, `MoveDueDelayed` fans
-out per shard, and `AdminQueues`/`PendingLength`/`QueueStats` aggregate
-results. Idempotency lookups route on `hash(idempotencyKey) % N`, the
-same shard the original Enqueue wrote into, so replays land back on
-the right entry.
+`Claim` / `ClaimMany` round-robin, `MoveDueDelayed` fans out per
+shard, `AdminQueues` / `PendingLength` / `QueueStats` aggregate.
+Idempotency lookups route on `hash(idempotencyKey) % N`, the same
+shard the original Enqueue wrote into, so replays land back on the
+right entry.
 
 ```mermaid
 sequenceDiagram
@@ -226,23 +340,17 @@ sequenceDiagram
   Sharded-->>Caller: task, err
 ```
 
-> **Note**: cluster mode and intra-process sharding (`numShards > 1`)
-> are mutually exclusive — startup panics if both are enabled. Pick
-> one: multi-node across machines, or multi-shard inside one process.
-> See [Pebble sharding internals](./08b-pebble-sharding-internals.md)
-> for the per-shard component layout.
+Cluster mode (`cluster.enabled=true`) and intra-process sharding
+(`numShards > 1`) are mutually exclusive; startup panics if both are
+on. Pick one: multi-node across machines, or multi-shard inside one
+process.
 
-## Scaling Pebble
+## Scaling Pebble — at a glance
 
 | Path | Mechanism | When |
 |---|---|---|
-| Intra-process (Phase 8) | `numShards: N` opens N independent Pebble stores under `path/shard<i>/`; routed by `hash(task_id) % N` | One box, hitting the commit pipeline ceiling. Sweet spot: 4 shards on 12 cores → 83,420 tasks/s. |
-| Multi-node cluster | N codeq nodes joined by consistent-hash ring; each owns its own Pebble store | One box exhausted (CPU / RAM / disk); need horizontal scale. |
-
-The two paths are mutually exclusive (the startup path panics if both
-`numShards > 1` and `cluster.enabled=true`). See
-[08b-pebble-sharding-internals.md](./08b-pebble-sharding-internals.md)
-and [05-cluster-architecture.md](./05-cluster-architecture.md).
+| Intra-process (Phase 8) | `numShards: N` opens N Pebble stores under `path/shard<i>/`; routed by `hash(task_id) % N` | One box, hitting the commit pipeline ceiling. Measured sweet spot: 4 shards on 12 cores → 83,420 tasks/s. |
+| Multi-node cluster | N codeq nodes joined by consistent-hash ring; each owns its own Pebble store | One box exhausted (CPU / RAM / disk); horizontal scale. |
 
 ## See also
 
@@ -250,5 +358,7 @@ and [05-cluster-architecture.md](./05-cluster-architecture.md).
   per-shard component layout behind `ShardedTaskRepository`.
 - [Persistence plugin system](./27-persistence-plugin-system.md) — how
   Pebble plugs into the repository interface.
-- [Performance tuning](./17-performance-tuning.md) — knobs for shard
-  count, batch sizes, and the coalescer in the field.
+- [Raft replication](./40-raft-replication.md) — what happens when
+  `AttachReplicator` is called.
+- [Performance tuning](./17-performance-tuning.md) — shard count,
+  batch sizes, coalescer caps in the field.
