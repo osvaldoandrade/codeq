@@ -280,6 +280,20 @@ func newPebbleApplication(
 		gossiper.Start(bgCtx)
 	}
 
+	subs := services.NewSubscriptionService(subRepo)
+	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
+	cleanup := services.NewSubscriptionCleanupService(subRepo, logger, cfg.SubscriptionCleanupIntervalSeconds)
+	resultCallback := services.NewResultCallbackService(
+		logger,
+		cfg.WebhookHmacSecret,
+		cfg.ResultWebhookMaxAttempts,
+		cfg.ResultWebhookBaseBackoffSeconds,
+		cfg.ResultWebhookMaxBackoffSeconds,
+		limiter,
+		ratelimit.Bucket(cfg.RateLimit.Webhook),
+		webhookClient,
+	)
+
 	// Background reaper: enforces lease expiry + TTL cleanup, which Redis
 	// gives us via key TTL. Phase 8: one reaper per Pebble shard so the
 	// sweeps run in parallel and the per-shard commit pipelines stay
@@ -289,14 +303,17 @@ func newPebbleApplication(
 		BackoffBaseSeconds: cfg.BackoffBaseSeconds,
 		BackoffMaxSeconds:  cfg.BackoffMaxSeconds,
 		MaxAttemptsDefault: cfg.MaxAttemptsDefault,
+		DLQCallback: func(ctx context.Context, t domain.Task, rec domain.ResultRecord) {
+			if resultCallback != nil {
+				resultCallback.Send(ctx, t, rec)
+			}
+		},
 	})
 
-	subs := services.NewSubscriptionService(subRepo)
-	notifier := services.NewNotifierService(subRepo, logger, cfg.WebhookHmacSecret, cfg.SubscriptionMinIntervalSeconds, limiter, ratelimit.Bucket(cfg.RateLimit.Webhook), webhookClient)
-	cleanup := services.NewSubscriptionCleanupService(subRepo, logger, cfg.SubscriptionCleanupIntervalSeconds)
 	scheduler := services.NewSchedulerService(
 		taskRepo,
 		notifier,
+		resultCallback,
 		loc,
 		time.Now,
 		cfg.DefaultLeaseSeconds,
@@ -309,16 +326,6 @@ func newPebbleApplication(
 
 	// Result service & uploader mirror the redis path verbatim.
 	uploader := providers.NewLocalUploader(cfg.LocalArtifactsDir)
-	resultCallback := services.NewResultCallbackService(
-		logger,
-		cfg.WebhookHmacSecret,
-		cfg.ResultWebhookMaxAttempts,
-		cfg.ResultWebhookBaseBackoffSeconds,
-		cfg.ResultWebhookMaxBackoffSeconds,
-		limiter,
-		ratelimit.Bucket(cfg.RateLimit.Webhook),
-		webhookClient,
-	)
 	results := services.NewResultsService(resultRepo, uploader, resultCallback, logger, time.Now, loc)
 
 	engine := gin.New()

@@ -50,6 +50,7 @@ type batchClaimer interface {
 type schedulerService struct {
 	repo                repository.TaskRepository
 	notifier            NotifierService
+	callback            ResultCallbackService
 	tz                  *time.Location
 	now                 func() time.Time
 	defaultLease        int
@@ -61,7 +62,7 @@ type schedulerService struct {
 	rng                 *rand.Rand
 }
 
-func NewSchedulerService(repo repository.TaskRepository, notifier NotifierService, tz *time.Location, now func() time.Time, defaultLease, inspectLimit, maxAttemptsDefault int, backoffPolicy string, backoffBaseSeconds int, backoffMaxSeconds int) SchedulerService {
+func NewSchedulerService(repo repository.TaskRepository, notifier NotifierService, callback ResultCallbackService, tz *time.Location, now func() time.Time, defaultLease, inspectLimit, maxAttemptsDefault int, backoffPolicy string, backoffBaseSeconds int, backoffMaxSeconds int) SchedulerService {
 	if maxAttemptsDefault <= 0 {
 		maxAttemptsDefault = 5
 	}
@@ -77,6 +78,7 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 	return &schedulerService{
 		repo:                repo,
 		notifier:            notifier,
+		callback:            callback,
 		tz:                  tz,
 		now:                 now,
 		defaultLease:        defaultLease,
@@ -260,7 +262,24 @@ func (s *schedulerService) NackTask(ctx context.Context, taskID, workerID string
 	if delaySeconds > s.backoffMaxSeconds {
 		delaySeconds = s.backoffMaxSeconds
 	}
-	return s.repo.Nack(ctx, taskID, workerID, delaySeconds, s.maxAttemptsDefault, reason)
+	attempts, terminal, err := s.repo.Nack(ctx, taskID, workerID, delaySeconds, s.maxAttemptsDefault, reason)
+	if err != nil {
+		return attempts, terminal, err
+	}
+	if terminal && s.callback != nil {
+		effectiveReason := reason
+		if effectiveReason == "" {
+			effectiveReason = "MAX_ATTEMPTS"
+		}
+		rec := domain.ResultRecord{
+			TaskID:      taskID,
+			Status:      domain.StatusFailed,
+			Error:       effectiveReason,
+			CompletedAt: s.now().In(s.tz),
+		}
+		s.callback.Send(context.WithoutCancel(ctx), *t, rec)
+	}
+	return attempts, terminal, nil
 }
 
 func (s *schedulerService) GetTask(ctx context.Context, id string) (*domain.Task, error) {

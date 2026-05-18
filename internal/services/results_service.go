@@ -334,5 +334,23 @@ func (s *resultsService) BatchSubmit(ctx context.Context, items []domain.BatchSu
 		}
 	}
 
+	// Webhook fan-out for each successful submission (parity with Submit's
+	// callback hook). Send is fire-and-forget internally, so this stays
+	// cheap on the response path.
+	if s.callback != nil {
+		callbackCtx := context.WithoutCancel(ctx)
+		for i := range resultRecords {
+			origIdx := indexMap[i]
+			if responses[origIdx].Error != "" {
+				continue
+			}
+			task, ok := tasks[items[origIdx].TaskID]
+			if !ok || task == nil {
+				continue
+			}
+			s.callback.Send(callbackCtx, *task, resultRecords[i])
+		}
+	}
+
 	return responses, nil
 }

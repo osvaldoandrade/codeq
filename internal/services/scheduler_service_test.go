@@ -31,7 +31,7 @@ func setupSchedulerTest(t *testing.T) (context.Context, *miniredis.Miniredis, *r
 	notifier := NewNotifierService(mockSubRepo, nil, "test-secret", 5, nil, ratelimit.Bucket{}, nil)
 
 	now := func() time.Time { return time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC) }
-	svc := NewSchedulerService(repo, notifier, time.UTC, now, 60, 50, 5, "exp_full_jitter", 5, 900)
+	svc := NewSchedulerService(repo, notifier, nil, time.UTC, now, 60, 50, 5, "exp_full_jitter", 5, 900)
 
 	return context.Background(), mr, rdb, repo, svc
 }
@@ -532,7 +532,7 @@ func TestNewSchedulerServiceDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			now := func() time.Time { return time.Now() }
-			svc := NewSchedulerService(repo, notifier, time.UTC, now, 60, 50, tt.maxAttemptsInput, tt.backoffPolicyInput, tt.backoffBaseInput, tt.backoffMaxInput)
+			svc := NewSchedulerService(repo, notifier, nil, time.UTC, now, 60, 50, tt.maxAttemptsInput, tt.backoffPolicyInput, tt.backoffBaseInput, tt.backoffMaxInput)
 			if svc == nil {
 				t.Fatal("Expected service to be non-nil")
 			}
