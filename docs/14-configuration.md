@@ -290,10 +290,16 @@ The following fields are deprecated in favor of the new plugin-based authenticat
 
 ## Rate limiting
 
-Rate limiting is optional and disabled by default. The token-bucket
-implementation is currently Redis-backed, so in a pure-Pebble
-deployment the limiter resolves to a no-op (every request is allowed).
-Wiring a Pebble-native limiter is a tracked follow-up.
+Rate limiting is optional and disabled by default. Two implementations:
+
+- **Pure-Pebble path** (default): an in-process token-bucket limiter
+  enforces the configured limits **per-node**. In a cluster of N nodes,
+  the effective ceiling per (scope, subject) is N × `requestsPerMinute`.
+  No external coordinator; state is in-process memory, GC'd after 10
+  minutes of idle per bucket.
+- **Redis-backed path** (legacy): Lua-script token bucket with shared
+  state across all codeq instances connected to the same Redis. Used
+  automatically when `persistenceProvider != pebble`.
 
 Rate limit configuration is per scope (producer, worker, webhook, admin). Each scope has two parameters:
 

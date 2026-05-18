@@ -89,10 +89,11 @@ func newShardClient(addr, password string, db, poolSize int) (*redis.Client, err
 func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application, error) {
 	// Persistence dispatch happens *before* any Redis-specific setup so a
 	// Pebble deployment doesn't need a reachable Redis at all. The Pebble
-	// path owns its own ratelimiter (no-op) since there's no shared bucket
-	// to enforce across processes.
+	// path uses an in-process token-bucket limiter — per-node enforcement
+	// (cluster total = N × bucket.RequestsPerMinute), which is the right
+	// trade for a deployment without an external coordinator.
 	if cfg.PersistenceProvider == "pebble" {
-		return newPebbleApplication(cfg, nil, noopLimiter{}, nil, nil, nil, nil, nil, opts...)
+		return newPebbleApplication(cfg, nil, ratelimit.NewInMemoryLimiter(), nil, nil, nil, nil, nil, opts...)
 	}
 
 	redisClient := providers.NewRedisProvider(cfg.RedisAddr, cfg.RedisPassword)
