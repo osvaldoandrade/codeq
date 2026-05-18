@@ -181,41 +181,77 @@ func newPebbleApplication(
 	// next tick against a closed DB and panics.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
-	// Raft replication (M1). When cfg.Raft.Enabled, wire a raft node
-	// per Pebble shard and attach as a Replicator so every Set/Delete/
-	// CommitBatch on that shard flows through raft.Apply. Validation
-	// guarantees raft is mutually exclusive with cluster + sharding, so
-	// in raft mode len(dbs) == 1.
-	var raftNodes []*raftpkg.DB
+	// Raft replication (M1 single-shard + M2 multi-shard). When
+	// cfg.Raft.Enabled, wire one raft group per Pebble shard. Each
+	// group has its own LogStore/StableStore/SnapshotStore over the
+	// shard's Pebble (different prefixes), its own listening socket
+	// (BindAddr+shardIdx), and its own FSM. Cross-shard writes already
+	// fan out via ShardedTaskRepository — the per-shard raft groups
+	// keep each fan-out arm independently replicated.
+	//
+	// raftNodes[i] is the raft group for dbs[i]. They share the same
+	// lifecycle as the shard's Pebble (raft.Close must run BEFORE
+	// pebble.Close — see TracingShutdown and cleanupStartupFailure).
+	raftNodes := make([]*raftpkg.DB, len(dbs))
 	if cfg.Raft.Enabled {
-		raftCfg := raftpkg.Config{
-			Path:          pc.Path,
-			SelfID:        cfg.Raft.SelfID,
-			BindAddr:      cfg.Raft.BindAddr,
-			Bootstrap:     cfg.Raft.Bootstrap,
-			PeerAddrs:     cfg.Raft.Peers,
-			HeartbeatMS:   cfg.Raft.HeartbeatMS,
-			ElectionMS:    cfg.Raft.ElectionMS,
-			LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
-			CommitMS:      cfg.Raft.CommitMS,
-		}
-		if cfg.Raft.ApplyTimeoutSeconds > 0 {
-			raftCfg.ApplyTimeout = time.Duration(cfg.Raft.ApplyTimeoutSeconds) * time.Second
-		}
-		rdb, err := raftpkg.OpenWithPebble(bgCtx, raftCfg, db.Raw())
-		if err != nil {
-			bgCancel()
-			for _, d := range dbs {
-				_ = d.Close()
+		for i, shardDB := range dbs {
+			shardBind, err := bindAddrForShard(cfg.Raft.BindAddr, i)
+			if err != nil {
+				bgCancel()
+				for _, d := range dbs {
+					_ = d.Close()
+				}
+				return nil, fmt.Errorf("raft bind addr shard %d: %w", i, err)
 			}
-			return nil, fmt.Errorf("raft open: %w", err)
+			shardPeers, err := peersForShard(cfg.Raft.Peers, i)
+			if err != nil {
+				bgCancel()
+				for _, d := range dbs {
+					_ = d.Close()
+				}
+				return nil, fmt.Errorf("raft peers shard %d: %w", i, err)
+			}
+			shardPath := pc.Path
+			if numShards > 1 {
+				shardPath = fmt.Sprintf("%s/shard%d", pc.Path, i)
+			}
+			raftCfg := raftpkg.Config{
+				Path:          shardPath,
+				SelfID:        cfg.Raft.SelfID,
+				BindAddr:      shardBind,
+				Bootstrap:     cfg.Raft.Bootstrap,
+				PeerAddrs:     shardPeers,
+				HeartbeatMS:   cfg.Raft.HeartbeatMS,
+				ElectionMS:    cfg.Raft.ElectionMS,
+				LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
+				CommitMS:      cfg.Raft.CommitMS,
+			}
+			if cfg.Raft.ApplyTimeoutSeconds > 0 {
+				raftCfg.ApplyTimeout = time.Duration(cfg.Raft.ApplyTimeoutSeconds) * time.Second
+			}
+			rdb, err := raftpkg.OpenWithPebble(bgCtx, raftCfg, shardDB.Raw())
+			if err != nil {
+				bgCancel()
+				// Close any raft nodes already opened (lifecycle:
+				// raft.Close before pebble.Close).
+				for _, r := range raftNodes[:i] {
+					if r != nil {
+						_ = r.Close()
+					}
+				}
+				for _, d := range dbs {
+					_ = d.Close()
+				}
+				return nil, fmt.Errorf("raft open shard %d: %w", i, err)
+			}
+			shardDB.AttachReplicator(rdb)
+			raftNodes[i] = rdb
 		}
-		db.AttachReplicator(rdb)
-		raftNodes = append(raftNodes, rdb)
 		logger.Info("raft replication enabled",
 			"selfID", cfg.Raft.SelfID,
-			"bindAddr", cfg.Raft.BindAddr,
-			"peers", len(cfg.Raft.Peers))
+			"baseBindAddr", cfg.Raft.BindAddr,
+			"peers", len(cfg.Raft.Peers),
+			"shards", len(dbs))
 	}
 
 	taskShards := make([]*pebblerepo.TaskRepository, len(dbs))
@@ -348,13 +384,18 @@ func newPebbleApplication(
 			}
 		},
 	}
-	if len(raftNodes) > 0 {
-		// Per-shard LeaderGate would matter for M2 multi-raft. M1 has
-		// one shard ⇒ one raft node, so a single IsLeader() suffices.
-		raftRef := raftNodes[0]
-		reaperOpts.LeaderGate = raftRef.IsLeader
+	// Each shard's reaper checks its own raft group's leadership. M1's
+	// single-shard path still works (raftNodes[0].IsLeader). M2's
+	// multi-shard path uses the per-shard raft instance so a node that
+	// leads shard 0 but follows shard 1 only sweeps shard 0.
+	for i, shardDB := range dbs {
+		opts := reaperOpts // value copy keeps DLQCallback shared
+		if cfg.Raft.Enabled && raftNodes[i] != nil {
+			ref := raftNodes[i]
+			opts.LeaderGate = ref.IsLeader
+		}
+		pebblerepo.NewReaper(shardDB, loc, logger, opts).Start(bgCtx)
 	}
-	pebblerepo.StartReapersForShards(bgCtx, dbs, loc, logger, reaperOpts)
 
 	scheduler := services.NewSchedulerService(
 		taskRepo,
