@@ -20,6 +20,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
+	raftpkg "github.com/osvaldoandrade/codeq/internal/raft"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
@@ -180,6 +181,43 @@ func newPebbleApplication(
 	// next tick against a closed DB and panics.
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 
+	// Raft replication (M1). When cfg.Raft.Enabled, wire a raft node
+	// per Pebble shard and attach as a Replicator so every Set/Delete/
+	// CommitBatch on that shard flows through raft.Apply. Validation
+	// guarantees raft is mutually exclusive with cluster + sharding, so
+	// in raft mode len(dbs) == 1.
+	var raftNodes []*raftpkg.DB
+	if cfg.Raft.Enabled {
+		raftCfg := raftpkg.Config{
+			Path:          pc.Path,
+			SelfID:        cfg.Raft.SelfID,
+			BindAddr:      cfg.Raft.BindAddr,
+			Bootstrap:     cfg.Raft.Bootstrap,
+			PeerAddrs:     cfg.Raft.Peers,
+			HeartbeatMS:   cfg.Raft.HeartbeatMS,
+			ElectionMS:    cfg.Raft.ElectionMS,
+			LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
+			CommitMS:      cfg.Raft.CommitMS,
+		}
+		if cfg.Raft.ApplyTimeoutSeconds > 0 {
+			raftCfg.ApplyTimeout = time.Duration(cfg.Raft.ApplyTimeoutSeconds) * time.Second
+		}
+		rdb, err := raftpkg.OpenWithPebble(bgCtx, raftCfg, db.Raw())
+		if err != nil {
+			bgCancel()
+			for _, d := range dbs {
+				_ = d.Close()
+			}
+			return nil, fmt.Errorf("raft open: %w", err)
+		}
+		db.AttachReplicator(rdb)
+		raftNodes = append(raftNodes, rdb)
+		logger.Info("raft replication enabled",
+			"selfID", cfg.Raft.SelfID,
+			"bindAddr", cfg.Raft.BindAddr,
+			"peers", len(cfg.Raft.Peers))
+	}
+
 	taskShards := make([]*pebblerepo.TaskRepository, len(dbs))
 	resultShards := make([]*pebblerepo.ResultRepository, len(dbs))
 	for i, d := range dbs {
@@ -297,8 +335,9 @@ func newPebbleApplication(
 	// Background reaper: enforces lease expiry + TTL cleanup, which Redis
 	// gives us via key TTL. Phase 8: one reaper per Pebble shard so the
 	// sweeps run in parallel and the per-shard commit pipelines stay
-	// independent.
-	pebblerepo.StartReapersForShards(bgCtx, dbs, loc, logger, pebblerepo.ReaperOptions{
+	// independent. In raft mode, LeaderGate keeps followers out of the
+	// sweep — only the leader writes through raft.Apply.
+	reaperOpts := pebblerepo.ReaperOptions{
 		BackoffPolicy:      cfg.BackoffPolicy,
 		BackoffBaseSeconds: cfg.BackoffBaseSeconds,
 		BackoffMaxSeconds:  cfg.BackoffMaxSeconds,
@@ -308,7 +347,14 @@ func newPebbleApplication(
 				resultCallback.Send(ctx, t, rec)
 			}
 		},
-	})
+	}
+	if len(raftNodes) > 0 {
+		// Per-shard LeaderGate would matter for M2 multi-raft. M1 has
+		// one shard ⇒ one raft node, so a single IsLeader() suffices.
+		raftRef := raftNodes[0]
+		reaperOpts.LeaderGate = raftRef.IsLeader
+	}
+	pebblerepo.StartReapersForShards(bgCtx, dbs, loc, logger, reaperOpts)
 
 	scheduler := services.NewSchedulerService(
 		taskRepo,
@@ -359,6 +405,13 @@ func newPebbleApplication(
 		}
 		if clientPool != nil {
 			_ = clientPool.Close()
+		}
+		// Close raft BEFORE pebble. Raft's apply pipeline holds the
+		// pebble handle (FSM) and panics on closed-DB writes.
+		for _, r := range raftNodes {
+			if cerr := r.Close(); cerr != nil {
+				logger.Warn("raft close after startup failure", "err", cerr)
+			}
 		}
 		for _, d := range dbs {
 			if cerr := d.Close(); cerr != nil {
@@ -422,6 +475,11 @@ func newPebbleApplication(
 		stopGRPCServer(ctx, producerStream)
 		if clientPool != nil {
 			_ = clientPool.Close()
+		}
+		for _, r := range raftNodes {
+			if err := r.Close(); err != nil {
+				logger.Warn("raft close", "err", err)
+			}
 		}
 		for _, d := range dbs {
 			if err := d.Close(); err != nil {

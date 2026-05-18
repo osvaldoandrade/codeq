@@ -58,6 +58,7 @@ type Config struct {
 	RateLimit                          RateLimitConfig `yaml:"rateLimit"`
 	Sharding                           ShardingConfig  `yaml:"sharding"`
 	Cluster                            ClusterConfig   `yaml:"cluster"`
+	Raft                               RaftConfig      `yaml:"raft"`
 	// WorkerStreamAddr enables the bidirectional worker gRPC stream when
 	// non-empty (e.g. ":9091"). Use this to escape the HTTP middleware
 	// tax on the claim+result hot path — one stream per worker carries
@@ -105,6 +106,36 @@ type ShardBackendConfig struct {
 	Password string `yaml:"password"`
 	DB       int    `yaml:"db"`
 	PoolSize int    `yaml:"poolSize"`
+}
+
+// RaftConfig enables in-process raft replication on top of the embedded
+// Pebble store (M1 of the raft work — see docs/woolly-stargazing-orbit
+// plan). When Enabled is true, every Set/Delete/CommitBatch on the
+// pebble repository layer flows through a raft.Apply and lands on every
+// replica's Pebble via the FSM. Reads stay local (and may be stale on
+// followers).
+//
+// SelfID must appear in Peers. BindAddr is the listen address for the
+// raft TCP transport (separate from the gRPC / HTTP listeners).
+// Bootstrap must be true on exactly ONE node during initial cluster
+// formation; subsequent restarts ignore it because raft already has
+// state on disk.
+//
+// Mutual exclusion: incompatible with Sharding.Enabled and with
+// Cluster.Enabled (which is the static-ring model). Pick one.
+// numShards > 1 is also disallowed for M1 (M2 swaps in multi-raft per
+// shard).
+type RaftConfig struct {
+	Enabled       bool              `yaml:"enabled"`
+	SelfID        string            `yaml:"selfId"`
+	BindAddr      string            `yaml:"bindAddr"` // e.g. ":7000"
+	Bootstrap     bool              `yaml:"bootstrap"`
+	Peers         map[string]string `yaml:"peers"` // id → bindAddr (including self)
+	HeartbeatMS   int               `yaml:"heartbeatMS"`
+	ElectionMS    int               `yaml:"electionMS"`
+	LeaderLeaseMS int               `yaml:"leaderLeaseMS"`
+	CommitMS      int               `yaml:"commitMS"`
+	ApplyTimeoutSeconds int          `yaml:"applyTimeoutSeconds"`
 }
 
 type RateLimitConfig struct {
@@ -536,6 +567,29 @@ func (c *Config) Validate() error {
 			if strings.TrimSpace(backend.Address) == "" {
 				errs = append(errs, fmt.Sprintf("shard backend %q has empty address", name))
 			}
+		}
+	}
+
+	if c.Raft.Enabled {
+		if c.Cluster.Enabled {
+			errs = append(errs, "raft.enabled and cluster.enabled are mutually exclusive")
+		}
+		if c.Sharding.Enabled {
+			errs = append(errs, "raft.enabled and sharding.enabled are mutually exclusive")
+		}
+		if strings.TrimSpace(c.Raft.SelfID) == "" {
+			errs = append(errs, "raft.selfId is required when raft is enabled")
+		}
+		if strings.TrimSpace(c.Raft.BindAddr) == "" {
+			errs = append(errs, "raft.bindAddr is required when raft is enabled")
+		}
+		if c.Raft.SelfID != "" && len(c.Raft.Peers) > 0 {
+			if _, ok := c.Raft.Peers[c.Raft.SelfID]; !ok {
+				errs = append(errs, fmt.Sprintf("raft.selfId %q not present in raft.peers", c.Raft.SelfID))
+			}
+		}
+		if c.PersistenceProvider != "" && c.PersistenceProvider != "pebble" {
+			errs = append(errs, fmt.Sprintf("raft.enabled requires persistenceProvider=pebble, got %q", c.PersistenceProvider))
 		}
 	}
 
