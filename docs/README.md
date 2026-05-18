@@ -1,8 +1,11 @@
 # codeQ Specification
 
-This specification defines codeQ, a reactive scheduling and completion system built on persistent queues with pluggable storage backends: KVRocks (distributed, Redis protocol) or Pebble (embedded LSM-tree). The design is inspired by Dyno Queues and its use of Dynomite as a lightweight DynamoDB-like storage layer, and is implemented in Go.
+This specification defines codeq, a reactive task queue with an embedded
+Pebble persistence engine (CockroachDB's RocksDB-style LSM). codeq is
+implemented in Go and runs as a single binary — server, persistence
+layer, lease table, and gRPC + HTTP API all in one process.
 
-> **Note on Documentation Structure**: This `docs/` directory contains the **canonical specification and technical documentation** organized by the [Diátaxis framework](https://diataxis.fr/). The `wiki/` directory contains GitHub Pages content for the project website. When in doubt, refer to `docs/` for the authoritative documentation.
+> **Note on Documentation Structure**: This `docs/` directory contains the **canonical specification and technical documentation** organized by the [Diátaxis framework](https://diataxis.fr/).
 
 ## Index
 
@@ -31,9 +34,9 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 4. `docs/04-http-api.md` - HTTP API reference
 5. `docs/05-cluster-architecture.md` - Horizontal scaling via consistent-hash ring and gRPC routing
 6. `docs/05-queueing-model.md` - Queue semantics and behavior
-7. `docs/06-sharding.md` - Sharding strategy and ShardSupplier interface
-8. `docs/07-storage-kvrocks.md` - KVRocks storage layout
-8b. `docs/07b-storage-pebble.md` - Pebble embedded storage layout and comparison
+7. `docs/06-sharding.md` - Sharding strategy: Phase 8 intra-process + cluster mode
+7b. `docs/07b-storage-pebble.md` - Pebble embedded storage layout
+8. `docs/08b-pebble-sharding-internals.md` - Phase 8 intra-process sharding internals
 9. `docs/08-consistency.md` - Consistency guarantees
 10. `docs/09-security.md` - Authentication and authorization
 11. `docs/10-operations.md` - Operational procedures
@@ -45,7 +48,7 @@ This specification defines codeQ, a reactive scheduling and completion system bu
 20. `docs/19-testing.md` - Test coverage and testing strategy
 21. `docs/20-authentication-plugins.md` - Authentication plugin system
 22. `docs/21-developer-guide.md` - Developer guide for contributors
-28. `docs/27-persistence-plugin-system.md` - Pluggable persistence backends (Redis, Pebble, Memory, and extensibility)
+28. `docs/27-persistence-plugin-system.md` - Persistence plugin interface (Pebble is the supported backend; memory provider for tests)
 34. `docs/34-streaming-api-guide.md` - gRPC streaming API protocol reference, throughput characteristics, and concurrency model
 
 ### Integration Guides

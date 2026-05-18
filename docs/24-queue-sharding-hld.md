@@ -2,71 +2,65 @@
 
 ## Executive Summary
 
-This document presents the design for implementing queue sharding in codeQ to enable horizontal scaling beyond single-node KVRocks deployments. The current single-instance architecture creates a scaling ceiling; the system requires a mechanism to distribute queue data across multiple storage backends while preserving task scheduling, lease management, and at-least-once delivery guarantees.
+This document presents the design for implementing queue sharding in codeq to enable horizontal scaling beyond single-node Pebble deployments. The current single-process architecture creates a scaling ceiling; the system requires a mechanism to distribute queue data across multiple Pebble nodes while preserving task scheduling, lease management, and at-least-once delivery guarantees.
 
-The design introduces explicit sharding through a pluggable ShardSupplier interface that maps commands to storage backends, balancing predictable routing with flexibility for evolving operational requirements. The design addresses Lua script atomicity, Redis Cluster hash slot constraints, and migration paths from the single-shard architecture.
+The design introduces explicit sharding through a pluggable ShardSupplier interface that maps commands to storage backends, balancing predictable routing with flexibility for evolving operational requirements. The design addresses Pebble batch atomicity, key colocation for atomic operations, and migration paths from the single-shard architecture.
 
-**Design choice**: We've selected a combined approach that leverages explicit sharding (via ShardSupplier) with a path toward RAFT-based consensus for strong consistency and automatic failover. This matches our requirements for horizontal scalability, operational flexibility, and high availability. The implementation follows a phased approach: near-term explicit sharding with independent storage backends (enabling immediate scaling), evolving toward RAFT-backed consensus storage (such as TiKV) as the primary persistence layer for production deployments requiring strong consistency guarantees.
+**Design choice**: We've selected a combined approach that leverages explicit sharding (via ShardSupplier) on top of a consistent-hash ring across Pebble nodes, with a path toward RAFT-based consensus for strong consistency and automatic failover. This matches our requirements for horizontal scalability, operational flexibility, and high availability. The implementation follows a phased approach: near-term explicit sharding with independent Pebble backends (Phase 5 cluster mode, enabling immediate scaling), evolving toward RAFT-backed consensus storage as the primary persistence layer for production deployments requiring strong consistency guarantees.
 
-An alternative architectural path—evolving the plugin architecture to decouple persistence from KVRocks—is also explored. This would enable pluggable persistence backends (Cassandra, HBase, TiKV) through well-defined interfaces that separate auth and persistence concerns.
+We considered an alternative architectural path — evolving the plugin architecture to decouple persistence from any specific engine — and shipped the Pebble + consistent-hash ring design instead. That alternative is preserved at the end of the document as historical context for organizations with diverse storage requirements (Cassandra, HBase, TiKV).
 
 ## Problem Statement and Current Limitations
 
 ### Architecture Overview
 
-The codeQ service operates as a stateless HTTP API layer orchestrating persistent queues in KVRocks (disk-backed, Redis-protocol-compatible storage). The system maintains four queue structures per command and tenant: pending list, delayed sorted set, in-progress set, and dead-letter set.
+The codeq service operates as a Go process orchestrating persistent queues in an embedded Pebble LSM (the RocksDB-style engine from CockroachDB). The system maintains four queue structures per command and tenant: pending list, delayed sorted set, in-progress set, and dead-letter set, materialized as keyspace prefixes inside Pebble.
 
-The current implementation targets a single Redis-compatible backend. Queue keys use tenant identifiers for isolation (`codeq:q:{command}:{tenantID}:{queue-type}:{priority}`), providing logical partitioning without physical distribution.
+The current implementation targets a single Pebble instance per process. Queue keys use tenant identifiers for isolation (`codeq:q:{command}:{tenantID}:{queue-type}:{priority}`), providing logical partitioning without physical distribution.
 
 ```mermaid
 graph TB
-    subgraph "Current Architecture (Single-Shard)"
-        API1[API Server 1]
-        API2[API Server 2]
-        API3[API Server N]
-        KV[(KVRocks<br/>Single Instance)]
-        
-        API1 -->|All Operations| KV
-        API2 -->|All Operations| KV
-        API3 -->|All Operations| KV
-    end
-    
-    subgraph "Storage Layout"
-        KV --> Q1[Command A Queues]
-        KV --> Q2[Command B Queues]
-        KV --> Q3[Tenant X Queues]
-        KV --> Q4[Tenant Y Queues]
-    end
-    
-    style KV fill:#ff6b6b
-    style Q1 fill:#ffd93d
-    style Q2 fill:#ffd93d
-    style Q3 fill:#95e1d3
-    style Q4 fill:#95e1d3
+  subgraph Current[Current Architecture - Single-Shard]
+    API1[API Server 1]
+    API2[API Server 2]
+    API3[API Server N]
+    PEB[(Pebble single instance)]
+
+    API1 -->|All Operations| PEB
+    API2 -->|All Operations| PEB
+    API3 -->|All Operations| PEB
+  end
+
+  subgraph Layout[Storage Layout]
+    PEB --> Q1[Command A Queues]
+    PEB --> Q2[Command B Queues]
+    PEB --> Q3[Tenant X Queues]
+    PEB --> Q4[Tenant Y Queues]
+  end
 ```
 
 ### Scaling Constraints
 
-The single-instance architecture encounters fundamental limitations:
+The single-process architecture encounters fundamental limitations:
 
-**Storage Capacity**: Single KVRocks instance bounded by host disk capacity. Multi-billion task workloads with 30-day retention exhaust available storage on largest instance types.
+**Storage Capacity**: A single Pebble instance is bounded by host disk capacity. Multi-billion task workloads with 30-day retention exhaust available storage on the largest instance types.
 
-**CPU Saturation**: Benchmarks show 8-vCPU KVRocks saturates at ~4K enqueue ops/sec under sustained load (5KB payloads, 50 concurrent clients). Vertical scaling shows diminishing returns due to internal contention.
+**CPU Saturation**: A single Pebble process saturates the cores on its host once the full create → claim → complete cycle drives the LSM hard. Within a process, intra-process sharding (`numShards > 1`) reclaims headroom (see [§ Performance baselines](./30-performance-baselines.md)), but across processes vertical scaling shows diminishing returns due to contention on the WAL and block cache.
 
-**Memory Pressure**: Block cache size impacts query latency. Growing working sets degrade cache hit ratios without proportional memory scaling.
+**Memory Pressure**: Pebble block cache size impacts query latency. Growing working sets degrade cache hit ratios without proportional memory scaling.
 
 **Network Bandwidth**: 10K req/sec at 5KB average payload requires ~400 Mbps sustained. Bursty traffic patterns consume available headroom.
 
-**Operational Risk**: Single point of failure. Asynchronous replication with manual failover impacts availability SLAs.
+**Operational Risk**: Single point of failure. A single Pebble process loses availability while it restarts; recovery is fast (in-memory lease table rebuilt from the `KeyInprog` scan at Open) but not instantaneous.
 
 ### Horizontal Scaling Requirements
 
 Sharding must satisfy:
 
-- **Deterministic routing**: Given command and tenant ID, consistently select the same backend across all API servers and over time
-- **Tenant isolation**: Maintain separation even when colocated on same physical shard  
-- **Atomic operations**: Preserve atomicity within single command queue (e.g., Lua scripts for claim operations)
-- **Backward compatibility**: Support single-instance deployments as single-shard configuration
+- **Deterministic routing**: Given command and tenant ID, consistently select the same Pebble node across all API servers and over time (consistent-hash ring).
+- **Tenant isolation**: Maintain separation even when colocated on the same physical shard.
+- **Atomic operations**: Preserve atomicity within a single command queue. The claim path relies on a single Pebble batch covering the pending-list pop and the in-progress write, which means all queue structures for a (command, tenant) pair must live on the same shard.
+- **Backward compatibility**: Support single-process deployments as a single-shard configuration.
 
 ## Sharding Strategy Evaluation
 
@@ -153,62 +147,54 @@ The StaticShardSupplier loads configuration at startup and treats it as immutabl
 
 ### Storage Backend Mapping
 
-Each shard identifier maps to a distinct KVRocks instance or Redis Cluster. The mapping is defined in the service configuration:
+Each shard identifier maps to a distinct Pebble node (a codeq process owning its own embedded Pebble instance). Routing across nodes uses a consistent-hash ring keyed on (command, tenantID) — see [Cluster mode](./13-cluster.md). The mapping is defined in the service configuration:
 
 ```yaml
-redis:
+pebble:
   shards:
     primary:
-      address: "kvrocks-primary:6379"
-      password: "${REDIS_PRIMARY_PASSWORD}"
-      db: 0
+      address: "codeq-primary.internal:7070"
       poolSize: 20
-    
+
     workload-heavy:
-      address: "kvrocks-heavy:6379"
-      password: "${REDIS_HEAVY_PASSWORD}"
-      db: 0
+      address: "codeq-heavy.internal:7070"
       poolSize: 30
-    
+
     notification:
-      address: "kvrocks-notification:6379"
-      password: "${REDIS_NOTIFICATION_PASSWORD}"
-      db: 0
+      address: "codeq-notification.internal:7070"
       poolSize: 15
-    
+
     premium-shard:
-      address: "kvrocks-premium.internal:6379"
-      password: "${REDIS_PREMIUM_PASSWORD}"
-      db: 0
+      address: "codeq-premium.internal:7070"
       poolSize: 25
 ```
 
-Each shard configuration includes connection parameters and a dedicated connection pool. The pool size can be tuned independently for each shard based on expected load. High-throughput shards receive larger pools to support greater concurrency.
+Each shard configuration includes connection parameters (gRPC endpoint) and a dedicated connection pool. The pool size can be tuned independently for each shard based on expected load. High-throughput shards receive larger pools to support greater concurrency.
 
-The TaskRepository implementation maintains a map of shard identifiers to Redis client instances. Operations that require shard selection first invoke the ShardSupplier to determine the target shard, then retrieve the corresponding Redis client from the map.
+The TaskRepository implementation maintains a map of shard identifiers to per-node gRPC client instances. Operations that require shard selection first invoke the ShardSupplier to determine the target shard, then retrieve the corresponding client from the map.
 
 ```go
 type shardedTaskRepository struct {
     shardSupplier ShardSupplier
-    redisClients  map[string]*redis.Client
+    nodeClients   map[string]*cluster.NodeClient
     // ... other fields
 }
 
-func (r *shardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, 
+func (r *shardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command,
     tenantID string, payload string, priority int, ...) (*domain.Task, error) {
-    
+
     // Determine target shard
     shardID, err := r.shardSupplier.CurrentShard(ctx, string(cmd), tenantID)
     if err != nil {
         return nil, fmt.Errorf("shard resolution: %w", err)
     }
-    
-    // Get Redis client for this shard
-    client, ok := r.redisClients[shardID]
+
+    // Get gRPC client for the Pebble node hosting this shard
+    client, ok := r.nodeClients[shardID]
     if !ok {
         return nil, fmt.Errorf("unknown shard: %s", shardID)
     }
-    
+
     // Perform enqueue operation on the resolved shard
     // ... implementation continues
 }
@@ -226,7 +212,7 @@ codeq:q:<command>:<tenantID>:s:<shardID>:<queue-type>:<priority>
 
 The `:s:<shardID>` segment is inserted after the tenant identifier. For backward compatibility with single-shard deployments, the shard segment is omitted when the shard identifier is "default" or empty. This allows existing deployments to upgrade without data migration.
 
-```
+```text
 # Legacy single-shard key (still supported)
 codeq:q:GENERATE_MASTER:tenant-123:pending:5
 
@@ -234,57 +220,45 @@ codeq:q:GENERATE_MASTER:tenant-123:pending:5
 codeq:q:GENERATE_MASTER:tenant-123:s:workload-heavy:pending:5
 ```
 
-The placement of the shard segment after the tenant identifier is deliberate. Redis Cluster uses hash tags to determine which hash slot a key belongs to, extracting the substring between the first opening brace and closing brace. By placing the shard identifier early in the key, we ensure that all queues for a command-tenant-shard combination hash to the same slot, allowing atomic Lua operations even in Redis Cluster mode.
+The placement of the shard segment after the tenant identifier is deliberate. The consistent-hash router keys on the prefix `(command, tenantID)`, so all queue structures for a (command, tenant) pair land on the same Pebble node, and within that node share the same key prefix in the LSM. Iteration over the pending list and the in-progress set therefore stays cheap (locality on adjacent SSTable blocks) and a single Pebble batch covering both keys remains atomic at the engine level.
 
-If Redis Cluster is used as the storage backend, the key format can be further adapted with explicit hash tags (shown below with actual curly braces for Redis Cluster):
+We considered Redis-style hash-tagged keys (forcing all keys for a tuple into the same hash slot on Redis Cluster) when we evaluated a Redis-protocol backend. We shipped Pebble + consistent-hash ring instead, so hash tags do not appear in the production key format. The shard segment alone is sufficient because Pebble batches cover any set of keys local to a single process; there is no cross-slot constraint to defend against.
 
-```
-# Note: Curly braces below are actual Redis Cluster hash tag delimiters
-codeq:q:{GENERATE_MASTER:tenant-123:s:workload-heavy}:pending:5
-```
+### Atomicity and Pebble Batch Implications
 
-This forces all queue keys for the same command-tenant-shard tuple to the same cluster node, preserving the ability to execute multi-key Lua scripts. However, this optimization is only necessary when using Redis Cluster; KVRocks in standalone mode does not require hash tags.
+The claim operation's atomicity relies on a single Pebble batch that pops the head of the pending list and writes the in-progress marker as one commit. Pebble guarantees that all writes in a batch are visible together or not at all; this is the engine-level analogue of an atomic CAS sequence. Atomicity is guaranteed within a single Pebble instance but cannot span multiple instances without distributed transaction coordination.
 
-### Atomicity and Lua Script Implications
+The proposed sharding architecture preserves atomicity by ensuring all queue structures for a single command-tenant pair reside on the same shard (the same Pebble node). The ShardSupplier returns a single shard identifier for CurrentShard, and all enqueue and claim operations for that command-tenant pair target the same shard. The batch continues to operate on keys within the same Pebble instance, maintaining atomicity.
 
-The claim operation's atomicity relies on a Lua script that executes `RPOP` on the pending list and `SADD` to the in-progress set as an atomic unit. This atomicity is guaranteed within a single Redis instance but cannot span multiple instances without distributed transaction coordination.
+```go
+// Claim path (illustrative): single Pebble batch covers pop + in-progress write
+batch := db.NewBatch()
+defer batch.Close()
 
-The proposed sharding architecture preserves atomicity by ensuring all queue structures for a single command-tenant pair reside on the same shard. The ShardSupplier returns a single shard identifier for CurrentShard, and all enqueue and claim operations for that command-tenant pair target the same shard. The Lua script continues to operate on keys within the same Redis instance, maintaining atomicity.
-
-```lua
--- Existing claim Lua script (unchanged)
-local pendingKey = KEYS[1]
-local inprogressKey = KEYS[2]
-
-local taskID = redis.call('RPOP', pendingKey)
-if not taskID then
-    return nil
-end
-
-redis.call('SADD', inprogressKey, taskID)
-return taskID
+taskID, ok := popPendingHead(batch, pendingKey) // delete LSM entry
+if !ok {
+    return nil, nil
+}
+batch.Set(inprogressKey(taskID), inprogMeta, nil)
+if err := batch.Commit(pebble.NoSync); err != nil {
+    return nil, err
+}
+return taskID, nil
 ```
 
 This approach imposes a constraint: a single command-tenant pair cannot be load-balanced across multiple shards simultaneously. All pending tasks for `GENERATE_MASTER:tenant-123` must reside on the same shard. The sharding granularity is at the command-tenant level, not the individual task level.
 
-This constraint is acceptable for most workloads. Organizations with extremely high traffic for a single command-tenant pair can vertically scale the shard hosting that pair or subdivide the command into multiple logical commands that shard independently. The trade-off favors simplicity and atomicity over fine-grained load balancing.
+This constraint is acceptable for most workloads. Organizations with extremely high traffic for a single command-tenant pair can vertically scale the Pebble node hosting that pair or subdivide the command into multiple logical commands that shard independently. The trade-off favors simplicity and atomicity over fine-grained load balancing.
 
-### Redis Cluster Considerations
+### High Availability per Shard
 
-Organizations may choose to deploy Redis Cluster as the storage backend for individual shards to gain automatic failover and data replication within a shard. Redis Cluster partitions the keyspace across multiple master nodes using hash slots, with each key assigned to a slot based on a CRC16 hash.
+Each shard runs as an independent codeq process with its own embedded Pebble. To gain automatic failover and replication within a shard, we considered three paths:
 
-Multi-key operations in Redis Cluster require all keys to hash to the same slot. The claim operation accesses two keys: the pending list and the in-progress set. Without careful key design, these keys might hash to different slots, causing the Lua script to fail with a CROSSSLOT error.
+1. **Redis-protocol backend + Redis Cluster**: keys colocated via hash tags, multi-key Lua scripts atomic on a single cluster node. We considered this when the persistence layer was Redis-protocol-compatible; we shipped Pebble + consistent-hash ring instead, so this path is preserved here as historical context only.
+2. **Active/standby Pebble with log shipping**: the leader streams the WAL to one or more followers; on leader failure, a follower opens its Pebble and serves traffic. Simple operationally but failover is not instantaneous.
+3. **RAFT-backed consensus per shard**: each shard is a small RAFT group; writes acknowledge after replication to quorum. This is the long-term target and is described in the chosen approach below.
 
-The proposed key format addresses this by placing the shard identifier within a hash tag:
-
-```
-codeq:q:{GENERATE_MASTER:tenant-123:s:workload-heavy}:pending:5
-codeq:q:{GENERATE_MASTER:tenant-123:s:workload-heavy}:inprog
-```
-
-The substring within the braces determines the hash slot. Since both keys share the same hash tag content, they hash to the same slot and reside on the same cluster node. The Lua script executes successfully because it operates on keys within a single node.
-
-This design choice trades some load distribution within Redis Cluster for operational simplicity. All queue structures for a command-tenant-shard combination colocate on the same cluster node. If a single command-tenant pair has extremely high traffic, it saturates a single cluster node rather than distributing across the cluster. However, the outer sharding layer already distributes commands and tenants across multiple Redis Clusters, providing coarse-grained distribution. The inner cluster primarily provides high availability rather than scalability.
+In all three options, the outer sharding layer (ShardSupplier + consistent-hash ring) already distributes commands and tenants across multiple shards, providing coarse-grained scale-out. The inner HA mechanism primarily provides availability rather than additional scalability.
 
 ### Multi-Shard Operations
 
@@ -304,7 +278,7 @@ func (r *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Comma
     
     // Query each shard and aggregate results
     for _, shardID := range shardIDs {
-        client := r.redisClients[shardID]
+        client := r.nodeClients[shardID]
         
         // Query this shard's queue depths
         shardStats, err := r.getQueueStatsForShard(ctx, client, cmd, tenantID)
@@ -333,17 +307,17 @@ For the Claim operation, the system need only query the current shard, as new ta
 
 ### Zero-Downtime Migration Path
 
-Organizations running codeQ against a single KVRocks instance must be able to adopt sharding without service interruption. The migration path follows several phases:
+Organizations running codeq against a single Pebble process must be able to adopt sharding without service interruption. The migration path follows several phases:
 
 **Phase 1: Single-Shard Default**
 
-The initial sharding-aware release treats the absence of sharding configuration as a single-shard deployment. The default ShardSupplier implementation returns a constant shard identifier "default" for all commands and tenants. The Redis client map contains a single entry for "default" pointing to the existing KVRocks instance.
+The initial sharding-aware release treats the absence of sharding configuration as a single-shard deployment. The default ShardSupplier implementation returns a constant shard identifier "default" for all commands and tenants. The node client map contains a single entry for "default" pointing to the existing Pebble process.
 
 Existing deployments upgrade to this version without configuration changes. The system behaves identically to the previous single-shard implementation. Queue keys do not include the shard segment, maintaining compatibility with existing tasks in the queues.
 
 **Phase 2: Multi-Shard Configuration**
 
-Operators author a sharding configuration file identifying which commands should route to new shards. Initially, most commands continue routing to the "default" shard, while one or two low-risk commands route to a newly provisioned shard for validation.
+Operators author a sharding configuration file identifying which commands should route to new shards. Initially, most commands continue routing to the "default" shard, while one or two low-risk commands route to a newly provisioned Pebble node for validation.
 
 ```yaml
 sharding:
@@ -353,7 +327,7 @@ sharding:
     TEST_COMMAND: "new-shard-1"
 ```
 
-The system begins writing new tasks for TEST_COMMAND to the new shard. Existing tasks for TEST_COMMAND on the default shard remain there, processed by workers claiming from that shard. Over time, as workers drain the old tasks, the TEST_COMMAND queues on the default shard empty naturally.
+The system begins writing new tasks for TEST_COMMAND to the new Pebble node. Existing tasks for TEST_COMMAND on the default shard remain there, processed by workers claiming from that shard. Over time, as workers drain the old tasks, the TEST_COMMAND queues on the default shard empty naturally.
 
 **Phase 3: Gradual Command Migration**
 
@@ -384,23 +358,23 @@ To prevent configuration errors from causing split-brain scenarios, the system v
 func (s *StaticShardSupplier) Validate() error {
     // Ensure all mapped shards exist in backend configuration
     for cmd, shardID := range s.commandMappings {
-        if _, exists := s.redisClients[shardID]; !exists {
+        if _, exists := s.nodeClients[shardID]; !exists {
             return fmt.Errorf("command %s maps to undefined shard %s", cmd, shardID)
         }
     }
-    
+
     // Ensure default shard exists
-    if _, exists := s.redisClients[s.defaultShard]; !exists {
-        return fmt.Errorf("default shard %s not found in redis backends", s.defaultShard)
+    if _, exists := s.nodeClients[s.defaultShard]; !exists {
+        return fmt.Errorf("default shard %s not found in pebble backends", s.defaultShard)
     }
-    
+
     // Validate tenant overrides reference existing shards
     for tenant, shardID := range s.tenantOverrides {
-        if _, exists := s.redisClients[shardID]; !exists {
+        if _, exists := s.nodeClients[shardID]; !exists {
             return fmt.Errorf("tenant %s override maps to undefined shard %s", tenant, shardID)
         }
     }
-    
+
     return nil
 }
 ```
@@ -439,54 +413,50 @@ Leased tasks (in-progress) are not migrated automatically. The tool waits for le
 
 ### Option 1: Vertical Scaling Only
 
-The simplest alternative is to continue scaling KVRocks vertically without implementing sharding. Modern cloud providers offer instance types with 96 vCPUs and 384 GB of memory. For many organizations, vertical scaling alone provides sufficient capacity for multiple years of growth.
+The simplest alternative is to continue scaling a single Pebble process vertically (more cores, more memory, faster disk, more intra-process shards via `numShards`) without implementing cross-node sharding. Modern cloud providers offer instance types with 96 vCPUs and 384 GB of memory. For many organizations, vertical scaling alone provides sufficient capacity for multiple years of growth.
 
-**Advantages**: This approach requires no code changes to codeQ. Scaling is operationally simple: provision a larger KVRocks instance and update the connection string. There are no distributed system concerns, no configuration complexity, and no risk of shard misconfiguration. The single-instance deployment model remains easy to reason about for troubleshooting and performance optimization.
+**Advantages**: This approach requires no cross-node coordination in codeq. Scaling is operationally simple: provision a larger host, bump `numShards`, restart the process. There are no distributed system concerns, no configuration complexity, and no risk of shard misconfiguration. The single-process deployment model remains easy to reason about for troubleshooting and performance optimization.
 
 **Disadvantages**: Vertical scaling encounters hard limits. The largest available instance types eventually saturate, and the next scaling step does not exist. The cost efficiency of vertical scaling degrades as instance size increases; doubling capacity may more than double cost. Maintenance operations like upgrades or backups impact the entire workload simultaneously, increasing blast radius.
 
-Most critically, the single instance remains a single point of failure. Even with asynchronous replication to standby replicas, failover takes seconds to minutes and often requires manual intervention. Organizations with strict availability SLAs cannot accept this risk indefinitely.
+Most critically, the single process remains a single point of failure. Recovery is fast (the lease table is rebuilt in memory from a `KeyInprog` scan at Open) but not instantaneous. Organizations with strict availability SLAs cannot accept this risk indefinitely.
 
-**When to choose this option**: Organizations processing fewer than one million tasks per day with moderate payload sizes can comfortably operate on a single KVRocks instance for the foreseeable future. If operational simplicity is paramount and the workload growth is predictable and modest, deferring sharding avoids premature complexity.
+**When to choose this option**: Organizations processing fewer than one million tasks per day with moderate payload sizes can comfortably operate on a single Pebble process for the foreseeable future. If operational simplicity is paramount and the workload growth is predictable and modest, deferring cross-node sharding avoids premature complexity.
 
-### Option 2: Independent Master-Replica Pairs
+### Option 2: Independent Stacks
 
-Rather than implementing client-side sharding logic, deploy multiple independent codeQ stacks, each with its own KVRocks master-replica pair. Route traffic at the ingress layer based on tenant, command, or geographic region.
+Rather than implementing client-side sharding logic, deploy multiple independent codeq stacks, each with its own Pebble process (and optionally a hot standby for log-shipping replication). Route traffic at the ingress layer based on tenant, command, or geographic region.
 
 ```mermaid
 graph TB
-    subgraph "Load Balancer Layer"
-        LB[Ingress / API Gateway]
-    end
-    
-    subgraph "Stack A: Tenant Premium"
-        API_A[API Servers A]
-        KV_A[(KVRocks A<br/>Master + Replica)]
-        API_A --> KV_A
-    end
-    
-    subgraph "Stack B: Tenant Standard"
-        API_B[API Servers B]
-        KV_B[(KVRocks B<br/>Master + Replica)]
-        API_B --> KV_B
-    end
-    
-    subgraph "Stack C: Geographic EU"
-        API_C[API Servers C]
-        KV_C[(KVRocks C<br/>Master + Replica)]
-        API_C --> KV_C
-    end
-    
-    LB -->|Premium Traffic| API_A
-    LB -->|Standard Traffic| API_B
-    LB -->|EU Traffic| API_C
-    
-    style KV_A fill:#6bcf7f
-    style KV_B fill:#6bcf7f
-    style KV_C fill:#6bcf7f
+  subgraph LB[Load Balancer Layer]
+    LBN[Ingress / API Gateway]
+  end
+
+  subgraph StackA[Stack A - Tenant Premium]
+    API_A[API Servers A]
+    PEB_A[(Pebble A - leader + standby)]
+    API_A --> PEB_A
+  end
+
+  subgraph StackB[Stack B - Tenant Standard]
+    API_B[API Servers B]
+    PEB_B[(Pebble B - leader + standby)]
+    API_B --> PEB_B
+  end
+
+  subgraph StackC[Stack C - Geographic EU]
+    API_C[API Servers C]
+    PEB_C[(Pebble C - leader + standby)]
+    API_C --> PEB_C
+  end
+
+  LBN -->|Premium Traffic| API_A
+  LBN -->|Standard Traffic| API_B
+  LBN -->|EU Traffic| API_C
 ```
 
-**Advantages**: This approach achieves horizontal scaling without modifying codeQ's codebase. Each stack is operationally independent, simplifying failure domains and blast radius containment. Teams can deploy different codeQ versions or configurations to different stacks, enabling gradual rollout and A/B testing. Capacity planning is straightforward: add a new stack when existing stacks approach saturation.
+**Advantages**: This approach achieves horizontal scaling without modifying codeq's codebase. Each stack is operationally independent, simplifying failure domains and blast radius containment. Teams can deploy different codeq versions or configurations to different stacks, enabling gradual rollout and A/B testing. Capacity planning is straightforward: add a new stack when existing stacks approach saturation.
 
 The routing decision moves to the infrastructure layer (API gateway, service mesh, DNS). Many organizations already have sophisticated traffic management infrastructure that can route based on tenant, geography, or custom headers. Leveraging this existing investment avoids building routing logic into the application.
 
@@ -498,69 +468,62 @@ Cost efficiency may suffer from underutilization. If tenant workloads vary signi
 
 **When to choose this option**: Organizations with natural partitioning boundaries (geographic regions, customer tiers, business units) benefit from independent stacks. If cross-partition operations are not required, or can be handled at a higher orchestration layer, the operational simplicity of independent stacks may outweigh the benefits of unified sharding. This approach is particularly attractive as a near-term pragmatic solution while the engineering team develops confidence in sharding implementations.
 
-### Option 3: Sharding with RAFT-Backed Storage (Chosen Approach)
+### Option 3: Sharding with RAFT-Backed Pebble (Chosen Approach)
 
-**This is our chosen long-term design.** We leverage explicit sharding (via ShardSupplier) combined with RAFT-backed consensus storage to provide strong consistency and automatic failover.
+**This is our chosen long-term design.** We leverage explicit sharding (via ShardSupplier) on top of a consistent-hash ring across Pebble nodes, with an evolution path toward RAFT-backed consensus per shard for strong consistency and automatic failover.
 
-The architecture uses ShardSupplier for horizontal distribution across multiple storage backends, where each backend is a RAFT-consensus system (such as TiKV) rather than standalone KVRocks instances. This combines the scalability benefits of sharding with the availability guarantees of distributed consensus.
+The architecture uses ShardSupplier for horizontal distribution across Pebble nodes. Near-term, each node is an independent Pebble process (Phase 5 cluster mode); long-term, each shard becomes a small RAFT group of Pebble nodes that replicate the WAL to quorum before acknowledging writes. This combines the scalability benefits of sharding with the availability guarantees of distributed consensus.
 
 ```mermaid
 graph TB
-    subgraph "API Layer"
-        API1[API Server 1]
-        API2[API Server 2]
-        API3[API Server N]
-    end
-    
-    subgraph "Shard A: RAFT Cluster"
-        RAFT_A_L[RAFT Leader A]
-        RAFT_A_F1[RAFT Follower A1]
-        RAFT_A_F2[RAFT Follower A2]
-        
-        RAFT_A_L -.->|Replication| RAFT_A_F1
-        RAFT_A_L -.->|Replication| RAFT_A_F2
-    end
-    
-    subgraph "Shard B: RAFT Cluster"
-        RAFT_B_L[RAFT Leader B]
-        RAFT_B_F1[RAFT Follower B1]
-        RAFT_B_F2[RAFT Follower B2]
-        
-        RAFT_B_L -.->|Replication| RAFT_B_F1
-        RAFT_B_L -.->|Replication| RAFT_B_F2
-    end
-    
-    API1 --> RAFT_A_L
-    API2 --> RAFT_A_L
-    API3 --> RAFT_B_L
-    
-    style RAFT_A_L fill:#4ecdc4
-    style RAFT_A_F1 fill:#95e1d3
-    style RAFT_A_F2 fill:#95e1d3
-    style RAFT_B_L fill:#4ecdc4
-    style RAFT_B_F1 fill:#95e1d3
-    style RAFT_B_F2 fill:#95e1d3
+  subgraph APILayer[API Layer]
+    API1[API Server 1]
+    API2[API Server 2]
+    API3[API Server N]
+  end
+
+  subgraph ShardA[Shard A - RAFT group over Pebble]
+    RAFT_A_L[Pebble leader A]
+    RAFT_A_F1[Pebble follower A1]
+    RAFT_A_F2[Pebble follower A2]
+
+    RAFT_A_L -.->|WAL replication| RAFT_A_F1
+    RAFT_A_L -.->|WAL replication| RAFT_A_F2
+  end
+
+  subgraph ShardB[Shard B - RAFT group over Pebble]
+    RAFT_B_L[Pebble leader B]
+    RAFT_B_F1[Pebble follower B1]
+    RAFT_B_F2[Pebble follower B2]
+
+    RAFT_B_L -.->|WAL replication| RAFT_B_F1
+    RAFT_B_L -.->|WAL replication| RAFT_B_F2
+  end
+
+  API1 --> RAFT_A_L
+  API2 --> RAFT_A_L
+  API3 --> RAFT_B_L
 ```
 
-**Advantages**: 
-- Horizontal scaling via sharding + strong consistency per shard via RAFT
-- Automatic leader election and failover (no manual intervention)
-- Tolerates minority node failures while serving requests
-- Queue operations replicate to quorum before acknowledging (durability guarantees)
+**Advantages**:
+- Horizontal scaling via sharding + strong consistency per shard via RAFT.
+- Automatic leader election and failover (no manual intervention).
+- Tolerates minority node failures while serving requests.
+- Queue operations replicate to quorum before acknowledging (durability guarantees).
 
-**Implementation Path**: 
-- **Near-term**: ShardSupplier with independent KVRocks backends (enables immediate scaling)
-- **Long-term**: Migrate shards to RAFT-backed storage (TiKV, or future KVRocks with native RAFT support)
-- The ShardSupplier abstraction remains unchanged; only backend configuration changes
+**Implementation Path**:
+- **Near-term**: ShardSupplier with independent Pebble nodes behind a consistent-hash ring (Phase 5 cluster mode — enables immediate scaling).
+- **Long-term**: Migrate each shard to a RAFT group over Pebble, replicating the WAL to quorum.
+- The ShardSupplier abstraction remains unchanged; only the per-shard backend configuration changes.
 
-**Performance Considerations**: 
-RAFT consensus adds network round-trip latency (synchronous replication to quorum). Within a single availability zone, expect modest throughput reduction compared to unreplicated instances. This trade-off is acceptable for the availability guarantees provided.
+**Performance Considerations**:
+RAFT consensus adds network round-trip latency (synchronous replication to quorum). Within a single availability zone, expect modest throughput reduction compared to unreplicated Pebble nodes. This trade-off is acceptable for the availability guarantees provided.
 
 **Why this matches our requirements**:
-- Enables horizontal scaling (multiple shards)
-- Provides high availability (RAFT consensus per shard)
-- Maintains operational flexibility (ShardSupplier supports various routing strategies)
-- Allows phased adoption (start with independent backends, evolve to RAFT-backed storage)
+- Enables horizontal scaling (multiple Pebble nodes behind the ring).
+- Provides high availability (RAFT consensus per shard).
+- Maintains operational flexibility (ShardSupplier supports various routing strategies).
+- Allows phased adoption (start with independent Pebble nodes, evolve to RAFT-backed groups).
 
 ### Trade-Off Analysis
 
@@ -568,23 +531,23 @@ RAFT consensus adds network round-trip latency (synchronous replication to quoru
 
 **For large-scale multi-tenant SaaS platforms**: The proposed explicit sharding design (evolving to Option 3) offers the best balance. ShardSupplier provides routing flexibility, enables tenant isolation, and supports evolution toward RAFT-backed storage.
 
-**For organizations with strict availability SLAs**: Option 3 (sharding + RAFT) is the target architecture. Near-term implementation uses Option 2 (independent stacks) as a stepping stone.
+**For organizations with strict availability SLAs**: Option 3 (sharding + RAFT over Pebble) is the target architecture. Near-term implementation uses Phase 5 cluster mode (consistent-hash ring across independent Pebble nodes) as a stepping stone.
 
-The explicit sharding design with RAFT-backed storage is our **chosen implementation path** because it enables gradual adoption, supports horizontal scaling, and provides strong consistency guarantees for production deployments.
+The explicit sharding design with RAFT-backed Pebble is our **chosen implementation path** because it enables gradual adoption, supports horizontal scaling, and provides strong consistency guarantees for production deployments.
 
 ## Alternative: Plugin Architecture Evolution
 
-An alternative architectural path involves evolving the plugin system to decouple persistence from any specific storage backend. This approach recognizes that sharding + RAFT addresses horizontal scaling and availability, but organizations may have diverse persistence requirements that extend beyond Redis-protocol-compatible storage.
+We considered an alternative architectural path that evolves the plugin system to decouple persistence from any specific engine. This recognizes that sharding + RAFT addresses horizontal scaling and availability, but organizations may have diverse persistence requirements that extend beyond Pebble. We shipped Pebble + consistent-hash ring as the primary design; the plugin path below is preserved as historical context for those organizations.
 
 ### Separation of Concerns
 
-The current architecture tightly couples the repository layer to Redis/KVRocks. The TaskRepository and ResultRepository implementations directly use `redis.Client`. While this provides a simple integration path, it limits flexibility for organizations with existing investments in other storage systems.
+The current architecture tightly couples the repository layer to Pebble. The TaskRepository and ResultRepository implementations target Pebble's batch and iterator APIs directly. This provides a simple integration path and predictable performance, but it limits flexibility for organizations with existing investments in other storage systems.
 
 A plugin-based architecture would separate concerns through well-defined interfaces:
 
 **Authentication Plugin**: Already partially implemented via `pkg/auth/Validator` interface. Supports JWKS, static tokens, and can be extended for OAuth2, SAML, or custom authentication providers.
 
-**Persistence Plugin**: New abstraction layer that decouples queue operations from Redis-specific commands. Define interfaces for queue primitives (enqueue, claim, complete, etc.) that can be implemented against various backends.
+**Persistence Plugin**: New abstraction layer that decouples queue operations from engine-specific calls. Define interfaces for queue primitives (enqueue, claim, complete, etc.) that can be implemented against various backends.
 
 ### Proposed Plugin Interface Structure
 
@@ -630,38 +593,37 @@ func RegisterBackend(name string, factory BackendFactory) {
 
 ### Supported Backend Implementations
 
-With this abstraction, codeQ can support multiple persistence backends:
+With this abstraction, codeq could support multiple persistence backends:
 
-**Redis/KVRocks Backend** (current implementation, refactored):
-- Implements QueueBackend using existing Lua scripts and data structures
-- No behavioral changes, purely an interface wrapper
-- Remains the default and recommended backend for most deployments
+**Pebble Backend** (the shipped implementation, wrapped behind the interface):
+- Implements QueueBackend using Pebble batches and iterators.
+- No behavioral changes, purely an interface wrapper.
+- Remains the default and recommended backend for all deployments.
 
 **Cassandra Backend**:
-- Uses Cassandra's lightweight transactions (LWT) for atomic claim operations
-- Queue as partitioned by (command, tenant_id, priority)
-- Pending tasks stored with TTL for automatic expiry
-- Suitable for organizations with existing Cassandra infrastructure
+- Uses Cassandra's lightweight transactions (LWT) for atomic claim operations.
+- Queue partitioned by (command, tenant_id, priority).
+- Pending tasks stored with TTL for automatic expiry.
+- Suitable for organizations with existing Cassandra infrastructure.
 
 **HBase Backend**:
-- Leverages HBase's strong consistency within row operations
-- Row key design: `{command}:{tenantID}:{priority}:{taskID}`
-- Uses CheckAndPut for atomic claim operations
-- Integrates with existing Hadoop ecosystem deployments
+- Leverages HBase's strong consistency within row operations.
+- Row key design: `{command}:{tenantID}:{priority}:{taskID}`.
+- Uses CheckAndPut for atomic claim operations.
+- Integrates with existing Hadoop ecosystem deployments.
 
 **TiKV Backend** (RAFT-backed):
-- Uses TiKV's native transactions for atomic queue operations
-- Benefits from built-in RAFT consensus (high availability out-of-the-box)
-- Redis protocol compatibility via TiKV's Redis module (minimal migration)
-- Provides both horizontal scaling and strong consistency
+- Uses TiKV's native transactions for atomic queue operations.
+- Benefits from built-in RAFT consensus (high availability out-of-the-box).
+- Provides both horizontal scaling and strong consistency.
 
 ### Benefits of Plugin Architecture
 
 **Flexibility**: Organizations choose persistence based on existing infrastructure investments, operational expertise, and compliance requirements.
 
-**Incremental Migration**: Existing deployments on KVRocks continue unchanged. New deployments can select alternative backends without rewriting codeQ core logic.
+**Incremental Migration**: Existing deployments on Pebble continue unchanged. New deployments can select alternative backends without rewriting codeq core logic.
 
-**Vendor Independence**: Reduces lock-in to any single storage vendor. If KVRocks development stalls or pricing changes unfavorably, alternative backends remain viable.
+**Vendor Independence**: Reduces lock-in to any single storage engine. If a different engine becomes the better fit, alternative backends remain viable.
 
 **Testing and Development**: Plugin architecture enables lightweight in-memory backends for unit tests, reducing test suite dependencies on Docker or external services.
 
@@ -673,13 +635,13 @@ With this abstraction, codeQ can support multiple persistence backends:
 
 **Maintenance Burden**: Supporting multiple backends multiplies maintenance surface area. Bug fixes and performance optimizations may need backend-specific implementations.
 
-**Performance Overhead**: Abstraction layer introduces function call overhead. For latency-sensitive deployments, direct Redis operations may outperform generic interface calls.
+**Performance Overhead**: Abstraction layer introduces function call overhead. For latency-sensitive deployments, direct Pebble calls outperform generic interface calls.
 
 ### Recommendation
 
-The plugin architecture is a **complementary approach** to sharding + RAFT, not a replacement. Near-term priorities should focus on implementing ShardSupplier and RAFT-backed storage within the existing Redis-based architecture. The plugin abstraction can be introduced in a later phase if demand for alternative backends materializes.
+The plugin architecture is a **complementary approach** to sharding + RAFT, not a replacement. Near-term priorities focus on implementing ShardSupplier and RAFT-backed storage within the Pebble-based architecture. The plugin abstraction can be introduced in a later phase if demand for alternative backends materializes.
 
-Key decision point: If three or more customers request non-Redis persistence within 12 months, prioritize plugin architecture refactoring. Until then, optimize the Redis-based implementation for horizontal scaling and high availability.
+Key decision point: If three or more customers request non-Pebble persistence within 12 months, prioritize plugin architecture refactoring. Until then, optimize the Pebble-based implementation for horizontal scaling and high availability.
 
 ## Implementation Phases
 
@@ -725,29 +687,27 @@ sharding:
   commandMappings: {}
   tenantOverrides: {}
 
-redis:
+pebble:
   shards:
     default:
-      address: "${REDIS_ADDRESS}"
-      password: "${REDIS_PASSWORD}"
-      db: 0
+      address: "${CODEQ_PEBBLE_NODE_ADDRESS}"
       poolSize: 20
 ```
 
 With `sharding.enabled: false`, the system uses DefaultShardSupplier and ignores the mappings. This provides a safe deployment path: the code ships to production with sharding disabled, and operators enable it through configuration after validating in non-production environments.
 
-The TaskRepository maintains a map of shard identifiers to Redis clients. Initially, the map contains only the "default" shard. As operators add new shards to the configuration and enable sharding, the repository begins routing according to the mappings.
+The TaskRepository maintains a map of shard identifiers to per-node gRPC clients. Initially, the map contains only the "default" shard. As operators add new shards to the configuration and enable sharding, the repository begins routing according to the mappings.
 
-This phase includes integration tests with multiple Redis instances, configuration validation logic to prevent misconfiguration, and operational documentation covering the sharding configuration format and best practices.
+This phase includes integration tests with multiple Pebble nodes, configuration validation logic to prevent misconfiguration, and operational documentation covering the sharding configuration format and best practices.
 
-**Success criteria**: Operators can enable sharding in a staging environment, route a test command to a secondary Redis instance, enqueue and claim tasks successfully, and disable sharding without service disruption.
+**Success criteria**: Operators can enable sharding in a staging environment, route a test command to a secondary Pebble node, enqueue and claim tasks successfully, and disable sharding without service disruption.
 
 ### Phase 3: Key Format Evolution
 
 The third phase modifies queue key generation to include the shard identifier when using multi-shard configurations. The key format adapts based on whether sharding is enabled:
 
 ```go
-func (r *taskRedisRepo) keyQueuePending(cmd domain.Command, tenantID string, 
+func (r *taskPebbleRepo) keyQueuePending(cmd domain.Command, tenantID string, 
     priority int) string {
     
     shardID, _ := r.shardSupplier.CurrentShard(context.Background(), string(cmd), tenantID)
@@ -796,7 +756,7 @@ func (r *shardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Comma
         wg.Add(1)
         go func(sid string) {
             defer wg.Done()
-            client := r.redisClients[sid]
+            client := r.nodeClients[sid]
             stats, err := r.getStatsForShard(ctx, client, cmd, tenantID, sid)
             if err != nil {
                 errors <- err
@@ -871,31 +831,31 @@ Alerts trigger when a shard becomes unavailable or when cross-shard operations f
 
 ### Capacity Planning
 
-Each shard requires independent capacity planning based on the commands routed to it. High-throughput commands like GENERATE_MASTER may require shards with larger KVRocks instances, while low-latency commands like SEND_EMAIL might share a shard with modest capacity.
+Each shard requires independent capacity planning based on the commands routed to it. High-throughput commands like GENERATE_MASTER may require shards backed by larger Pebble nodes (more cores, faster disk, more intra-process shards via `numShards`), while low-latency commands like SEND_EMAIL might share a shard with modest capacity.
 
 Capacity planning metrics track shard utilization over time:
 
-```
+```text
 # Per-shard resource utilization
-kvrocks_cpu_usage{shard="compute-shard"} 78
-kvrocks_memory_usage_bytes{shard="compute-shard"} 12884901888
-kvrocks_disk_usage_bytes{shard="notification-shard"} 5368709120
+pebble_cpu_usage{shard="compute-shard"} 78
+pebble_memory_usage_bytes{shard="compute-shard"} 12884901888
+pebble_disk_usage_bytes{shard="notification-shard"} 5368709120
 ```
 
-When a shard consistently operates above 80% CPU utilization, operators have several options: vertically scale the KVRocks instance for that shard, redistribute commands to other shards by updating the configuration, or provision a new shard and migrate a subset of commands.
+When a shard consistently operates above 80% CPU utilization, operators have several options: vertically scale the Pebble node hosting that shard (more cores, more `numShards`), redistribute commands to other shards by updating the configuration, or provision a new shard and migrate a subset of commands.
 
 The capacity planning documentation provides decision trees to guide these choices based on workload characteristics and organizational constraints.
 
 ### Security and Isolation
 
-Each shard may require different security controls. Premium tier customers might receive dedicated shards with stricter access controls, encryption at rest, and isolated network segments. The Redis client configuration supports per-shard credentials and TLS settings:
+Each shard may require different security controls. Premium tier customers might receive dedicated shards with stricter access controls, encryption at rest, and isolated network segments. The per-node client configuration supports per-shard credentials and TLS settings:
 
 ```yaml
-redis:
+pebble:
   shards:
     premium-shard:
-      address: "kvrocks-premium.internal:6380"
-      password: "${REDIS_PREMIUM_PASSWORD}"
+      address: "codeq-premium.internal:7070"
+      authToken: "${CODEQ_PREMIUM_TOKEN}"
       tlsEnabled: true
       tlsCertFile: "/etc/codeq/certs/premium-client.crt"
       tlsKeyFile: "/etc/codeq/certs/premium-client.key"
@@ -923,30 +883,30 @@ A staged rollout deploys configuration changes to staging before production. Syn
 
 ### Latency Considerations
 
-Sharding introduces minimal latency overhead for single-shard operations. The shard resolution call to ShardSupplier.CurrentShard is a local function call to read from an in-memory map, adding microseconds. The Redis client selection from the client map is similarly fast.
+Sharding introduces minimal latency overhead for single-shard operations. The shard resolution call to ShardSupplier.CurrentShard is a local function call to read from an in-memory map, adding microseconds. The per-node client selection from the client map is similarly fast.
 
-Multi-shard operations like queue statistics aggregation have higher latency because they query multiple Redis instances in parallel. A three-shard deployment queries three instances concurrently, with total latency bounded by the slowest instance plus aggregation overhead. In testing, cross-shard stats queries complete in under 50ms for typical queue sizes.
+Multi-shard operations like queue statistics aggregation have higher latency because they query multiple Pebble nodes in parallel. A three-shard deployment queries three nodes concurrently, with total latency bounded by the slowest node plus aggregation overhead. In testing, cross-shard stats queries complete in under 50ms for typical queue sizes.
 
 Network topology impacts latency. If shards deploy in different availability zones, cross-AZ latency adds 1-2ms per operation. Deploying all shards in the same AZ minimizes this overhead at the cost of availability guarantees. Organizations must balance latency requirements against fault tolerance needs.
 
 ### Throughput Impact
 
-Sharding increases aggregate throughput by distributing load across multiple KVRocks instances. A single-shard deployment saturating at 4,000 enqueue operations per second can scale to 12,000 by adding two more shards and distributing commands evenly.
+Sharding increases aggregate throughput by distributing load across multiple Pebble nodes. A single-node deployment saturating on its host can scale roughly linearly by adding more nodes and distributing commands evenly. Reference numbers for the full create → claim → complete cycle on a single 12-core box are catalogued in [_STYLE.md § Numbers must come from measurement](./_STYLE.md#7-numbers-must-come-from-measurement); cross-node scale-out multiplies that baseline subject to the caveats below.
 
 However, throughput gains are sublinear if the command distribution is uneven. If 80% of traffic routes to one shard while the others sit idle, throughput is constrained by the hottest shard. The StaticShardSupplier intentionally provides explicit control to allow operators to balance load based on observed traffic patterns rather than relying on automatic hashing that might create hotspots.
 
-Connection pool sizing impacts throughput. Each API server maintains a connection pool to each shard. A deployment with three API servers and three shards requires nine pools total. Operators must ensure total connection count across all pools does not exceed KVRocks maxclients limits.
+Connection pool sizing impacts throughput. Each API server maintains a gRPC connection pool to each Pebble node. A deployment with three API servers and three nodes requires nine pools total. Operators must size pools so the aggregate concurrency does not exhaust the worker goroutines on the target nodes.
 
 ### Memory Footprint
 
-Each Redis client maintains connection state and internal buffers. Adding shards increases memory usage on the API servers proportional to the connection pool size per shard. For typical pool sizes of 10-20 connections per shard, the per-API-server overhead is 50-100MB per shard.
+Each per-node gRPC client maintains connection state and internal buffers. Adding shards increases memory usage on the API servers proportional to the connection pool size per shard. For typical pool sizes of 10-20 connections per shard, the per-API-server overhead is 50-100MB per shard.
 
 The ShardSupplier configuration itself is negligible, typically under 1MB even for configurations with hundreds of command mappings. The configuration loads once at startup and remains immutable, avoiding memory churn.
 
 ## Conclusion and Recommendations
 
-The explicit sharding design through ShardSupplier, combined with RAFT-backed consensus storage, provides the path to horizontal scaling and high availability for codeQ.
+The explicit sharding design through ShardSupplier, combined with a consistent-hash ring across Pebble nodes (and a long-term path to RAFT-backed Pebble groups per shard), provides the path to horizontal scaling and high availability for codeq.
 
 **Next steps**: Implementation phases track to issue #31. Phase 1 (interface definition) begins immediately. Subsequent phases gate on production validation. Complete ETA: Aug/26.
 
-**Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Redis-protocol storage.
+**Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Pebble.

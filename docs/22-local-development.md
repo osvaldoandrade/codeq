@@ -1,9 +1,10 @@
 # Local Development (Docker Compose)
 
-This guide sets up a full local environment for codeQ development using Docker Compose:
+This guide sets up a full local environment for codeq development using Docker Compose:
 
-- KVRocks (Redis-compatible)
-- codeQ API server (runs from source, with hot reload)
+- codeq API server (runs from source, with hot reload) backed by an
+  embedded Pebble store under `./data/pebble`
+
 - Optional: Prometheus + Grafana + Jaeger (`--profile obs`)
 
 ## Quick Start

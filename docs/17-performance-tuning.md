@@ -2,14 +2,14 @@
 
 This guide provides comprehensive tuning recommendations for production codeQ deployments. Follow these guidelines to optimize throughput, reduce latency, and ensure stable operations under load.
 
-codeq went from 26k req/s (Phase 0, KVRocks baseline) to 83.4k tasks/s for the full create → claim → complete cycle (Phase 8, 4 Pebble shards) through a sequence of nine measurable optimizations. The [phase evolution timeline](#phase-evolution-timeline) below maps every milestone to its throughput number; the [optimization-to-path map](#optimization-to-hot-path-map) links each phase to the specific hot path it touched (Pebble write, gRPC stream, producer notifier, mutex, batch claim, ClaimMany RPC, in-memory lease, Pebble shards). Use both diagrams to navigate the sections below — every phase referenced in the diagrams has its own subsection with the harness name, env vars, and measurement window required to reproduce the number.
+codeq went from 26k req/s (Phase 0, early Redis-protocol backend, now removed) to 83.4k tasks/s for the full create → claim → complete cycle (Phase 8, 4 Pebble shards) through a sequence of nine measurable optimizations. The [phase evolution timeline](#phase-evolution-timeline) below maps every milestone to its throughput number; the [optimization-to-path map](#optimization-to-hot-path-map) links each phase to the specific hot path it touched (Pebble write, gRPC stream, producer notifier, mutex, batch claim, ClaimMany RPC, in-memory lease, Pebble shards). Use both diagrams to navigate the sections below — every phase referenced in the diagrams has its own subsection with the harness name, env vars, and measurement window required to reproduce the number.
 
 ## Phase evolution timeline
 
 ```mermaid
 timeline
   title codeq throughput evolution (full cycle, single node)
-  Phase 0 baseline : 26k req/s (KVRocks)
+  Phase 0 baseline : 26k req/s (Redis-protocol backend, removed)
   Phase 1 coalescer : 40.6k req/s (Pebble + group-commit)
   Phase 5 cluster scale : 0.96x linear scaling
   Phase 6 Q1 HasActive : 33.5k tasks/s (full cycle)
@@ -72,8 +72,11 @@ For a practical load testing harness (k6 scenarios + Go benchmarks), see:
 
 ### Baseline Performance Summary
 
-A single codeQ instance with one KVRocks node achieves **1,000–2,000 req/s** on
-loopback with **0% error rates** across all scenarios. Key findings:
+A single codeQ instance with embedded Pebble achieves **1,000–2,000 req/s** on
+loopback with **0% error rates** across all scenarios in the k6 baseline suite
+(see `loadtest/`). Peak single-node throughput on the bench harness is 83.4k
+tasks/s for the full cycle (see [_STYLE.md § 7](./_STYLE.md#7-numbers-must-come-from-measurement)).
+Key findings:
 
 - **p95 latency** stays below 15 ms at 200 tasks/s and below 40 ms at 500 tasks/s.
 - **Burst absorption** — 5,000 tasks in 10 s are drained with a peak latency of ~70 ms.
@@ -85,137 +88,56 @@ These numbers help calibrate the tuning recommendations that follow. For detaile
 per-scenario tables and regression testing guidance, see
 [`docs/30-performance-baselines.md`](30-performance-baselines.md).
 
-## 1) KVRocks Configuration
+## 1) Pebble Configuration
 
-KVRocks is the stateful storage component and often the primary bottleneck. Proper configuration is critical for performance.
+Pebble is the embedded LSM that backs codeq. There is no separate storage daemon; tuning happens via `codeq.yml` and the per-shard Pebble options applied at Open. See [Storage layout (Pebble)](./07b-storage-pebble.md) for the full layout.
 
-### Memory allocation
+### Shard count
 
-KVRocks uses RocksDB under the hood, which relies on memory for caching and buffering.
+The single most impactful knob is `numShards`. Each shard is an independent Pebble instance with its own WAL, memtable, and compaction goroutines.
 
 **Recommended settings:**
 
-```conf
-# kvrocks.conf
-maxmemory 8gb
-# Set to 70-80% of available RAM, leaving room for OS and KVRocks overhead
+```yaml
+persistence:
+  driver: pebble
+  pebble:
+    dataDir: /var/lib/codeq/pebble
+    numShards: 4
 ```
 
-**Block cache sizing:**
+**Shard sweep** (`internal/bench/profile_full_cycle_test.go::TestProfile_FullCycle`, `PHASE8_SHARDS=1,2,4,6,8`): 42k / 65k / 83k / 68k / 67k tasks/s. Four shards is the sweet spot on a 12-core box; beyond that compaction contention erodes the gain.
 
-- Default block cache: 2GB per instance
-- For read-heavy workloads: increase to 30-50% of `maxmemory`
-- For write-heavy workloads: increase write buffer size
+### Durability
 
-```conf
-rocksdb.block_cache_size 4096
-# In MB. Adjust based on read vs write ratio.
+`fsyncOnCommit` controls WAL fsync on every batch commit.
+
+```yaml
+persistence:
+  pebble:
+    fsyncOnCommit: false   # default: group-commit, no fsync per batch
 ```
 
-**Memory considerations:**
+- `false` (default): group-commit coalescer batches writes; survives clean shutdown but loses the last ~1-10ms of writes on hard kill.
+- `true`: fsync on every commit; costs ~20% throughput in the harness.
 
-- Monitor actual memory usage with `INFO memory`
-- Reserve 20-30% of system RAM for OS page cache
-- Avoid swapping at all costs; set `vm.swappiness=1` on Linux hosts
+Do not enable `fsyncOnCommit` unless you have measured the latency impact in your workload.
 
-### Persistence settings
+### Group-commit coalescer
 
-KVRocks persists using RocksDB SST files. Tune based on durability vs performance tradeoff.
+The coalescer (`pkg/storage/pebble`) merges concurrent batch commits into a single Pebble write. No knobs are exposed today — the window is set internally based on observed batch sizes. See commit `57b7b07` for context.
 
-**Write-ahead log (WAL):**
+### Disk
 
-```conf
-rocksdb.wal_ttl_seconds 0
-rocksdb.wal_size_limit_mb 0
-# Disable WAL limits for max durability
-```
-
-For higher throughput with reduced durability guarantees:
-
-```conf
-rocksdb.wal_ttl_seconds 3600
-rocksdb.wal_size_limit_mb 2048
-```
-
-**Compaction:**
-
-- Background compactions reduce read amplification but use CPU
-- Default settings are usually sufficient
-- Monitor compaction stats: `rocksdb.compaction.stats`
-
-```conf
-rocksdb.max_background_compactions 4
-rocksdb.max_background_flushes 2
-```
-
-**Snapshot intervals:**
-
-- KVRocks creates periodic snapshots
-- Balance backup frequency with I/O overhead
-- Use external backups instead of frequent snapshots
-
-### Connection pooling
-
-codeQ uses `go-redis` which manages connections automatically. Tune pool size based on API server concurrency.
-
-**Recommended pool size:**
-
-- Default: 10 connections per API server instance
-- High throughput: `poolSize = 2 * (API_WORKERS + background_jobs)`
-
-In Go code or via environment:
-
-```go
-redis.Options{
-    PoolSize: 20,
-    MinIdleConns: 5,
-    MaxRetries: 3,
-    PoolTimeout: 4 * time.Second,
-}
-```
-
-**Connection limits:**
-
-KVRocks default: `maxclients 10000`
-
-For large deployments:
-
-```conf
-maxclients 20000
-tcp-backlog 511
-# Ensure OS socket backlog is also increased
-```
+- SSDs only. Pebble issues many small random reads on the LSM levels.
+- Provision 3-5x expected data size for compaction overhead.
+- Monitor disk I/O via `iostat`; aim for < 70% utilization.
 
 ### Cluster configuration
 
-**Current state:** codeQ does not implement sharding. All data resides on a single KVRocks instance or cluster node.
+Cluster mode (consistent-hash + gRPC routing across nodes) and intra-process sharding (`numShards > 1`) are mutually exclusive — startup panics if both are enabled. Pick one: multi-node across machines, or multi-shard inside one process.
 
-**Sharding design (designed, not yet implemented):**
-
-A comprehensive sharding design exists for horizontal scaling via explicit shard routing and RAFT-backed consensus storage. Key features:
-
-- Pluggable `ShardSupplier` interface for command-to-shard mapping
-- Explicit routing control (manual assignment, hash-based, or custom strategies)
-- Phased approach: near-term independent KVRocks backends, long-term RAFT consensus (TiKV)
-- Zero-downtime migration path from single-shard to multi-shard
-
-See **[Queue Sharding HLD](24-queue-sharding-hld.md)** for complete design specification and **[Sharding Status](06-sharding.md)** for implementation timeline.
-
-**Interim horizontal scaling (until sharding implementation completes):**
-
-Scale KVRocks vertically. For horizontal scaling needs, deploy multiple isolated codeQ+KVRocks pairs per region or tenant.
-
-**Replication (KVRocks native):**
-
-KVRocks supports master-replica replication:
-
-```conf
-slaveof <master-ip> <master-port>
-# On replica nodes
-```
-
-- Use replicas for read-only queries (not currently supported by codeQ)
-- Fail-over requires manual intervention or external orchestration (e.g., Sentinel)
+See [Cluster mode](./32-cluster-mode.md) and [Queue Sharding HLD](24-queue-sharding-hld.md) for design and trade-offs.
 
 ## 2) codeQ Configuration
 
@@ -325,10 +247,10 @@ inspectLimit := 200  // Processes up to 200 delayed tasks per claim
 
 **Monitoring:**
 
-Watch for delayed queue buildup:
+Watch for delayed queue buildup via the Prometheus metric:
 ```bash
-# Check delayed queue size
-redis-cli ZCARD codeq:q:GENERATE_MASTER:delayed:*
+# Delayed queue depth per command (codeq /metrics endpoint)
+max by (command) (codeq_queue_depth{queue="delayed"})
 ```
 
 If delayed queue grows faster than migration rate, consider:
@@ -679,44 +601,36 @@ autoscaling:
 - Use Kubernetes ClusterIP service with round-robin
 - For sticky sessions (not required for codeQ): consider IP hash
 
-**Connection pooling:**
+**Cluster fan-out:**
 
-- Each API instance maintains a Redis connection pool
-- Total connections = `replicas * poolSize`
-- Ensure KVRocks `maxclients` > total connections + headroom
+In cluster mode, each codeq node holds an open gRPC connection to every peer for ID-routed RPCs. Total cross-node connections grow as `N * (N-1)`. For N > 20 nodes, consider sharding by tenant instead.
 
-Example for 10 replicas with poolSize=20:
-```conf
-maxclients 250
-# 10 * 20 = 200 + 50 headroom
-```
+### Vertical scaling (single Pebble node)
 
-### Vertical scaling (KVRocks)
-
-KVRocks is CPU and memory intensive. Scale vertically before attempting horizontal sharding.
+A single-node codeq deployment scales vertically before requiring cluster mode.
 
 **CPU:**
 
 - Minimum: 2 vCPUs
 - Recommended: 4-8 vCPUs
-- High throughput: 16+ vCPUs
+- High throughput (4 shards): 12+ vCPUs
 
 **Memory:**
 
-- Minimum: 4 GB
+- Minimum: 2 GB (Go runtime + Pebble block cache)
 - Recommended: 8-16 GB
 - High volume: 32-64 GB
 
 **Disk:**
 
-- Use SSDs for persistent storage
-- Provision 3-5x expected data size for compaction overhead
-- Monitor disk I/O: aim for < 70% utilization
+- Use SSDs for the Pebble data directory.
+- Provision 3-5x expected data size for compaction overhead.
+- Monitor disk I/O: aim for < 70% utilization.
 
 **Resource allocation (Kubernetes):**
 
 ```yaml
-kvrocks:
+codeq:
   resources:
     requests:
       cpu: 4000m
@@ -732,7 +646,7 @@ kvrocks:
 
 **When sharding becomes necessary:**
 
-- Single KVRocks instance saturates CPU (> 80%)
+- Single Pebble node saturates CPU (> 80%) even with `numShards: 4`
 - Memory requirements exceed 64 GB
 - Network bandwidth bottleneck (> 1 Gbps sustained)
 - Storage capacity approaches instance limits
@@ -740,28 +654,27 @@ kvrocks:
 
 **Recommended sharding approach (from HLD):**
 
-- **Near-term:** Deploy independent codeQ+KVRocks pairs per tenant/workload (Option 2)
+- **Near-term:** Deploy independent codeq nodes per tenant/workload (Option 2)
 - **Long-term:** Explicit sharding via ShardSupplier interface with pluggable strategies
 - Shard by `command` type or tenant for balanced distribution
-- Preserve Lua script atomicity within shard boundaries
 - See full design: `docs/24-queue-sharding-hld.md`
 
 **Current workarounds:**
 
-- Deploy independent codeQ+KVRocks pairs per region/tenant
+- Deploy independent codeq nodes per region/tenant
 - Partition workloads by command type manually
 - Use queue depth monitoring to detect imbalance
 
 ### Multi-region deployments
 
-For global workloads, deploy codeQ+KVRocks pairs per region.
+For global workloads, deploy independent codeq nodes per region.
 
 **Architecture:**
 
 ```
-Region A: API Servers → KVRocks A
-Region B: API Servers → KVRocks B
-Region C: API Servers → KVRocks C
+Region A: Producers/Workers → codeq A (Pebble)
+Region B: Producers/Workers → codeq B (Pebble)
+Region C: Producers/Workers → codeq C (Pebble)
 ```
 
 **Benefits:**
@@ -790,8 +703,8 @@ Performance varies based on workload, infrastructure, and configuration. These b
 
 ### Test environment
 
-- KVRocks: 4 vCPUs, 8 GB RAM, SSD storage
-- codeQ API: 4 instances, 2 vCPUs each, poolSize=10
+- codeq node: embedded Pebble, 4 vCPUs, 8 GB RAM, SSD storage
+- codeq API: 4 instances, 2 vCPUs each
 - Network: internal cluster network, < 1ms RTT
 
 ### Throughput vs latency tradeoffs
@@ -809,7 +722,7 @@ Performance varies based on workload, infrastructure, and configuration. These b
 
 - Linear scaling up to ~100 concurrent clients
 - Latency degrades beyond 3,500 tasks/sec
-- Bottleneck: KVRocks CPU at ~80%
+- Bottleneck: Pebble compaction CPU at ~80%
 
 **Claim throughput:**
 
@@ -907,12 +820,12 @@ For large worker fleets (> 100 instances), use `group` or `hash` delivery mode.
 
 ### Key metrics to watch
 
-**KVRocks metrics:**
+**Pebble metrics** (exported via codeq `/metrics`):
 
-- `used_memory`: Current memory usage
-- `connected_clients`: Active connections
-- `instantaneous_ops_per_sec`: Operations per second
-- `keyspace`: Total keys (should stabilize after initial ramp-up)
+- `codeq_pebble_compactions_total`: cumulative compactions per shard
+- `codeq_pebble_l0_files`: L0 file count (high values indicate write stall risk)
+- `codeq_pebble_memtable_size_bytes`: live memtable size
+- `codeq_pebble_disk_usage_bytes`: on-disk data size per shard
 
 **codeQ application metrics:**
 
@@ -933,28 +846,27 @@ codeQ exposes Prometheus metrics at `GET /metrics` (see `docs/10-operations.md`)
 
 ### Common bottlenecks
 
-#### 1. KVRocks CPU saturation
+#### 1. Pebble compaction CPU saturation
 
 **Symptoms:**
 
 - High latency across all operations
-- `instantaneous_ops_per_sec` plateaus
-- CPU usage > 80%
+- Throughput plateaus
+- CPU usage > 80%, dominated by `pebble.compactor` goroutines
 
 **Solutions:**
 
 - Vertical scale: increase vCPUs
+- Increase `numShards` (up to 4 on a 12-core box) to parallelize compaction
 - Optimize claim-time repair: reduce `requeueInspectLimit`
-- Reduce connection pool size to limit concurrent operations
-- Consider read replicas for stats queries (future enhancement)
 
 #### 2. Memory exhaustion
 
 **Symptoms:**
 
-- `used_memory` approaching `maxmemory`
-- Eviction warnings in KVRocks logs
-- Slow queries due to disk I/O
+- Go RSS approaching pod limit
+- OOMKill events
+- Slow queries due to disk I/O on Pebble cache misses
 
 **Solutions:**
 
@@ -993,19 +905,18 @@ codeQ exposes Prometheus metrics at `GET /metrics` (see `docs/10-operations.md`)
 - Validate webhook endpoint health and latency
 - Use webhook failure DLQ (not implemented; requires custom solution)
 
-#### 5. Network latency
+#### 5. Network latency (cluster mode)
 
 **Symptoms:**
 
 - High p99 latency even under low load
-- Timeouts between API servers and KVRocks
+- Timeouts between codeq peers on ID-routed RPCs
 
 **Solutions:**
 
-- Deploy KVRocks in the same region/AZ as API servers
-- Use dedicated network for backend traffic
+- Deploy cluster peers in the same region/AZ
+- Use dedicated network for inter-node gRPC traffic
 - Monitor network interface saturation
-- Compress large payloads (not supported; requires custom encoding)
 
 ### Debugging slow operations
 
@@ -1016,25 +927,19 @@ logLevel: debug
 logFormat: json
 ```
 
-**Identify slow commands in KVRocks:**
+**Identify slow operations:**
+
+Query the codeq `/metrics` endpoint for per-operation latency histograms:
 
 ```bash
-redis-cli --latency -h <kvrocks-host> -p 6666
-redis-cli --latency-history -h <kvrocks-host> -p 6666
+histogram_quantile(0.99, sum by (le, op) (rate(codeq_operation_latency_seconds_bucket[5m])))
 ```
 
 **Trace request flow:**
 
 - Use correlation IDs in request headers
 - Log task ID, worker ID, and command type
-- Correlate API logs with KVRocks command logs
-
-**Profile KVRocks:**
-
-```bash
-redis-cli -h <kvrocks-host> -p 6666 --stat
-# Shows real-time stats on keys, memory, and commands
-```
+- Correlate API logs with Pebble batch commit logs
 
 **Profile Go service:**
 
@@ -1074,26 +979,26 @@ go tool pprof http://localhost:6060/debug/pprof/heap
 
 **Resource requirements:**
 
-- KVRocks: 4-8 vCPUs, 16 GB RAM (from benchmarks, 50 tasks/sec is well within capacity)
+- codeq node: 4-8 vCPUs, 16 GB RAM (from benchmarks, 50 tasks/sec is well within capacity)
 - API servers: 3-5 replicas (from benchmarks, 50 tasks/sec = low load)
 - Workers: 6,000 / (tasks per worker) = worker fleet size
 
 **Growth planning:**
 
-- 2x load: increase KVRocks to 8 vCPUs, scale API to 5-10 replicas
+- 2x load: bump codeq node to 8 vCPUs, scale API to 5-10 replicas
 - 5x load: consider sharding or multi-region deployment
-- 10x load: implement sharding, use dedicated KVRocks cluster
+- 10x load: implement sharding or move to cluster mode
 
 **Monitoring thresholds:**
 
 | Metric | Warning | Critical |
 |--------|---------|----------|
-| KVRocks CPU | 70% | 85% |
-| KVRocks Memory | 75% | 90% |
-| API p99 Latency | 150ms | 500ms |
-| Pending Queue Depth | 10,000 | 50,000 |
-| In-progress Queue Depth | 1,000 | 5,000 |
-| DLQ Depth | 100 | 1,000 |
+| codeq node CPU | 70% | 85% |
+| codeq node memory | 75% | 90% |
+| API p99 latency | 150ms | 500ms |
+| Pending queue depth | 10,000 | 50,000 |
+| In-progress queue depth | 1,000 | 5,000 |
+| DLQ depth | 100 | 1,000 |
 
 **Action items:**
 
@@ -1113,8 +1018,13 @@ config:
   backoffPolicy: fixed
   backoffBaseSeconds: 2
   subscriptionMinIntervalSeconds: 1
+  persistence:
+    driver: pebble
+    pebble:
+      numShards: 4
+      fsyncOnCommit: false
 
-kvrocks:
+codeq:
   resources:
     requests:
       cpu: 4000m
@@ -1135,6 +1045,10 @@ config:
   backoffPolicy: exp_full_jitter
   backoffBaseSeconds: 10
   backoffMaxSeconds: 900
+  persistence:
+    driver: pebble
+    pebble:
+      numShards: 4
 
 autoscaling:
   enabled: true
@@ -1142,7 +1056,7 @@ autoscaling:
   maxReplicas: 20
   targetCPUUtilizationPercentage: 70
 
-kvrocks:
+codeq:
   resources:
     requests:
       cpu: 8000m
@@ -1154,18 +1068,24 @@ kvrocks:
 
 ### Multi-region setup
 
-For global distribution:
+For global distribution, run an independent codeq node per region with its own Pebble data directory:
 
 ```yaml
 # Region A
 config:
-  redisAddr: kvrocks-us-east:6666
   env: prod-us-east
+  persistence:
+    driver: pebble
+    pebble:
+      dataDir: /var/lib/codeq/us-east
 
 # Region B
 config:
-  redisAddr: kvrocks-eu-west:6666
   env: prod-eu-west
+  persistence:
+    driver: pebble
+    pebble:
+      dataDir: /var/lib/codeq/eu-west
 
 # Use DNS or service mesh routing to direct clients to nearest region
 ```
@@ -1562,13 +1482,7 @@ cd loadtest
 k6 run -u 100 -d 60s k6/sustained-throughput.js
 ```
 
-2. **Monitor Redis pipeline batching**:
-```bash
-redis-cli CLIENT LIST | grep -E "cmd=" | wc -l
-# Fewer active commands = more effective batching
-```
-
-3. **Benchmark individual operations**:
+2. **Benchmark individual operations**:
 ```bash
 go test -bench=AdminQueues -benchmem -benchtime=10s ./internal/repository
 ```
@@ -1587,13 +1501,13 @@ go test -bench=AdminQueues -benchmem -benchtime=10s ./internal/repository
 
 If pipelining is not working as expected, check:
 
-1. **Redis pool exhaustion**: If all connections are busy, pipeline efficiency decreases
+1. **Redis pool exhaustion** (legacy Redis backend only): If all connections are busy, pipeline efficiency decreases
    - Monitor: `go-redis` connection pool stats (if exposed)
    - Solution: Increase `poolSize` in config
 
-2. **High Redis latency**: If base RTT is high, batching gains are less dramatic
-   - Check: `redis-cli --latency-history` on production Redis
-   - Optimize: Move Redis closer (same datacenter) or increase Redis memory
+2. **High backend latency**: If base RTT is high, batching gains are less dramatic
+   - Pebble: check disk I/O saturation via `iostat`
+   - Legacy Redis backend: move Redis closer (same datacenter) or increase Redis memory
 
 3. **Small pipelines**: If pipelines have < 5 commands, overhead may exceed benefits
    - This is OK for infrequent operations
@@ -1707,13 +1621,13 @@ The `/metrics` endpoint is unauthenticated and performs Redis queries on each sc
 **Cost analysis:**
 ````
 Single scrape overhead:
-- Redis commands: ~25 LLEN + ZCARD operations
-- Latency: 1-10ms (depends on KVRocks load and network)
-- CPU: Negligible (all work done in Redis)
+- Backend operations: ~25 queue-depth lookups
+- Latency: 1-10ms (depends on backend load — Pebble disk I/O or Redis network)
+- CPU: Negligible
 
 Per-replica load (15s scrape interval):
-- 4 scrapes/minute × 25 commands = 100 Redis ops/minute per replica
-- With 10 API replicas: 1000 Redis ops/minute = ~17 ops/sec
+- 4 scrapes/minute × 25 operations = 100 backend ops/minute per replica
+- With 10 API replicas: 1000 backend ops/minute = ~17 ops/sec
 ````
 
 **Scaling considerations:**
@@ -1726,9 +1640,9 @@ Per-replica load (15s scrape interval):
    - Always use `max by (command, queue)` in dashboards
    - Example: `max by (command, queue) (codeq_queue_depth)`
 
-3. **Scrape timeout failures**: If Redis is slow, scrapes may timeout
+3. **Scrape timeout failures**: If the backend is slow, scrapes may timeout
    - Monitor Prometheus scrape success rate: `up{job="codeq"}`
-   - Increase KVRocks resources if scrapes fail frequently
+   - Increase codeq node resources if scrapes fail frequently
    - Consider increasing scrape interval from 15s to 30s or 60s
 
 ### Reducing Metrics Overhead
@@ -1798,7 +1712,7 @@ High-cardinality labels can degrade Prometheus performance.
 ## Further Reading
 
 - Configuration reference: `docs/14-configuration.md`
-- KVRocks storage layout: `docs/07-storage-kvrocks.md`
+- Pebble storage layout: `docs/07b-storage-pebble.md`
 - Architecture overview: `docs/03-architecture.md`
 - Queueing model: `docs/05-queueing-model.md`
 - Webhooks: `docs/12-webhooks.md`
@@ -1812,13 +1726,13 @@ High-cardinality labels can degrade Prometheus performance.
 
 ### Overview
 
-The Bloom filter optimization eliminates unnecessary Redis GET operations during idempotency checks, reducing latency and load on KVRocks for workloads with high idempotency key uniqueness.
+The Bloom filter optimization eliminates unnecessary backend GET operations during idempotency checks, reducing latency and load on the persistence layer for workloads with high idempotency key uniqueness.
 
 **When it matters:**
 - High-volume enqueue operations (>1000 tasks/sec)
 - Predominantly unique idempotency keys (>95% new keys)
 - Latency-sensitive producer applications
-- KVRocks read throughput approaching limits
+- Backend read throughput approaching limits
 
 **When it doesn't matter:**
 - Low-volume workloads (<100 tasks/sec)
@@ -1907,7 +1821,7 @@ memory: ~3.6 MB
 **Expected improvements:**
 
 - **Latency reduction**: 0.5-2ms per enqueue (one fewer Redis round-trip)
-- **KVRocks load reduction**: Up to 50% fewer GET operations for unique keys
+- **Backend load reduction**: Up to 50% fewer GET operations for unique keys
 - **Throughput increase**: 10-30% higher enqueue rate capacity
 
 ### Trade-offs
@@ -2309,7 +2223,7 @@ curl -X POST http://localhost:8080/v1/batch-submit-result \
 
 **Expected results:**
 - Before: 2000-2500 ms
-- After: 300-500 ms (depending on network latency and KVRocks I/O)
+- After: 300-500 ms (depending on network latency and backend I/O)
 - **Real-world improvement**: ~70-80% latency reduction
 
 ### Trade-offs & Considerations
@@ -2506,7 +2420,7 @@ pipe.Exec(ctx)
 
 ### Defense in Depth: Error Differentiation in requeueExpired
 
-Even with atomic finalization, weak isolation in some Redis variants (e.g., KVRocks 2.7) can asymmetrically observe the MULTI/EXEC boundary. Add defensive error handling:
+Even with atomic finalization, weak isolation in some Redis variants (observed historically on the now-removed Redis-protocol backend) can asymmetrically observe the MULTI/EXEC boundary. Add defensive error handling:
 
 ````go
 // Before: Any Nack error falls back to resurrection
@@ -2543,7 +2457,7 @@ if err != nil {
 
 ### Known Residual Race
 
-A smaller residual race remains under extreme concurrency (likely KVRocks 2.7 MULTI/EXEC not blocking concurrent readers). Cleanly eliminating it would require a Lua script that atomically touches `inprog`, `lease`, and task hash in one server-side operation. This is filed as a follow-up.
+A smaller residual race was observed historically under extreme concurrency on the now-removed Redis-protocol backend (MULTI/EXEC not blocking concurrent readers). The Pebble backend does not exhibit this race because all task-state mutations land in a single Pebble batch. The Lua-script follow-up no longer applies.
 
 ### Implementation Details
 
@@ -2562,7 +2476,7 @@ The scheduler's `CreateTask` method historically paid a second RTT just to decid
 2. SchedulerService.CreateTask(...) → if queue was empty, call GetPendingLength()  ❌ Extra RTT
 ````
 
-This redundant probe added ~100-300µs latency per create operation on real Redis/KVRocks.
+This redundant probe added ~100-300µs latency per create operation on the legacy Redis-protocol backend.
 
 ### The Solution: Capture LPush Return Value
 
@@ -2601,7 +2515,7 @@ if ready {
 | Allocations | 320 allocs/op | 108 allocs/op | **-66%** |
 | Projected throughput (prefill) | ~2.1k creates/s | ~4k creates/s | **90% improvement** |
 
-Real Redis/KVRocks: ~100-300µs per RTT, so the prefill scenario improves from ~2.1k to ~4k creates/s due to eliminated RTT overhead.
+Legacy Redis backend: ~100-300µs per RTT, so the prefill scenario improves from ~2.1k to ~4k creates/s due to eliminated RTT overhead. Pebble keeps both calls in-process; the win comes from one fewer keyspace scan.
 
 ### Implementation Details
 
@@ -2611,7 +2525,7 @@ Real Redis/KVRocks: ~100-300µs per RTT, so the prefill scenario improves from ~
 
 ## Summary
 
-Performance tuning requires balancing throughput, latency, and resource costs. Start with recommended defaults, monitor key metrics, and adjust based on observed bottlenecks. Scale API servers horizontally and KVRocks vertically. Use decision trees to select appropriate lease durations, backoff policies, and webhook configurations. For extreme scale, plan for sharding or multi-region deployments.
+Performance tuning requires balancing throughput, latency, and resource costs. Start with recommended defaults, monitor key metrics, and adjust based on observed bottlenecks. Scale codeq nodes vertically first (up to `numShards: 4` on a 12-core box), then horizontally via cluster mode or independent nodes per tenant. Use decision trees to select appropriate lease durations, backoff policies, and webhook configurations.
 
 ## See also
 

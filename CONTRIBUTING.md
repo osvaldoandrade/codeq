@@ -36,7 +36,6 @@ We are committed to providing a welcoming and inclusive environment. Please be r
 ### Prerequisites
 
 - **Go**: Version specified in `go.mod` (check with `go version`)
-- **KVRocks**: For local testing (optional, can use Redis-compatible store)
 - **Git**: For version control
 
 ### Install Dependencies
@@ -173,7 +172,7 @@ Integration tests are in `pkg/app/integration_test.go`:
 go test ./pkg/app/... -v
 ````
 
-**Note**: Integration tests may require additional setup (KVRocks instance).
+**Note**: integration tests open a Pebble store under `t.TempDir()`; no external process is required.
 
 ### Manual Testing
 

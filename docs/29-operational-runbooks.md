@@ -64,7 +64,7 @@ sum by (command) (rate(codeq_task_created_total[5m]))
    exceeds the creation rate.
 
 **Escalation:** If the backlog does not decrease after adding workers,
-investigate KVRocks performance ([§1.4](#14-lease-expiration-spike-response))
+investigate Pebble I/O performance ([§1.4](#14-lease-expiration-spike-response))
 and worker processing times.
 
 ---
@@ -193,7 +193,7 @@ sum by (command) (rate(codeq_task_claimed_total[5m])) == 0
    configuration (see [Operations § Rate Limiting](10-operations.md#rate-limiting)).
 
 **Escalation:** If workers are running, connected, polling the correct
-command, and not rate-limited, investigate KVRocks connectivity and
+command, and not rate-limited, investigate Pebble store health and
 performance.
 
 ---
@@ -341,64 +341,14 @@ other instances until the issue is resolved.
 
 ---
 
-### 2.2 KVRocks / Redis Maintenance Window
+### 2.2 Pebble Maintenance Window
 
-**When to use:** Performing KVRocks upgrades, configuration changes, or
-host maintenance.
-
-**Prerequisites:**
-- Maintenance window scheduled and communicated
-- If using replication, a replica is available for failover
-
-**Procedure:**
-
-1. **Announce** the maintenance window to stakeholders.
-
-2. **Check** current KVRocks status:
-
-   ```bash
-   redis-cli -h <kvrocks-host> -p 6379 INFO server
-   redis-cli -h <kvrocks-host> -p 6379 INFO memory
-   redis-cli -h <kvrocks-host> -p 6379 INFO clients
-   ```
-
-3. **Pause** task creation if possible (reduce load during maintenance):
-
-   ```bash
-   # Optional: temporarily block producers via rate limiting
-   # Set producer requestsPerMinute to a very low value
-   ```
-
-4. **Perform** the maintenance (upgrade, config change, etc.):
-
-   ```bash
-   # Example: KVRocks restart
-   systemctl stop kvrocks
-   # Perform maintenance (upgrade binary, edit config, etc.)
-   systemctl start kvrocks
-   ```
-
-5. **Verify** KVRocks is accepting connections:
-
-   ```bash
-   redis-cli -h <kvrocks-host> -p 6379 ping
-   # Expected: PONG
-   ```
-
-6. **Verify** codeQ API can connect:
-
-   ```bash
-   curl -sf http://<api-host>:8080/healthz | jq .
-   ```
-
-7. **Resume** normal operations and confirm metrics are flowing:
-
-   ```promql
-   up{job="codeq"}
-   ```
-
-**Rollback:** If KVRocks fails to start after the change, restore the
-previous binary or configuration from backup and restart.
+For Pebble-store maintenance (binary upgrade, durability flag change,
+compaction tuning, data-directory move), follow [§6 Pebble Single-Node
+Runbook](#6-pebble-single-node-runbook). The procedures there cover
+controlled restart, backup, and recovery — Pebble runs in-process, so
+"maintenance" is always coupled to a codeq restart, with no separate
+daemon to bounce.
 
 ---
 
@@ -515,7 +465,9 @@ systemctl restart codeq-api
 concurrent requests.
 
 **Prerequisites:**
-- Stateless API instances (all state is in KVRocks)
+- Note: codeq nodes are stateful — each owns its local Pebble store. Use
+  cluster mode ([§8](#8-cluster-multi-node-runbook)) to add nodes to the
+  consistent-hash ring; the wire protocol routes requests by task ID.
 - Load balancer in front of API instances
 
 **Adding an instance:**
@@ -643,64 +595,25 @@ sum by (command) (rate(codeq_task_processing_latency_seconds_count{status="COMPL
 
 ---
 
-### 3.3 KVRocks Scaling and Replication
+### 3.3 Scaling the Persistence Layer
 
-**When to use:** KVRocks is under memory or CPU pressure, or you need
-high availability.
+codeq does not scale by adding replicas to a shared store — Pebble is
+in-process and exclusively locked to one codeq node. Two scaling
+paths exist:
 
-**Diagnosis:**
+- **Vertical / intra-process**: increase `persistenceConfig.numShards`
+  (Phase 8) to parallelise the commit pipeline and compaction across N
+  Pebble instances under one codeq process. Sweet spot on a 12-core
+  box is 4 shards (`83,420 tasks/s`, `internal/bench/profile_full_cycle_test.go::TestProfile_FullCycle`).
+  Detailed procedure in [§7 Phase 8 Intra-Process Sharding Runbook](#7-phase-8-intra-process-sharding-runbook).
 
-```bash
-# Check memory usage
-redis-cli -h <kvrocks-host> -p 6379 INFO memory
+- **Horizontal / cluster**: enable `cluster.enabled=true` to run N codeq
+  nodes each with its own Pebble store, joined by a consistent-hash
+  ring. Detailed procedure in [§8 Cluster Runbook](#8-cluster-multi-node-runbook).
 
-# Check connected clients
-redis-cli -h <kvrocks-host> -p 6379 INFO clients
-
-# Check command latency
-redis-cli -h <kvrocks-host> -p 6379 INFO stats
-```
-
-**Setting up replication:**
-
-1. **Deploy** a new KVRocks instance as a replica:
-
-   ```bash
-   # On the replica host, start KVRocks with replication config
-   # In kvrocks.conf:
-   # slaveof <primary-host> 6379
-   systemctl start kvrocks
-   ```
-
-2. **Verify** replication is established:
-
-   ```bash
-   redis-cli -h <replica-host> -p 6379 INFO replication
-   # Expect: role:slave, master_link_status:up
-   ```
-
-3. **Configure** read replicas in the load balancer if supported by your
-   deployment.
-
-**Vertical scaling:**
-
-1. **Schedule** a maintenance window (see [§2.2](#22-kvrocks--redis-maintenance-window)).
-
-2. **Stop** KVRocks:
-
-   ```bash
-   systemctl stop kvrocks
-   ```
-
-3. **Update** resource limits (memory, CPU) in the host or container
-   configuration.
-
-4. **Start** KVRocks and verify:
-
-   ```bash
-   systemctl start kvrocks
-   redis-cli -h <kvrocks-host> -p 6379 ping
-   ```
+Cluster mode and `numShards > 1` are mutually exclusive in the current
+release; the startup path rejects the combination. Pick the one that
+matches your bottleneck.
 
 ---
 
@@ -746,7 +659,7 @@ Import the example dashboard from `docs/grafana/codeq-dashboard.json`.
 | Queue depth | Sustained growth indicates workers cannot keep up |
 | Task throughput | Creation rate should roughly match claim + completion rates |
 | DLQ depth | Any growth requires investigation |
-| Processing latency (p95) | Spikes may indicate KVRocks slowness or worker issues |
+| Processing latency (p95) | Spikes may indicate Pebble I/O slowness or worker issues |
 | Webhook delivery success rate | Below 100% means subscribers are failing |
 | Rate limit hits | Sustained hits may need config adjustment |
 
@@ -888,95 +801,32 @@ storage.
 4. **Verify** storage was reclaimed:
 
    ```bash
-   redis-cli -h <kvrocks-host> -p 6379 INFO memory
+   # Pebble exposes per-shard stats via /debug/pebble (if enabled) and
+   # via du(1) on persistenceConfig.path
+   du -sh /var/lib/codeq/pebble/shard*
    ```
 
 ---
 
 ### 5.3 Backup and Restore
 
-**When to use:** Before major maintenance or for disaster recovery
-preparation.
+For the Pebble persistence path, backup is handled in [§6.1 Backup and
+Restore (Pebble)](#61-backup-and-restore-pebble) — it covers online
+checkpointing via `pebble.Checkpoint`, atomic directory snapshots, and
+N-shard backup ordering. The procedure here would just duplicate that
+content.
 
-**Backup procedure:**
-
-1. **Create** a KVRocks snapshot:
-
-   ```bash
-   redis-cli -h <kvrocks-host> -p 6379 BGSAVE
-   ```
-
-2. **Wait** for the snapshot to complete:
-
-   ```bash
-   redis-cli -h <kvrocks-host> -p 6379 LASTSAVE
-   # Repeat until timestamp updates
-   ```
-
-3. **Copy** the snapshot to backup storage:
-
-   ```bash
-   # KVRocks data directory (check kvrocks.conf for exact path)
-   cp -r /var/lib/kvrocks/data /backup/kvrocks-$(date +%Y%m%d%H%M%S)/
-   ```
-
-4. **Backup** the codeQ configuration:
-
-   ```bash
-   cp /etc/codeq/config.yml /backup/config-$(date +%Y%m%d%H%M%S).yml
-   ```
-
-**Restore procedure:**
-
-1. **Stop** codeQ API instances:
-
-   ```bash
-   systemctl stop codeq-api
-   ```
-
-2. **Stop** KVRocks:
-
-   ```bash
-   systemctl stop kvrocks
-   ```
-
-3. **Restore** data from backup:
-
-   ```bash
-   cp -r /backup/kvrocks-<timestamp>/data /var/lib/kvrocks/data
-   ```
-
-4. **Start** KVRocks and verify:
-
-   ```bash
-   systemctl start kvrocks
-   redis-cli -h <kvrocks-host> -p 6379 ping
-   ```
-
-5. **Restore** codeQ configuration if needed:
-
-   ```bash
-   cp /backup/config-<timestamp>.yml /etc/codeq/config.yml
-   ```
-
-6. **Start** codeQ API instances:
-
-   ```bash
-   systemctl start codeq-api
-   ```
-
-7. **Verify** system health:
-
-   ```bash
-   curl -sf http://<api-host>:8080/healthz | jq .
-   ```
+For multi-node cluster deployments, see [§8 Cluster Runbook](#8-cluster-multi-node-runbook)
+for per-node backup considerations: each node owns its own slice of the
+hash ring, so a full backup is the union of per-node snapshots taken at
+roughly the same wall clock.
 
 ---
 
 ### 5.4 Data Migration Between Environments
 
 **When to use:** Migrating task data from one environment to another
-(e.g., staging to production, or between KVRocks instances).
+(e.g., staging to production, or between Pebble stores).
 
 **Procedure:**
 
@@ -1013,19 +863,20 @@ preparation.
    curl -s http://<target-host>:8080/metrics | grep codeq_queue_depth
    ```
 
-**Note:** For large-scale data migration, consider using KVRocks
-replication instead of the API-based approach above. See
-[§3.3 KVRocks Scaling](#33-kvrocks-scaling-and-replication) for
-replication setup.
+**Note:** Bulk data movement bypassing the API isn't supported on the
+Pebble path — there's no replication primitive on the LSM. For
+production-scale migration, take a Pebble checkpoint of the source
+node (see [§6.1](#61-backup-and-restore-pebble)) and start the target
+node from that directory.
 
 ---
 
 ## 6. Pebble Single-Node Runbook
 
-Sections 1-5 target the legacy KVRocks/Redis backend. From v0.4 the
-default `persistenceProvider` is `pebble` — an embedded LSM that runs
-in-process under `persistenceConfig.path`. Operationally Pebble is
-closer to SQLite or RocksDB than to Redis: no daemon, no network port,
+`persistenceProvider: pebble` is the only supported production backend.
+Pebble is an embedded LSM that runs in-process under
+`persistenceConfig.path` — operationally closer to SQLite or RocksDB
+than to a database daemon: no separate process, no network port,
 exclusive directory lock. See
 [Storage layout (Pebble)](./07b-storage-pebble.md) for the key schema
 and [Configuration](./14-configuration.md) for tunables. The runbooks

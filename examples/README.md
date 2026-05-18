@@ -150,8 +150,7 @@ docker compose \
 ````
 
 This starts:
-- CodeQ server on `http://localhost:8080`
-- KVRocks (Redis) on `localhost:6666`
+- codeq server on `http://localhost:8080` with an embedded Pebble store
 
 ### 2. Configure Authentication
 

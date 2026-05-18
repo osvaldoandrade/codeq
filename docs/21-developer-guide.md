@@ -23,8 +23,7 @@ docker compose \
 ````
 
 The development environment includes:
-- **KVRocks** on port 6666
-- **codeQ API** on port 8080 (with hot reload via Air)
+- **codeq API** on port 8080 (with hot reload via Air) backed by an embedded Pebble store under `./data/pebble`
 - **Automatic recompilation** when you edit Go files in `internal/`, `pkg/`, or `cmd/`
 
 **Making changes:**
@@ -175,7 +174,7 @@ type schedulerService struct {
 
 #### Repositories (`internal/repository/`)
 
-Repositories handle data persistence using KVRocks (Redis protocol).
+Repositories handle data persistence. The shipped implementation in `internal/repository/pebble/` talks to an embedded Pebble store; the older `internal/repository/` Redis-protocol path remains compiled-in but is unsupported.
 
 **Key repositories:**
 
@@ -277,8 +276,7 @@ func WorkerAuthMiddleware(jwksURL, issuer string) func(http.Handler) http.Handle
 
 Providers are adapters for external systems and dependencies.
 
-- `redis_provider.go`: Redis/KVRocks connection management
-- `uploader.go`: File storage abstraction (for large payloads)
+- `uploader.go`: file storage abstraction (for large payloads)
 
 #### Backoff (`internal/backoff/`)
 
@@ -319,27 +317,27 @@ func main() {
 ### Task Lifecycle
 
 ````
-1. Producer creates task → Store in KVRocks with PENDING status (`codeq:tasks`)
-2. Enqueue task ID into a per-command priority pending list (`codeq:q:<command>:pending:<priority>`)
-3. Worker claims task → Atomic move from pending list to in-progress set (Lua `RPOP` + `SADD`)
-4. Set lease key with TTL (`codeq:lease:<id>` via `SETEX`)
-5. Worker completes task → Store result, clear lease, remove from in-progress (`SREM`)
-6. Optional: Trigger result callback webhook
+1. Producer creates task → write task body + pending entry to Pebble in one atomic batch
+2. Worker claims task → atomic batch: delete pending key, set inprog key, update task body, set TTL index, insert into in-memory lease table
+3. Worker completes task → atomic batch: save result, update task status, clear inprog key, drop in-memory lease entry
+4. Optional: trigger result callback webhook
 ````
 
-### Queue Structure (KVRocks)
+### Keyspace (Pebble)
 
-**Task storage:**
-- `codeq:tasks` (hash): field = task ID, value = task JSON.
-- `codeq:results` (hash): field = task ID, value = result JSON.
-- `codeq:lease:<id>` (string): value = worker ID, TTL = lease duration.
-- `codeq:tasks:ttl` (ZSET): retention index (logical TTL).
+All keys live under the `codeq/` prefix. Full layout is documented in
+[07b-storage-pebble.md](07b-storage-pebble.md); the short form:
 
-**Queue structures:**
-- `codeq:q:<command>:pending:<priority>` (list)
-- `codeq:q:<command>:inprog` (set)
-- `codeq:q:<command>:delayed` (ZSET) score = `visibleAt` epoch seconds
-- `codeq:q:<command>:dlq` (set)
+- `codeq/tasks/<id>` — task body (JSON)
+- `codeq/r/<id>` — result body
+- `codeq/q/<command>/<tenantID>/pending/<priority>/<seq>/<id>` — pending entry
+- `codeq/q/<command>/<tenantID>/inprog/<id>` — in-progress marker
+- `codeq/q/<command>/<tenantID>/delayed/<score>/<id>` — delayed entry (`score` = `visibleAt` unix seconds)
+- `codeq/q/<command>/<tenantID>/dlq/<id>` — DLQ marker
+- `codeq/ttl_index/<expire>/<id>` — TTL index (reaper scan)
+
+Lease state lives in an in-memory `leaseTable` (Phase 6/M2); the
+persisted `task.LeaseUntil` field is authoritative across restarts.
 
 **Atomic claim operation:**
 
@@ -401,13 +399,7 @@ cd codeq
 go mod download
 ````
 
-3. **Start KVRocks for testing:**
-
-````bash
-docker run -d -p 6666:6666 --name kvrocks-dev apache/kvrocks:latest
-````
-
-4. **Run tests:**
+3. **Run tests:**
 
 ````bash
 # Run all tests
@@ -525,7 +517,7 @@ r.Post("/v1/codeq/your-endpoint", controllers.YourNewController(schedulerService
 
 **Integration tests:**
 - Located in `pkg/app/integration_test.go`
-- Use real KVRocks instance (test container)
+- Open a Pebble store under `t.TempDir()` — no external process needed
 - Test complete request flows
 
 **CLI tests:**
@@ -566,15 +558,20 @@ Set environment variable:
 export LOG_LEVEL=debug
 ````
 
-### Inspect KVRocks State
+### Inspect Pebble state
 
-Use Redis CLI to inspect data:
+Pebble runs in-process — there's no daemon to attach to. To inspect
+state:
+
+- `du -sh <persistenceConfig.path>` for disk usage
+- Admin endpoints: `GET /v1/codeq/admin/queues`, `GET /v1/codeq/admin/queues/:cmd/stats`
+- Prometheus: `codeq_queue_depth`, `codeq_pebble_*` metrics
+- In tests: `db.NewIter(...)` over the prefix you want; see
+  `internal/repository/pebble/keys.go` for prefix constants.
 
 ````bash
-redis-cli -h localhost -p 6666
-
-# List all keys
-KEYS codeq:*
+# All keys under codeq/ (development only — uses an admin endpoint)
+curl -s http://localhost:8080/v1/codeq/admin/queues | jq .
 
 	# Inspect queues (example: GENERATE_MASTER)
 	LLEN codeq:q:generate_master:pending:0
@@ -769,7 +766,7 @@ prometheus.MustRegister(&myCollector{db: db, desc: desc})
 
 - **[Architecture](03-architecture.md)**: High-level system design
 - **[HTTP API](04-http-api.md)**: Complete API reference
-- **[Storage Layout](07-storage-kvrocks.md)**: KVRocks data structures
+- **[Storage Layout](07b-storage-pebble.md)**: Pebble keyspace and on-disk layout
 - **[Contributing](../CONTRIBUTING.md)**: Contribution guidelines
 - **[Examples](13-examples.md)**: Usage examples
 

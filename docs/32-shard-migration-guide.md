@@ -8,17 +8,25 @@ When you reconfigure command-to-shard mappings (e.g., moving `GENERATE_MASTER` f
 
 ## Prerequisites
 
-- codeQ CLI (`codeq`) built from source or installed
-- A codeQ server configuration file (`config.yaml`) with sharding enabled and backends defined
-- Network access to both source and destination Redis/KVRocks instances
+> **Note**: the `migrate-shards` CLI documented in this section operates
+> on the legacy multi-backend `ShardSupplier` model. Pebble deployments
+> use intra-process sharding (`numShards`) or cluster mode — see the
+> Phase 8 and cluster-mode sections later in this doc. Skip ahead to
+> [Phase 8 — Intra-process Pebble shards](#phase-8--intra-process-pebble-shards)
+> unless you are running a deprecated multi-instance setup.
+
+- codeq CLI (`codeq`) built from source or installed
+- A codeq server configuration file (`config.yaml`) with the legacy
+  `ShardSupplier` configured
+- Network access to both source and destination shard endpoints
 - Low traffic on the command being migrated (recommended)
 
-## Configuration
+## Configuration (legacy multi-backend sharding)
 
-The migration tool reads the same `config.yaml` used by the codeQ server. Ensure your sharding section defines both the source and destination backends:
+The migration tool reads the same `config.yaml` used by the codeq server. Ensure your sharding section defines both the source and destination backends:
 
 ```yaml
-# config.yaml
+# config.yaml — legacy multi-backend layout, retained for compatibility
 sharding:
   enabled: true
   defaultShard: "default"
@@ -28,15 +36,11 @@ sharding:
 
   backends:
     default:
-      address: "kvrocks-primary:6379"
-      password: "${REDIS_PRIMARY_PASSWORD}"
-      db: 0
+      address: "shard-primary:6379"
       poolSize: 20
 
     compute-shard:
-      address: "kvrocks-compute:6379"
-      password: "${REDIS_COMPUTE_PASSWORD}"
-      db: 0
+      address: "shard-compute:6379"
       poolSize: 30
 ```
 
@@ -272,14 +276,14 @@ Re-run the migration. The tool processes remaining tasks on the source. Use `--v
 
 ## Phase 8 — Intra-process Pebble shards
 
-The sections above cover the KVRocks/Redis backend, where every shard is a
-separate process (and therefore a separate database) and `migrate-shards`
-moves tasks between them at the wire level. With the Pebble backend the
-picture is different: shards are independent **LSM instances inside the
-same Go process**, configured by `numShards` (default `1`). Each shard
-opens a directory under the configured Pebble `path`, e.g.
-`./codeq-pebble/shard0/`, `./codeq-pebble/shard1/`, ... and tasks are
-routed by `hash(task_id) % N` (see
+The sections above cover the legacy multi-backend `ShardSupplier`, where
+every shard is a separate process (a separate database endpoint) and
+`migrate-shards` moves tasks between them at the wire level. With the
+Pebble backend the picture is different: shards are independent **LSM
+instances inside the same Go process**, configured by `numShards`
+(default `1`). Each shard opens a directory under the configured Pebble
+`path`, e.g. `./codeq-pebble/shard0/`, `./codeq-pebble/shard1/`, ... and
+tasks are routed by `hash(task_id) % N` (see
 [`pkg/app/application_pebble.go`](../pkg/app/application_pebble.go),
 function `newPebbleApplication`, around the `openShard` closure).
 
@@ -420,10 +424,10 @@ either — same constraint as scale-up. The supported procedure:
 > counters are per-instance state. The result is corruption. Always
 > drain first.
 
-If your design needs online resharding (no drain), the Redis/KVRocks
-backend already supports it via `migrate-shards` (sections above). The
-Pebble backend trades that flexibility for ~8× the throughput of a
-single-shard Redis deployment.
+Online resharding (no drain) is not supported on Pebble in this release.
+If you can't tolerate a drain window, run a rolling migration: stand up
+a second codeq node with the new `numShards` config, point traffic at
+it via your load balancer, and drain the original.
 
 ### Mutual exclusion: cluster mode and intra-process shards
 
@@ -533,11 +537,8 @@ balancer) and letting workers finish in-flight tasks.
 
 If the removed node held undrained data, those tasks are lost — the
 ring has no concept of replication; ownership is single-master. For
-durability across node loss you need either:
-
-- Storage-level replication beneath Pebble (host snapshot, ZFS,
-  EBS-style replication), or
-- The Redis/KVRocks backend with a replicated KVRocks deployment.
+durability across node loss you need storage-level replication
+beneath Pebble (host snapshot, ZFS, EBS-style replication).
 
 ### Producer-local IDs bias new tasks to the local shard
 
@@ -576,7 +577,5 @@ every peer has the same ring config.
 - [Storage layout (Pebble)](./07b-storage-pebble.md) — per-shard
   key-space layout, commit pipeline, fsync behaviour.
 - [Persistence plugin system](./27-persistence-plugin-system.md) —
-  how `PersistenceProvider` selects Pebble vs Redis vs KVRocks.
-- [Persistence migration guide](./31-persistence-migration-guide.md) —
-  cross-backend migration (Redis → Pebble, etc.) — orthogonal to the
-  intra-backend resharding covered here.
+  how `PersistenceProvider` selects Pebble (default) vs the memory
+  provider used for tests.

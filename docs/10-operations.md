@@ -2,14 +2,12 @@
 
 ## Startup
 
-When the codeQ API starts, it performs the following initialization steps:
+When the codeq API starts, it performs the following initialization steps:
 
-1. **Connect to KVRocks/Redis:** Attempts to establish a connection to the configured KVRocks instance.
-2. **Preload Lua scripts:** Uploads all required Lua scripts (claim move, rate limiting) to the backend. This is idempotent and safe to call repeatedly. If any script fails to preload, startup fails with an error.
-3. **Initialize services:** Sets up request handlers, middleware, and background services.
+1. **Open Pebble store(s):** Acquires the exclusive directory lock on `persistenceConfig.path` (and one per shard if `numShards > 1`). Recovers in-memory lease table from `KeyInprog` scan + persisted `LeaseUntil` (`recoverLeases()` in `internal/repository/pebble/lease_table.go`).
+2. **Start per-shard reapers:** One reaper goroutine per shard sweeps expired leases (2s default) and TTL-aged tasks (30s default).
+3. **Initialize services:** Sets up request handlers, middleware, and background services. If cluster mode is enabled, dials peer nodes and starts bloom gossip.
 4. **Health check:** Once initialized, `/healthz` returns `{"status":"ok"}`.
-
-**Why preload scripts?** codeQ uses Lua scripts for atomic operations in hot paths (task claiming, rate limiting). For kvrocks compatibility, scripts are preloaded at startup rather than relied upon via EVALSHA alone. codeQ includes a fallback mechanism: if a script is not found (NOSCRIPT error), it falls back to EVAL (full script load) before retrying the operation. This ensures correctness even if scripts are evicted from memory.
 
 ## Health
 
@@ -21,7 +19,7 @@ When the codeQ API starts, it performs the following initialization steps:
 
 Notes:
 
-- Queue/subscription gauges are collected from Redis during scrape. If you run multiple API replicas, use `max by (...)` in PromQL to avoid double-counting global values.
+- Queue/subscription gauges are collected from the local Pebble store during scrape. In cluster mode, each node reports its own shard of the ring; use `sum by (...)` in PromQL to aggregate cross-node, or `max by (...)` for replica deployments of a single ring.
 - `/metrics` is unauthenticated by default. Restrict access with ingress auth or network policy.
 
 ### Metric reference
@@ -212,4 +210,16 @@ See [Configuration](14-configuration.md) for complete rate limiting configuratio
 
 ## Scaling
 
-Scale horizontally. Use stateless API instances. KVRocks is the stateful component and must be scaled according to queue throughput.
+codeq nodes are stateful — each owns its own Pebble store under
+`persistenceConfig.path`. Two scaling paths:
+
+- **Vertical / intra-process** (Phase 8): increase `numShards` to
+  parallelise the commit pipeline across N independent Pebble stores in
+  one process. Sweet spot 4 shards on 12 cores. See
+  [08b-pebble-sharding-internals.md](08b-pebble-sharding-internals.md).
+- **Horizontal / cluster**: enable `cluster.enabled=true` and add nodes
+  to the consistent-hash ring. See
+  [05-cluster-architecture.md](05-cluster-architecture.md).
+
+Cluster mode and `numShards > 1` are mutually exclusive in the current
+release.

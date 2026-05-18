@@ -33,13 +33,13 @@ This example demonstrates:
 └──────────────────┼──────────────────────────────┘
                    │ HTTP
           ┌────────▼────────┐
-          │  CodeQ Server   │
+          │  codeq Server   │
           │   (port 8080)   │
           └────────┬────────┘
                    │
           ┌────────▼────────┐
-          │    KVRocks      │
-          │   (Redis API)   │
+          │     Pebble      │
+          │   (embedded)    │
           └─────────────────┘
 ````
 

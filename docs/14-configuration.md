@@ -19,44 +19,25 @@ Docker Compose and Helm examples live under `deploy/docker-compose` and
   - Environment variable: `LOG_FORMAT`
   - Use `text` for local development, `json` for production structured logging
 
-## Persistence Plugin
+## Persistence
 
-codeQ uses a pluggable persistence architecture allowing different storage backends. See `docs/27-persistence-plugin-system.md` for detailed information.
+codeq runs on an embedded Pebble store. The pluggable persistence
+interface still lives in `pkg/persistence/` so future backends can be
+added, but Pebble is the only supported and benchmarked path. See
+`docs/27-persistence-plugin-system.md` for the interface contract and
+`docs/07b-storage-pebble.md` for the Pebble keyspace layout.
 
-- `persistenceProvider` (string): Storage backend type, one of: `redis`, `pebble`, `memory`
+- `persistenceProvider` (string): Storage backend, default `pebble`
   - Environment variable: `PERSISTENCE_PROVIDER`
-  - Default: `redis` (for backward compatibility)
-  - `redis`: Production-ready persistence using Redis or KVRocks (distributed, HA-capable, cluster-capable)
-  - `pebble`: Embedded key-value store with intra-process sharding (CockroachDB LSM engine, single-node, high throughput, no external dependencies)
-  - `memory`: In-memory storage for testing only (data lost on restart)
-- `persistenceConfig` (JSON object): Provider-specific configuration
+  - `pebble`: embedded CockroachDB LSM, intra-process sharding, no
+    external dependencies. **Use this.**
+  - `memory`: in-memory only, data lost on restart. **Testing only.**
+- `persistenceConfig` (JSON object): provider-specific configuration
   - Environment variable: `PERSISTENCE_CONFIG` (JSON string)
-  - Format varies by provider:
-    - **Redis**: `{"addr":"localhost:6379","password":""}`
-    - **Pebble**: `{"path":"./codeq-pebble","fsyncOnCommit":false,"numShards":4}`
-    - **Memory**: `{}`
+  - Pebble: `{"path":"./codeq-pebble","fsyncOnCommit":false,"numShards":4}`
+  - Memory: `{}`
 
-### Backward Compatibility
-
-If `persistenceProvider` is not configured, codeQ automatically defaults to Redis using legacy settings:
-
-- `redisAddr` (string): KVRocks/Redis address, default `localhost:6379`
-  - Environment variable: `REDIS_ADDR`
-  - **Deprecated:** Use `persistenceProvider: redis` with `persistenceConfig` instead
-- `redisPassword` (string, optional): KVRocks/Redis password
-  - Environment variable: `REDIS_PASSWORD` or `KVROCKS_PASSWORD`
-  - **Deprecated:** Use `persistenceProvider: redis` with `persistenceConfig` instead
-
-### Example: Redis Plugin (Default)
-
-````yaml
-persistenceProvider: redis
-persistenceConfig:
-  addr: localhost:6379
-  password: ""  # optional
-````
-
-### Example: Pebble Plugin (Embedded, Single-Node)
+### Example: Pebble (default, embedded, single-node)
 
 **Development (fast, non-durable):**
 
@@ -113,7 +94,7 @@ persistenceConfig:
 
 See `docs/30-performance-baselines.md` (section "Phase 8: Pebble Intra-Process Sharding") for detailed performance characteristics and benchmarks. See `docs/07b-storage-pebble.md` for storage layout and additional details.
 
-### Example: Memory Plugin (Testing)
+### Example: Memory (testing only)
 
 ````yaml
 persistenceProvider: memory
@@ -258,7 +239,10 @@ The following fields are deprecated in favor of the new plugin-based authenticat
 
 ## Rate limiting
 
-Rate limiting is optional and disabled by default. When enabled, CodeQ uses a Redis-backed token bucket algorithm to enforce per-token rate limits.
+Rate limiting is optional and disabled by default. The token-bucket
+implementation is currently Redis-backed, so in a pure-Pebble
+deployment the limiter resolves to a no-op (every request is allowed).
+Wiring a Pebble-native limiter is a tracked follow-up.
 
 Rate limit configuration is per scope (producer, worker, webhook, admin). Each scope has two parameters:
 
@@ -291,7 +275,7 @@ rateLimit:
 
 - **Token bucket algorithm**: Tokens refill at `requestsPerMinute / 60` per second, up to `burstSize` capacity
 - **Per-bearer-token**: Rate limits are scoped per individual bearer token (SHA256-hashed for privacy)
-- **Fail-open**: If Redis is unreachable, rate limiting is bypassed to prevent outages
+- **Fail-open**: If the limiter backend is unreachable, rate limiting is bypassed to prevent outages
 - **429 responses**: When rate limit is exceeded, API returns `429 Too Many Requests` with `Retry-After` header (in seconds)
 - **TTL management**: Token bucket state expires automatically after ~2 refill cycles to bound memory usage
 

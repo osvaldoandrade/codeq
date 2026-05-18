@@ -200,29 +200,26 @@ output, allocator stats, and the per-release history.
 | Single-node full-cycle throughput | **83k tasks/s** | ~10k | ~5k | n/a (no task semantics) |
 | Language | Go server, multi-language SDKs | Go | Node | Polyglot |
 | Multi-tenant native | **Yes** | DIY | DIY | DIY |
-| HA model | Cluster or Redis (opt-in) | Redis | Redis | Replicated log |
+| HA model | Cluster (consistent-hash ring, opt-in) | Redis | Redis | Replicated log |
 
 Full table with Sidekiq, Celery, and Temporal lives in
 [_STYLE.md § Comparativos](./_STYLE.md#comparativos-use-verbatim-or-as-a-base).
 
 ## What changed (Phases 1-8 summary)
 
-codeq has been through a sequence of refactors that shifted its
-positioning from "Redis-backed queue" to "embedded high-performance
-queue". The short version:
+codeq is built around an embedded Pebble store. The performance
+evolution that got it to its current numbers:
 
 | Phase | Theme | Effect |
 |---|---|---|
-| 0 | kvrocks-primary | First version: KVRocks (Redis protocol) as the only backend. ~1.5-2k tasks/s. |
-| 1 | Pebble embedded backend | Pebble added as a pluggable persistence provider. Single-binary deployment becomes possible. Single-shard throughput ~42k tasks/s. |
+| 1 | Pebble embedded backend | Single-binary deployment with an LSM-backed store. Single-shard throughput ~42k tasks/s. |
 | 1.1 | Pebble fast-paths + group-commit coalescer | `MoveDueDelayed` fast-path; concurrent writers coalesce into one fsync. |
 | 2 | Streaming groundwork | gRPC streaming surfaces designed. Auth amortized across stream lifetime. |
 | 5 | Cluster mode | Consistent-hash ring + gRPC routing between Pebble nodes. No consensus; static membership. |
 | 6 | Batched stream paths | Producer and worker streams gain batch APIs. `PHASE6_BATCH` / `PHASE6_PROD_BATCH` env knobs. |
 | 8 | Intra-process Pebble sharding | `numShards` opens N independent Pebble instances under one process. 4 shards → ~83k tasks/s on a 12-core box. **Mutually exclusive with cluster mode.** |
 
-PRs #527-#547 landed Phases 1.1, 6, and 8. The Redis backend remains
-supported for HA scenarios but is no longer the default.
+PRs #527-#547 landed Phases 1.1, 6, and 8.
 
 ## See also
 
