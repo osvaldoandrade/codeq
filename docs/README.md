@@ -50,6 +50,7 @@ layer, lease table, and gRPC + HTTP API all in one process.
 22. `docs/21-developer-guide.md` - Developer guide for contributors
 28. `docs/27-persistence-plugin-system.md` - Persistence plugin interface (Pebble is the supported backend; memory provider for tests)
 34. `docs/34-streaming-api-guide.md` - gRPC streaming API protocol reference, throughput characteristics, and concurrency model
+40. `docs/40-raft-replication.md` - Opt-in HA via hashicorp/raft: single-shard, multi-shard, failover, status endpoint, limitations
 
 ### Integration Guides
 
@@ -70,7 +71,7 @@ layer, lease table, and gRPC + HTTP API all in one process.
 
 ### Explanation (Understanding-Oriented)
 
-- `docs/migration.md` - General migration guide
+- `docs/40-raft-replication.md` - When to enable raft, mutual exclusion with the static-ring cluster mode, current limitations and follow-ups
 
 ### Design Documents (Architecture-Oriented)
 

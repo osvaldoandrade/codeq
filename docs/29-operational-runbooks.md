@@ -1558,6 +1558,98 @@ Key points:
 
 ---
 
+## 10. Raft Replication Runbook
+
+When `cfg.Raft.Enabled` is true codeq runs every Pebble write through
+a raft consensus log shared by all cluster nodes. Full architecture
+in [40-raft-replication.md](./40-raft-replication.md). This section
+covers the day-2 procedures.
+
+### 10.1 Observing leadership
+
+Each node exposes its local view at `GET /v1/codeq/raft/status`:
+
+```bash
+curl -s http://node-1:8080/v1/codeq/raft/status | jq .
+```
+
+Use this in two ways:
+- **Health checks**: alert when any group reports `hasLeader=false`
+  for more than ~5 seconds. That window means re-election is taking
+  longer than expected — usually because of a network partition or
+  an unhealthy node holding up quorum.
+- **Routing hints**: future client-side smart routing (and current
+  Prometheus dashboards) consume the `leaderId` / `leaderAddr` fields
+  to address writes directly at the shard's leader.
+
+### 10.2 Adding a node to an existing cluster
+
+Joining a new node to a running raft cluster is a two-step process —
+update peer config on the running nodes first, then start the new
+node with `bootstrap: false` and matching peer config.
+
+1. **Edit** `cfg.Raft.Peers` on every running node to include the new
+   node's `id → bindAddr`. Rolling restart picks the new config up.
+2. **Start** the new node with `bootstrap: false` and the full peer
+   map. The current leader will catch it up via raft replication
+   (AppendEntries + snapshot install for shards that have outgrown
+   the log retention window).
+3. **Verify** `/v1/codeq/raft/status` on the new node reports
+   `enabled=true`, `hasLeader=true` for every group within ~5 s.
+
+> **Note**: codeq currently uses a static peer list — there is no
+> live `AddVoter`/`RemoveVoter` admin API. Membership change is a
+> rolling config update + restart.
+
+### 10.3 Removing a failed node
+
+1. **Drain** in-flight work: stop sending new requests to the failed
+   node's HTTP endpoint (load balancer pool removal).
+2. **Update** `cfg.Raft.Peers` on every surviving node to remove the
+   failed node's entry.
+3. **Rolling restart** the survivors. Each restart picks up the new
+   peer set; the cluster continues serving via the remaining quorum.
+4. **Verify**: `/v1/codeq/raft/status` no longer references the
+   removed node ID.
+
+> **Quorum warning**: a 3-node cluster tolerates one node loss
+> (quorum 2/3). Removing a second node before re-adding leaves you
+> at 1/2 — no quorum, no writes. Always re-add before draining the
+> next failure.
+
+### 10.4 Backup with raft
+
+Raft replication is **not a backup**. Three replicas of corrupt data
+is still corrupt data. The Pebble backup procedure in
+[§6.1](#61-backup-and-restore-pebble) applies per-node: take a Pebble
+checkpoint on one healthy node, store it off-cluster. To restore from
+backup after total cluster loss:
+
+1. Stop all nodes.
+2. Restore the Pebble checkpoint to one node's data dir.
+3. Start that node with `bootstrap: true` and an empty `peers` map
+   (single-node bootstrap of the restored data).
+4. Once it has elected, switch its `bootstrap` to false and add
+   peers per §10.2.
+
+The restored cluster has the data from the backup point; any tasks
+created between the backup and the failure are lost.
+
+### 10.5 Reaper behavior under raft
+
+Each shard's reaper consults the shard's raft leadership. Followers
+do not sweep — only the leader requeues expired leases and trims TTL
+indexes. Failover catches up on the next reaper tick after the new
+leader is elected (default 2 s lease interval).
+
+This is invisible day-to-day. The thing to watch: if a leader is
+unhealthy enough to lose leadership but still healthy enough to keep
+crashing-and-recovering, sweeps may stutter. Look for
+`codeq_lease_expired_total` rate dips correlated with raft term
+churn (`raft: entering leader/follower state` log lines).
+
+---
+
 ## See also
 
 - [Cluster architecture](./05-cluster-architecture.md) — design of

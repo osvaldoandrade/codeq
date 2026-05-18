@@ -101,6 +101,57 @@ persistenceProvider: memory
 persistenceConfig: {}
 ````
 
+## Raft replication (opt-in HA)
+
+`cfg.Raft` enables [hashicorp/raft](https://github.com/hashicorp/raft)
+replication on top of the embedded Pebble store. Each Pebble shard
+becomes its own raft group; the leader applies writes locally and
+replicates them via the consensus log to followers' FSMs. Reads stay
+local on every node.
+
+Full architecture, failover, and operational details in
+[`docs/40-raft-replication.md`](40-raft-replication.md).
+
+Config fields under `raft`:
+
+- `enabled` (bool, default false): enable raft.
+- `selfId` (string, required when enabled): stable raft server ID.
+  Must be unique per node and appear in `peers`.
+- `bindAddr` (string, required when enabled): base TCP address for
+  this node's raft transports, e.g. `127.0.0.1:7000`. Multi-shard
+  uses `bindAddr+shardIdx` per group.
+- `bootstrap` (bool): set true on exactly ONE node when forming a new
+  cluster. Ignored on subsequent restarts (raft preserves state).
+- `peers` (map[string]string): peer ID → base bind address for every
+  node including self.
+- `heartbeatMS` / `electionMS` / `leaderLeaseMS` / `commitMS` (int,
+  optional): raft timing knobs; defaults match hashicorp/raft defaults
+  (1000 / 1000 / 500 / 50).
+- `applyTimeoutSeconds` (int, optional, default 10): per-write
+  raft.Apply timeout.
+
+**Mutual exclusion**: raft is rejected at startup if `cluster.enabled`
+or `sharding.enabled` is also set, or if `persistenceProvider != pebble`.
+
+### Example: 3-node raft cluster
+
+````yaml
+persistenceProvider: pebble
+persistenceConfig:
+  path: /var/lib/codeq/pebble
+  numShards: 4
+
+raft:
+  enabled: true
+  selfId: node-1            # different per node
+  bindAddr: 127.0.0.1:7000  # different per node
+  bootstrap: true           # ONLY on node-1 during initial cluster formation
+  peers:
+    node-1: 127.0.0.1:7000
+    node-2: 127.0.0.2:7000
+    node-3: 127.0.0.3:7000
+````
+
 ## Tracing (OpenTelemetry)
 
 Distributed tracing is optional and disabled by default. When enabled, codeQ exports spans via OTLP gRPC (compatible with Jaeger and Grafana Tempo).
