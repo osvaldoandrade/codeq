@@ -193,24 +193,27 @@ func newPebbleApplication(
 	// lifecycle as the shard's Pebble (raft.Close must run BEFORE
 	// pebble.Close — see TracingShutdown and cleanupStartupFailure).
 	raftNodes := make([]*raftpkg.DB, len(dbs))
+	var muxAcceptor *raftpkg.MuxAcceptor
 	if cfg.Raft.Enabled {
+		// Mux mode: open one TCP listener at BindAddr and demux by
+		// group ID. Every shard's raft group uses the same port.
+		// Non-mux mode keeps the M1/M2 per-shard +offset behavior.
+		if cfg.Raft.MuxEnabled {
+			acc, err := raftpkg.NewMuxAcceptor(cfg.Raft.BindAddr, os.Stderr)
+			if err != nil {
+				bgCancel()
+				for _, d := range dbs {
+					_ = d.Close()
+				}
+				return nil, fmt.Errorf("raft mux acceptor: %w", err)
+			}
+			muxAcceptor = acc
+		}
 		for i, shardDB := range dbs {
-			shardBind, err := bindAddrForShard(cfg.Raft.BindAddr, i)
-			if err != nil {
-				bgCancel()
-				for _, d := range dbs {
-					_ = d.Close()
-				}
-				return nil, fmt.Errorf("raft bind addr shard %d: %w", i, err)
-			}
-			shardPeers, err := peersForShard(cfg.Raft.Peers, i)
-			if err != nil {
-				bgCancel()
-				for _, d := range dbs {
-					_ = d.Close()
-				}
-				return nil, fmt.Errorf("raft peers shard %d: %w", i, err)
-			}
+			var (
+				shardBind  string
+				shardPeers map[string]string
+			)
 			shardPath := pc.Path
 			if numShards > 1 {
 				shardPath = fmt.Sprintf("%s/shard%d", pc.Path, i)
@@ -218,21 +221,59 @@ func newPebbleApplication(
 			raftCfg := raftpkg.Config{
 				Path:          shardPath,
 				SelfID:        cfg.Raft.SelfID,
-				BindAddr:      shardBind,
 				Bootstrap:     cfg.Raft.Bootstrap,
-				PeerAddrs:     shardPeers,
 				PeerHTTPAddrs: cfg.Raft.PeerHTTPAddrs,
 				HeartbeatMS:   cfg.Raft.HeartbeatMS,
 				ElectionMS:    cfg.Raft.ElectionMS,
 				LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
 				CommitMS:      cfg.Raft.CommitMS,
 			}
+			if muxAcceptor != nil {
+				sl, err := muxAcceptor.RegisterGroup(uint32(i))
+				if err != nil {
+					_ = muxAcceptor.Close()
+					bgCancel()
+					for _, d := range dbs {
+						_ = d.Close()
+					}
+					return nil, fmt.Errorf("raft mux register shard %d: %w", i, err)
+				}
+				// In mux mode every shard binds the SAME port (the
+				// acceptor's). Peers come through unchanged.
+				shardBind = muxAcceptor.Addr().String()
+				shardPeers = cfg.Raft.Peers
+				raftCfg.StreamLayer = sl
+			} else {
+				addr, err := bindAddrForShard(cfg.Raft.BindAddr, i)
+				if err != nil {
+					bgCancel()
+					for _, d := range dbs {
+						_ = d.Close()
+					}
+					return nil, fmt.Errorf("raft bind addr shard %d: %w", i, err)
+				}
+				peers, err := peersForShard(cfg.Raft.Peers, i)
+				if err != nil {
+					bgCancel()
+					for _, d := range dbs {
+						_ = d.Close()
+					}
+					return nil, fmt.Errorf("raft peers shard %d: %w", i, err)
+				}
+				shardBind = addr
+				shardPeers = peers
+			}
+			raftCfg.BindAddr = shardBind
+			raftCfg.PeerAddrs = shardPeers
 			if cfg.Raft.ApplyTimeoutSeconds > 0 {
 				raftCfg.ApplyTimeout = time.Duration(cfg.Raft.ApplyTimeoutSeconds) * time.Second
 			}
 			rdb, err := raftpkg.OpenWithPebble(bgCtx, raftCfg, shardDB.Raw())
 			if err != nil {
 				bgCancel()
+				if muxAcceptor != nil {
+					_ = muxAcceptor.Close()
+				}
 				// Close any raft nodes already opened (lifecycle:
 				// raft.Close before pebble.Close).
 				for _, r := range raftNodes[:i] {
@@ -459,9 +500,15 @@ func newPebbleApplication(
 		// Close raft BEFORE pebble. Raft's apply pipeline holds the
 		// pebble handle (FSM) and panics on closed-DB writes.
 		for _, r := range raftNodes {
+			if r == nil {
+				continue
+			}
 			if cerr := r.Close(); cerr != nil {
 				logger.Warn("raft close after startup failure", "err", cerr)
 			}
+		}
+		if muxAcceptor != nil {
+			_ = muxAcceptor.Close()
 		}
 		for _, d := range dbs {
 			if cerr := d.Close(); cerr != nil {
@@ -527,8 +574,16 @@ func newPebbleApplication(
 			_ = clientPool.Close()
 		}
 		for _, r := range raftNodes {
+			if r == nil {
+				continue
+			}
 			if err := r.Close(); err != nil {
 				logger.Warn("raft close", "err", err)
+			}
+		}
+		if muxAcceptor != nil {
+			if err := muxAcceptor.Close(); err != nil {
+				logger.Warn("mux acceptor close", "err", err)
 			}
 		}
 		for _, d := range dbs {

@@ -42,6 +42,12 @@ type Config struct {
 	CommitMS        int               // raft commit timeout (default 50)
 	SnapshotEntries uint64            // log entries before snapshot (default 8192)
 	ApplyTimeout    time.Duration     // per-write raft.Apply timeout (default 10s)
+	// StreamLayer is an optional override for the underlying transport
+	// layer. When non-nil (mux mode), Open uses
+	// hraft.NewNetworkTransport on top of it instead of opening its own
+	// TCP listener via NewTCPTransport. Used by the per-node
+	// MuxAcceptor so every shard shares one listener.
+	StreamLayer     hraft.StreamLayer
 }
 
 func (c Config) heartbeat() time.Duration {
@@ -189,9 +195,18 @@ func openInternal(ctx context.Context, cfg Config, pdb *pebbledb.DB, ownPebble b
 	}
 	d.fsm = newFSM(pdb)
 
-	trans, err := hraft.NewTCPTransport(cfg.BindAddr, nil, 3, 10*time.Second, os.Stderr)
-	if err != nil {
-		return nil, fmt.Errorf("tcp transport: %w", err)
+	var trans hraft.Transport
+	if cfg.StreamLayer != nil {
+		// Mux mode: the caller pre-built a StreamLayer that demuxes
+		// connections from a shared listener. NewNetworkTransport
+		// drives raft's wire protocol on top.
+		trans = hraft.NewNetworkTransport(cfg.StreamLayer, 3, 10*time.Second, os.Stderr)
+	} else {
+		t, err := hraft.NewTCPTransport(cfg.BindAddr, nil, 3, 10*time.Second, os.Stderr)
+		if err != nil {
+			return nil, fmt.Errorf("tcp transport: %w", err)
+		}
+		trans = t
 	}
 	d.trans = trans
 

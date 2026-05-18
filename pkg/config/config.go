@@ -131,6 +131,13 @@ type RaftConfig struct {
 	BindAddr      string            `yaml:"bindAddr"` // e.g. ":7000"
 	Bootstrap     bool              `yaml:"bootstrap"`
 	Peers         map[string]string `yaml:"peers"` // id → bindAddr (including self)
+	// MuxEnabled puts every Pebble shard's raft group on a single TCP
+	// listener at BindAddr, demuxed by a uint32 group ID prefix. With
+	// MuxEnabled=false (default), each shard gets its own TCP port
+	// (BindAddr + shardIdx) — the M1/M2 behavior. Opt-in for new
+	// deployments; cluster topology changes so it's NOT a rolling
+	// upgrade for live clusters.
+	MuxEnabled    bool              `yaml:"muxEnabled"`
 	// PeerHTTPAddrs maps each raft peer ID to its HTTP base URL (e.g.
 	// "http://node-1:8080"). Surfaced in /v1/codeq/raft/status so ops
 	// tooling and smart clients can route writes directly at the
@@ -319,6 +326,9 @@ func applyEnvAndDefaults(c *Config) {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			c.Raft.ApplyTimeoutSeconds = n
 		}
+	}
+	if v := os.Getenv("RAFT_MUX_ENABLED"); v != "" {
+		c.Raft.MuxEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
 	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
 		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
