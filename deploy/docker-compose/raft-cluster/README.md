@@ -4,6 +4,16 @@ Spins up three codeq processes joined into a raft cluster. Every Pebble
 write is consensus-replicated across the three replicas; the leader
 fails over automatically when a node dies.
 
+The template uses the **mux transport** (`RAFT_MUX_ENABLED=true`) so
+every shard's raft group shares one TCP port per node — only port
+8080 (HTTP) and 7000 (raft) are exposed on each container, regardless
+of how many shards are configured.
+
+It also wires `RAFT_PEER_HTTP_ADDRS` so server-side 307 redirects work
+out of the box: a write that lands on a follower comes back as
+`307 Temporary Redirect` with `Location: <leader URL>`. Standard HTTP
+clients follow automatically.
+
 See [`docs/40-raft-replication.md`](../../../docs/40-raft-replication.md)
 for the architecture, configuration knobs, status endpoint, and current
 limitations.
@@ -68,9 +78,11 @@ curl -s http://localhost:8081/v1/codeq/raft/status | jq .
 ## Going multi-shard (M2)
 
 For per-shard raft groups (one group per Pebble shard), add
-`"numShards": 4` to `PERSISTENCE_CONFIG` and reserve N consecutive
-ports per node. The compose template uses container-local port 7000 as
-the base; each shard binds 7000 + shardIdx. Adjust as needed.
+`"numShards": 4` to `PERSISTENCE_CONFIG`. With the mux transport
+already enabled (`RAFT_MUX_ENABLED=true`), no port-range changes are
+needed — every shard's raft group shares port 7000, demuxed by group
+ID prefix. The 12 raft groups (3 nodes × 4 shards) come up on just
+3 listeners total.
 
 ## Mutual exclusion
 
