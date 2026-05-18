@@ -335,8 +335,9 @@ func newPebbleApplication(
 	// Background reaper: enforces lease expiry + TTL cleanup, which Redis
 	// gives us via key TTL. Phase 8: one reaper per Pebble shard so the
 	// sweeps run in parallel and the per-shard commit pipelines stay
-	// independent.
-	pebblerepo.StartReapersForShards(bgCtx, dbs, loc, logger, pebblerepo.ReaperOptions{
+	// independent. In raft mode, LeaderGate keeps followers out of the
+	// sweep — only the leader writes through raft.Apply.
+	reaperOpts := pebblerepo.ReaperOptions{
 		BackoffPolicy:      cfg.BackoffPolicy,
 		BackoffBaseSeconds: cfg.BackoffBaseSeconds,
 		BackoffMaxSeconds:  cfg.BackoffMaxSeconds,
@@ -346,7 +347,14 @@ func newPebbleApplication(
 				resultCallback.Send(ctx, t, rec)
 			}
 		},
-	})
+	}
+	if len(raftNodes) > 0 {
+		// Per-shard LeaderGate would matter for M2 multi-raft. M1 has
+		// one shard ⇒ one raft node, so a single IsLeader() suffices.
+		raftRef := raftNodes[0]
+		reaperOpts.LeaderGate = raftRef.IsLeader
+	}
+	pebblerepo.StartReapersForShards(bgCtx, dbs, loc, logger, reaperOpts)
 
 	scheduler := services.NewSchedulerService(
 		taskRepo,

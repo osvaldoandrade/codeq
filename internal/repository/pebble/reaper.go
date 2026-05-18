@@ -30,6 +30,12 @@ type Reaper struct {
 	backoffMaxSeconds  int
 	maxAttemptsDefault int
 	dlqCallback        func(ctx context.Context, t domain.Task, rec domain.ResultRecord)
+	// leaderGate, when non-nil, is invoked at the start of every tick.
+	// Returning false skips the tick. Used in raft mode so only the
+	// leader sweeps — followers would either write through raft.Apply
+	// (and fail with ErrNotLeader) or duplicate work the leader is
+	// already doing.
+	leaderGate func() bool
 
 	leaseInterval time.Duration // how often to scan lease/*
 	ttlInterval   time.Duration // how often to scan ttl_index
@@ -53,6 +59,11 @@ type ReaperOptions struct {
 	// (after max attempts). Invoked once per task, post-commit, with a
 	// synthetic ResultRecord describing the failure. Optional.
 	DLQCallback func(ctx context.Context, t domain.Task, rec domain.ResultRecord)
+	// LeaderGate, when set, is consulted at the start of every reaper
+	// tick. When it returns false the tick is a no-op. Wired by
+	// pkg/app/application_pebble.go to raft.DB.IsLeader when raft is
+	// enabled; nil otherwise (single-node deployments run every tick).
+	LeaderGate func() bool
 }
 
 func NewReaper(db *DB, tz *time.Location, logger *slog.Logger, opts ReaperOptions) *Reaper {
@@ -92,6 +103,7 @@ func NewReaper(db *DB, tz *time.Location, logger *slog.Logger, opts ReaperOption
 		backoffMaxSeconds:  opts.BackoffMaxSeconds,
 		maxAttemptsDefault: opts.MaxAttemptsDefault,
 		dlqCallback:        opts.DLQCallback,
+		leaderGate:         opts.LeaderGate,
 		leaseInterval:      opts.LeaseInterval,
 		ttlInterval:        opts.TTLInterval,
 		leaseBatch:         opts.LeaseBatch,
@@ -125,6 +137,12 @@ func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(con
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if r.leaderGate != nil && !r.leaderGate() {
+				// Follower in raft mode: leader's reaper handles all
+				// sweeps. Failover catches up on the next tick after
+				// election.
+				continue
+			}
 			n, err := tick(ctx)
 			if err != nil {
 				r.logger.Warn("reaper tick failed", "sweep", label, "err", err)
