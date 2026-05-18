@@ -3,12 +3,31 @@ package pebble
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
 	pebbledb "github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
 )
+
+// Replicator is satisfied by anything that knows how to ship a
+// pebble.Batch.Repr through a replication protocol (raft, etc.) and
+// wait for it to apply locally. When AttachReplicator is called on DB,
+// every write — Set, Delete, CommitBatch — flows through Replicate
+// instead of committing the local pebble.Batch directly. The same
+// pebble store backs both ends (the FSM on the receive side applies to
+// d.db), so local reads via Get/Iter still see the replicated state.
+type Replicator interface {
+	IsLeader() bool
+	Replicate(repr []byte) error
+}
+
+// ErrNotLeader is returned by write APIs when this DB is attached to a
+// replicator and the local node isn't the leader. The repository code
+// surfaces it to the service layer; the cluster router (not the storage
+// layer) decides whether to forward to a leader.
+var ErrNotLeader = errors.New("pebble: not leader")
 
 // DB wraps a *pebble.DB with the helpers the repository implementations
 // need: a process-wide monotonic sequence counter (used to order pending
@@ -25,12 +44,22 @@ import (
 // at 26k req/s — every Commit() acquires that global lock. Merging N
 // batches into one Commit collapses N lock acquisitions into one, which
 // is the primary throughput lever on the Pebble write path.
+//
+// Replication: when AttachReplicator is called, the coalescer is
+// bypassed and every write goes through repl.Replicate(batch.Repr()).
+// The replicator (raft) does its own batching at the log-entry level,
+// so coalescing on top would just add latency.
 type DB struct {
 	db       *pebbledb.DB
 	seq      atomic.Uint64
 	commitCh chan *commitReq
 	stopCh   chan struct{}
 	stopped  chan struct{}
+
+	// repl is the optional replication delegate. nil = direct pebble
+	// mode (the standalone path the bench harness uses). Set by
+	// AttachReplicator after construction.
+	repl Replicator
 
 	// Leases is the Phase 6 / M2 in-memory lease table, shared between
 	// TaskRepository (writer) and ResultRepository (clearer on submit).
@@ -39,6 +68,13 @@ type DB struct {
 	// TaskRepository.recoverLeases at NewTaskRepository time.
 	Leases *leaseTable
 }
+
+// AttachReplicator hooks a replication delegate (typically *raft.DB)
+// onto this DB. After this call returns, every Set / Delete /
+// CommitBatch flows through r.Replicate instead of the local coalescer.
+// Reads are unaffected (always local). Must be called before any
+// repositories start writing — concurrent attach + write is not safe.
+func (d *DB) AttachReplicator(r Replicator) { d.repl = r }
 
 // commitReq carries a single submitter's batch through the coalescer.
 // done is buffered so the coalescer never blocks on fan-out.
@@ -202,14 +238,37 @@ func (d *DB) Has(key []byte) (bool, error) {
 	return true, nil
 }
 
-// Set writes a single key/value with the default (no-sync) write options.
-// Hot-path use; for atomicity across multiple keys use Batch.
+// Set writes a single key/value. With a replicator attached the write
+// flows through Replicate (raft) as a 1-op batch; otherwise it commits
+// directly with no-sync.
 func (d *DB) Set(key, value []byte) error {
+	if d.repl != nil {
+		if !d.repl.IsLeader() {
+			return ErrNotLeader
+		}
+		b := d.db.NewBatch()
+		defer b.Close()
+		if err := b.Set(key, value, nil); err != nil {
+			return err
+		}
+		return d.repl.Replicate(b.Repr())
+	}
 	return d.db.Set(key, value, pebbledb.NoSync)
 }
 
-// Delete removes key. No-op if absent.
+// Delete removes a key. Same semantics as Set re: replication.
 func (d *DB) Delete(key []byte) error {
+	if d.repl != nil {
+		if !d.repl.IsLeader() {
+			return ErrNotLeader
+		}
+		b := d.db.NewBatch()
+		defer b.Close()
+		if err := b.Delete(key, nil); err != nil {
+			return err
+		}
+		return d.repl.Replicate(b.Repr())
+	}
 	return d.db.Delete(key, pebbledb.NoSync)
 }
 
@@ -230,6 +289,15 @@ func (d *DB) Batch() *pebbledb.Batch {
 // returns (typical defer b.Close()). Apply() copies the ops out, so
 // closing the caller's batch does not affect the merged commit.
 func (d *DB) CommitBatch(b *pebbledb.Batch) error {
+	if d.repl != nil {
+		if !d.repl.IsLeader() {
+			return ErrNotLeader
+		}
+		// Replicator owns serialization; the local pebble write happens
+		// on every node via the FSM. The caller still owns b and must
+		// Close it (the standard defer-Close pattern).
+		return d.repl.Replicate(b.Repr())
+	}
 	req := &commitReq{batch: b, done: make(chan error, 1)}
 	select {
 	case d.commitCh <- req:

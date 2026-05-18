@@ -99,35 +99,31 @@ var ErrNotFound = pebbledb.ErrNotFound
 // go through the FSM. The API mirrors internal/repository/pebble.DB so
 // the rest of codeq can swap one for the other.
 type DB struct {
-	pebble *pebbledb.DB
-	raft   *hraft.Raft
-	fsm    *fsm
-	trans  hraft.Transport
-	cfg    Config
+	pebble    *pebbledb.DB
+	ownPebble bool // true when Open() opened pebble; false when caller did
+	raft      *hraft.Raft
+	fsm       *fsm
+	trans     hraft.Transport
+	cfg       Config
 
 	seq atomic.Uint64
 
 	leaderCh chan bool
 	stopCh   chan struct{}
-
-	Leases *LeaseTable
 }
 
 // Open creates or opens a raft-pebble DB. The Pebble store lives under
 // cfg.Path/state/; the raft FileSnapshotStore lives under
 // cfg.Path/snapshots/. Log + stable state share the Pebble store with
 // the FSM under separate prefixes (raft/log/, raft/stable/).
+//
+// Use OpenWithPebble when the calling layer already owns a *pebble.DB
+// it wants to attach raft replication to (the codeq integration path —
+// see pkg/app/application_pebble.go).
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if cfg.Path == "" {
 		return nil, fmt.Errorf("raft: Path is required")
 	}
-	if cfg.SelfID == "" {
-		return nil, fmt.Errorf("raft: SelfID is required")
-	}
-	if cfg.BindAddr == "" {
-		return nil, fmt.Errorf("raft: BindAddr is required")
-	}
-
 	pOpts := &pebbledb.Options{Cache: pebbledb.NewCache(256 << 20)}
 	for i := range pOpts.Levels {
 		pOpts.Levels[i].FilterPolicy = bloom.FilterPolicy(10)
@@ -141,27 +137,55 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pebble open %s: %w", statePath, err)
 	}
+	d, err := openInternal(ctx, cfg, pdb, true)
+	if err != nil {
+		_ = pdb.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// OpenWithPebble wires raft replication on top of a *pebble.DB the
+// caller already opened. The caller keeps ownership of pdb (raft.DB
+// won't close it). The same pebble instance backs the FSM, LogStore,
+// StableStore, and the caller's reads/writes — under distinct prefixes
+// so they don't collide (codeq/* user state, raft/log/*, raft/stable/*).
+func OpenWithPebble(ctx context.Context, cfg Config, pdb *pebbledb.DB) (*DB, error) {
+	if pdb == nil {
+		return nil, fmt.Errorf("raft: pdb is required")
+	}
+	return openInternal(ctx, cfg, pdb, false)
+}
+
+func openInternal(ctx context.Context, cfg Config, pdb *pebbledb.DB, ownPebble bool) (*DB, error) {
+	if cfg.SelfID == "" {
+		return nil, fmt.Errorf("raft: SelfID is required")
+	}
+	if cfg.BindAddr == "" {
+		return nil, fmt.Errorf("raft: BindAddr is required")
+	}
+	if cfg.Path == "" {
+		return nil, fmt.Errorf("raft: Path is required (for snapshot dir)")
+	}
 
 	d := &DB{
-		pebble:   pdb,
-		cfg:      cfg,
-		leaderCh: make(chan bool, 8),
-		stopCh:   make(chan struct{}),
-		Leases:   newLeaseTable(),
+		pebble:    pdb,
+		ownPebble: ownPebble,
+		cfg:       cfg,
+		leaderCh:  make(chan bool, 8),
+		stopCh:    make(chan struct{}),
 	}
 
 	logs := newLogStore(pdb)
 	stable := newStableStore(pdb)
 	snaps, err := newSnapshotStore(cfg.Path + "/snapshots")
 	if err != nil {
-		_ = pdb.Close()
 		return nil, fmt.Errorf("snapshot store: %w", err)
 	}
 	d.fsm = newFSM(pdb)
 
 	trans, err := hraft.NewTCPTransport(cfg.BindAddr, nil, 3, 10*time.Second, os.Stderr)
 	if err != nil {
-		_ = pdb.Close()
 		return nil, fmt.Errorf("tcp transport: %w", err)
 	}
 	d.trans = trans
@@ -179,13 +203,11 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if cfg.Bootstrap {
 		hasState, err := hraft.HasExistingState(logs, stable, snaps)
 		if err != nil {
-			_ = pdb.Close()
 			return nil, fmt.Errorf("HasExistingState: %w", err)
 		}
 		if !hasState {
 			peers := cfg.PeerAddrs
 			if len(peers) == 0 {
-				// Single-node degenerate cluster: self only.
 				peers = map[string]string{cfg.SelfID: cfg.BindAddr}
 			}
 			var configuration hraft.Configuration
@@ -197,7 +219,6 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 				})
 			}
 			if err := hraft.BootstrapCluster(rcfg, logs, stable, snaps, trans, configuration); err != nil {
-				_ = pdb.Close()
 				return nil, fmt.Errorf("BootstrapCluster: %w", err)
 			}
 		}
@@ -205,19 +226,36 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 
 	r, err := hraft.NewRaft(rcfg, d.fsm, logs, stable, snaps, trans)
 	if err != nil {
-		_ = pdb.Close()
 		return nil, fmt.Errorf("NewRaft: %w", err)
 	}
 	d.raft = r
 
 	go d.forwardLeaderChanges()
 	if err := d.recoverSeq(); err != nil {
-		_ = d.Close()
+		_ = d.shutdownRaftOnly()
 		return nil, fmt.Errorf("recover seq: %w", err)
 	}
 
 	_ = ctx
 	return d, nil
+}
+
+// shutdownRaftOnly stops raft+transport without closing pebble. Used
+// when openInternal needs to back out an error before the caller takes
+// ownership of the DB.
+func (d *DB) shutdownRaftOnly() error {
+	select {
+	case <-d.stopCh:
+	default:
+		close(d.stopCh)
+	}
+	if d.raft != nil {
+		_ = d.raft.Shutdown().Error()
+	}
+	if closer, ok := d.trans.(interface{ Close() error }); ok {
+		_ = closer.Close()
+	}
+	return nil
 }
 
 // forwardLeaderChanges relays raft's LeaderCh to our buffered chan so
@@ -242,6 +280,9 @@ func (d *DB) forwardLeaderChanges() {
 	}
 }
 
+// Close stops raft, closes the transport, and (if Open opened the
+// pebble store) closes pebble too. Callers that used OpenWithPebble
+// keep ownership of pebble and must close it themselves.
 func (d *DB) Close() error {
 	if d == nil {
 		return nil
@@ -257,13 +298,10 @@ func (d *DB) Close() error {
 			return fmt.Errorf("raft shutdown: %w", err)
 		}
 	}
-	// Closing the transport explicitly ensures the listening socket
-	// closes promptly; raft.Shutdown stops processing but the transport
-	// may keep the listener open.
 	if closer, ok := d.trans.(interface{ Close() error }); ok {
 		_ = closer.Close()
 	}
-	if d.pebble != nil {
+	if d.ownPebble && d.pebble != nil {
 		return d.pebble.Close()
 	}
 	return nil
@@ -458,6 +496,36 @@ func (d *DB) CommitBatch(b *pebbledb.Batch) error {
 	return nil
 }
 
+// Replicate ships a serialized pebble.Batch through raft and waits for
+// it to commit + apply locally. This is the public entry point for
+// callers that own their own pebble (via OpenWithPebble) and only want
+// the replication primitive — the codeq integration in pkg/app uses
+// this from internal/repository/pebble.DB to keep the existing
+// repository surface unchanged while writes flow through raft.
+//
+// Returns ErrNotLeader if this node isn't the leader, or wraps the
+// raft Apply error otherwise.
+func (d *DB) Replicate(repr []byte) error {
+	if !d.IsLeader() {
+		return ErrNotLeader
+	}
+	if len(repr) == 0 {
+		return nil
+	}
+	cp := make([]byte, len(repr))
+	copy(cp, repr)
+	f := d.raft.Apply(cp, d.cfg.applyTimeout())
+	if err := f.Error(); err != nil {
+		return fmt.Errorf("raft apply: %w", err)
+	}
+	if resp := f.Response(); resp != nil {
+		if applyErr, ok := resp.(error); ok && applyErr != nil {
+			return applyErr
+		}
+	}
+	return nil
+}
+
 // Set replicates a single-key write through raft.
 func (d *DB) Set(key, value []byte) error {
 	if !d.IsLeader() {
@@ -483,6 +551,16 @@ func (d *DB) Delete(key []byte) error {
 	}
 	return d.CommitBatch(b)
 }
+
+// Compile-time check that *DB satisfies the repository-layer
+// Replicator contract. Kept here (not in pebble/) to avoid pulling
+// pebblerepo into the raft package's import graph.
+type pebbleReplicator interface {
+	IsLeader() bool
+	Replicate(repr []byte) error
+}
+
+var _ pebbleReplicator = (*DB)(nil)
 
 // netAddrFromString resolves "host:port" to net.Addr. Used by LocalAddr
 // for tests that need to learn the ephemeral port the transport chose.
