@@ -1,0 +1,124 @@
+# 3-node codeq cluster with raft replication (M1+M2) on embedded
+# Pebble. Every write goes through hashicorp/raft and lands on every
+# replica's local Pebble via the FSM — automatic failover, no Redis,
+# no external coordinator.
+#
+# Topology:
+#   node-a: HTTP :8080 host, raft :7000 inside the bridge network
+#   node-b: HTTP :8081 host, raft :7000 inside (different container)
+#   node-c: HTTP :8082 host, raft :7000 inside (different container)
+#
+# Only node-a is `RAFT_BOOTSTRAP=true`. After the first run raft has
+# persisted state and ignores the flag on subsequent restarts. Set the
+# others to false during initial cluster formation — they'll receive
+# the cluster configuration from the leader via AppendEntries.
+#
+# To enable multi-shard raft (M2), add `"numShards": 4` (or N) to
+# PERSISTENCE_CONFIG. Each shard becomes its own raft group on
+# bindAddr+shardIdx — reserve N consecutive ports per node.
+#
+# See docs/40-raft-replication.md for the architecture, startup
+# ordering rules, status endpoint, and operational caveats.
+
+name: codeq-raft
+
+services:
+  node-a:
+    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    container_name: codeq-raft-node-a
+    hostname: node-a
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment: &raft_env
+      PORT: "8080"
+      ENV: dev
+      GIN_MODE: release
+      LOG_LEVEL: ${CODEQ_LOG_LEVEL:-warn}
+      LOG_FORMAT: json
+      DEFAULT_LEASE_SECONDS: "60"
+      REQUEUE_INSPECT_LIMIT: "200"
+      MAX_ATTEMPTS_DEFAULT: "5"
+      BACKOFF_POLICY: exp_full_jitter
+      BACKOFF_BASE_SECONDS: "5"
+      BACKOFF_MAX_SECONDS: "900"
+      WEBHOOK_HMAC_SECRET: dev-cluster-secret
+      LOCAL_ARTIFACTS_DIR: /var/lib/codeq/artifacts
+      WORKER_AUDIENCE: codeq-worker
+      PERSISTENCE_PROVIDER: pebble
+      PERSISTENCE_CONFIG: '{"path":"/var/lib/codeq/pebble"}'
+      RAFT_ENABLED: "true"
+      # RAFT_PEERS is "id=host:port,..." resolved via docker DNS.
+      # All three peers run raft on container-local port 7000.
+      RAFT_PEERS: "node-a=node-a:7000,node-b=node-b:7000,node-c=node-c:7000"
+      PRODUCER_AUTH_PROVIDER: static
+      PRODUCER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}
+      WORKER_AUTH_PROVIDER: static
+      WORKER_AUTH_CONFIG: |-
+        {"token":"dev-token","subject":"worker-dev","scopes":["codeq:claim","codeq:heartbeat","codeq:abandon","codeq:nack","codeq:result","codeq:subscribe"],"eventTypes":["*"],"raw":{"tenantId":"dev-tenant"}}
+      # Node-specific overrides
+      RAFT_SELF_ID: node-a
+      RAFT_BIND_ADDR: ":7000"
+      RAFT_BOOTSTRAP: "true"
+    volumes:
+      - node-a-data:/var/lib/codeq/pebble
+      - node-a-art:/var/lib/codeq/artifacts
+    networks:
+      - raft
+
+  node-b:
+    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    container_name: codeq-raft-node-b
+    hostname: node-b
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    environment:
+      <<: *raft_env
+      RAFT_SELF_ID: node-b
+      RAFT_BIND_ADDR: ":7000"
+      RAFT_BOOTSTRAP: "false"
+    volumes:
+      - node-b-data:/var/lib/codeq/pebble
+      - node-b-art:/var/lib/codeq/artifacts
+    networks:
+      - raft
+    # Wait for node-a's transport to be listening before starting —
+    # avoids node-a's first election rounds hitting connection-refused.
+    depends_on:
+      node-a:
+        condition: service_started
+
+  node-c:
+    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    container_name: codeq-raft-node-c
+    hostname: node-c
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    environment:
+      <<: *raft_env
+      RAFT_SELF_ID: node-c
+      RAFT_BIND_ADDR: ":7000"
+      RAFT_BOOTSTRAP: "false"
+    volumes:
+      - node-c-data:/var/lib/codeq/pebble
+      - node-c-art:/var/lib/codeq/artifacts
+    networks:
+      - raft
+    depends_on:
+      node-a:
+        condition: service_started
+
+volumes:
+  node-a-data:
+  node-a-art:
+  node-b-data:
+  node-b-art:
+  node-c-data:
+  node-c-art:
+
+networks:
+  raft:
+    driver: bridge

@@ -241,6 +241,62 @@ func applyEnvAndDefaults(c *Config) {
 			c.Cluster.Nodes = nodes
 		}
 	}
+	// Raft overrides. RAFT_PEERS uses the same "id=addr,id=addr,..."
+	// shape as CLUSTER_NODES so deployment manifests look consistent.
+	if v := os.Getenv("RAFT_ENABLED"); v != "" {
+		c.Raft.Enabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("RAFT_SELF_ID"); v != "" {
+		c.Raft.SelfID = v
+	}
+	if v := os.Getenv("RAFT_BIND_ADDR"); v != "" {
+		c.Raft.BindAddr = v
+	}
+	if v := os.Getenv("RAFT_BOOTSTRAP"); v != "" {
+		c.Raft.Bootstrap = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("RAFT_PEERS"); v != "" {
+		peers := make(map[string]string)
+		for _, pair := range strings.Split(v, ",") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			eq := strings.Index(pair, "=")
+			if eq <= 0 || eq == len(pair)-1 {
+				continue
+			}
+			peers[strings.TrimSpace(pair[:eq])] = strings.TrimSpace(pair[eq+1:])
+		}
+		if len(peers) > 0 {
+			c.Raft.Peers = peers
+		}
+	}
+	if v := os.Getenv("RAFT_HEARTBEAT_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Raft.HeartbeatMS = n
+		}
+	}
+	if v := os.Getenv("RAFT_ELECTION_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Raft.ElectionMS = n
+		}
+	}
+	if v := os.Getenv("RAFT_LEADER_LEASE_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Raft.LeaderLeaseMS = n
+		}
+	}
+	if v := os.Getenv("RAFT_COMMIT_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Raft.CommitMS = n
+		}
+	}
+	if v := os.Getenv("RAFT_APPLY_TIMEOUT_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Raft.ApplyTimeoutSeconds = n
+		}
+	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
 		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
 	}
