@@ -10,15 +10,21 @@ import (
 
 // fsm implements hashicorp/raft.FSM over a Pebble store.
 //
-// Apply receives committed raft log entries (T5 wires this). Snapshot
-// captures a consistent view of the codeq/ keyspace via pebble.Snapshot
-// and streams it through the SnapshotSink using the format defined in
-// snapshot.go. Restore reverses that — wipes the existing state and
-// re-populates from the stream.
+// Apply receives committed raft log entries. The Data field is the
+// output of pebble.Batch.Repr() produced by the leader (see db.go
+// CommitBatch in T6). FSM.Apply turns those bytes back into a Pebble
+// batch via SetRepr and commits it. Every replica in the cluster runs
+// the same Apply on the same input, so all Pebble stores converge to
+// the same state.
 //
-// The raft library guarantees Apply is serialized; Snapshot may run
-// concurrently with Apply (raft creates the pebble.Snapshot before
-// returning the FSMSnapshot, so the view is point-in-time).
+// Snapshot captures a consistent view of the codeq/ keyspace via
+// pebble.NewSnapshot and streams it through the SnapshotSink using the
+// format defined in snapshot.go. Restore reverses that — wipes the
+// existing codeq/ range and re-populates from the stream.
+//
+// raft guarantees Apply is serialized; Snapshot may run concurrently
+// with Apply (raft creates the pebble.Snapshot inside our Snapshot()
+// before returning the FSMSnapshot, so the view is point-in-time).
 type fsm struct {
 	pebble *pebbledb.DB
 }
@@ -27,17 +33,37 @@ func newFSM(pebble *pebbledb.DB) *fsm {
 	return &fsm{pebble: pebble}
 }
 
-// Apply is called by raft once an entry is committed by the quorum.
-// The Data field is a serialized batch this node turns into a Pebble
-// commit. TODO(M1.T5).
+// Apply turns a committed raft log entry into a Pebble batch commit.
+// Returns nil on success or an error explaining the failure. The caller
+// retrieves the return value via raft.ApplyFuture.Response().
+//
+// Non-LogCommand entries (LogNoop, LogBarrier, LogConfiguration) and
+// empty payloads are no-ops — raft expects FSM.Apply to be defensive
+// against these even though the runFSM dispatcher filters most of them.
 func (f *fsm) Apply(log *hraft.Log) any {
-	// Placeholder: return nil. T5 will deserialize log.Data and commit.
+	if log == nil || log.Type != hraft.LogCommand || len(log.Data) == 0 {
+		return nil
+	}
+	// Copy the slice before handing it to pebble — Batch.SetRepr takes
+	// ownership of its argument and raft's log buffers are reused on
+	// the next dispatch.
+	repr := make([]byte, len(log.Data))
+	copy(repr, log.Data)
+
+	batch := f.pebble.NewBatch()
+	defer batch.Close()
+	if err := batch.SetRepr(repr); err != nil {
+		return fmt.Errorf("fsm apply: SetRepr: %w", err)
+	}
+	if err := batch.Commit(pebbledb.NoSync); err != nil {
+		return fmt.Errorf("fsm apply: commit: %w", err)
+	}
 	return nil
 }
 
 // Snapshot returns a point-in-time snapshot of the FSM state. The
-// pebble.Snapshot is created inside Snapshot() (synchronous w/ raft's
-// FSM lock) and held by the returned fsmSnapshot until Persist or
+// pebble.Snapshot is created inside Snapshot() (synchronous with the
+// raft FSM lock) and held by the returned fsmSnapshot until Persist or
 // Release runs.
 func (f *fsm) Snapshot() (hraft.FSMSnapshot, error) {
 	snap := f.pebble.NewSnapshot()
@@ -63,7 +89,7 @@ type fsmSnapshot struct {
 
 // Persist writes the snapshot bytes to sink. On success, sink.Close is
 // called; on failure, sink.Cancel runs. Either way the pebble.Snapshot
-// is closed.
+// is closed via Release.
 func (s *fsmSnapshot) Persist(sink hraft.SnapshotSink) error {
 	if err := writeSnapshot(sink, s.snap); err != nil {
 		_ = sink.Cancel()
