@@ -1,8 +1,9 @@
 # codeq
 
-> Embedded high-performance task queue. One Go binary, Pebble for
-> storage, gRPC streams on the wire. 83k tasks/s on a single 12-core
-> box with zero external dependencies.
+> Embedded task queue server. Pebble (LSM tree) for durable storage;
+> optional Raft consensus for replicated HA; optional intra-process
+> sharding for multi-core write parallelism. Accessed via HTTP API,
+> Go gRPC streaming clients, or `codeq-cli`.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/osvaldoandrade/codeq.svg)](https://pkg.go.dev/github.com/osvaldoandrade/codeq)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -10,96 +11,123 @@
 
 ## What is codeq?
 
-codeq is a task queue written in Go. The default deployment is a single
-process: the server, the persistence layer (Pebble, the RocksDB-style
-LSM from CockroachDB), the lease table, and the gRPC + HTTP API all
-share one binary and one disk directory. There is no Redis to run, no
-broker to babysit, no consensus to coordinate.
+codeq is a single Go binary that exposes task-queue semantics
+(create, claim, lease, heartbeat, complete, retry, DLQ) on top of
+[Pebble](https://github.com/cockroachdb/pebble), the LSM-tree key/value
+engine used by CockroachDB. Storage, lease table, scheduler, HTTP API
+and gRPC streams all live in the same process and share one disk
+directory. There is no external broker, no Redis, no ZooKeeper.
 
-On a 12-core Linux box, that single binary sustains **83,420 tasks/s**
-for the full create → claim → complete cycle and **136,392 creates/s**
-for producer-only workloads — measured by the in-tree benchmarks in
-`internal/bench/`. When one machine is no longer enough, cluster mode
-(consistent-hash ring + gRPC routing between nodes) is opt-in.
+Three deployment shapes, all from the same binary:
 
-## Architecture overview
+| Mode          | Topology                          | Durability                       | Failure model                               |
+|---------------|-----------------------------------|----------------------------------|---------------------------------------------|
+| Single node   | 1 process, 1 Pebble DB            | Pebble WAL + group commit        | Process death loses unflushed batch         |
+| Multi-shard   | 1 process, N Pebble DBs           | Per-shard WAL, FNV-1a routing    | Same as single node, N× write parallelism   |
+| Raft cluster  | 3 (or 5) processes, replicated FSM| WAL + replicated log + snapshots | Tolerates `f = (N-1)/2` node failures        |
 
-```mermaid
-graph TB
-  subgraph Clients
-    PSDK[Producer SDK]
-    WSDK[Worker SDK]
-    CURL[HTTP / curl]
-  end
-  subgraph Server[codeq server -- single binary]
-    HTTP[HTTP API -- Gin]
-    PGRPC[Producer gRPC stream]
-    WGRPC[Worker gRPC stream]
-    LEASE[In-memory lease table]
-  end
-  subgraph Storage[Embedded persistence]
-    P0[Pebble shard 0]
-    P1[Pebble shard 1]
-    PN[Pebble shard N-1]
-  end
-  subgraph Optional[Opt-in scaling]
-    CL[Cluster -- consistent-hash + gRPC]
-  end
-  PSDK --> PGRPC
-  WSDK --> WGRPC
-  CURL --> HTTP
-  HTTP --> LEASE
-  PGRPC --> LEASE
-  WGRPC --> LEASE
-  LEASE --> P0
-  LEASE --> P1
-  LEASE --> PN
-  Server -.-> CL
+The three modes are mutually exclusive at config time; the check lives
+at `pkg/config/config.go:662-683`.
+
+## Architecture
+
+```
+                  HTTP :8080                    Pebble (LSM tree)
+   ┌────────────┐ ─────────────────▶ ┌───────────────────┐ ────────▶ ./data/
+   │ codeq-cli  │                    │   codeq  server   │
+   ├────────────┤ gRPC :9092 stream  │  ┌─────────────┐  │
+   │ Go SDK     │ ─────────────────▶ │  │ lease table │  │
+   │ producer-  │                    │  │  (in-mem)   │  │
+   │  client    │                    │  └─────────────┘  │
+   ├────────────┤ gRPC :9091 stream  │                   │  Raft :7000 (mux)
+   │ Go SDK     │ ─────────────────▶ │   ┌─── FSM ───┐   │ ─────────────┐
+   │ worker-    │                    │   │ Apply →   │   │  AppendEntries
+   │  client    │                    │   │ Pebble    │   │  (consensus)
+   └────────────┘                    │   └───────────┘   │ ◀────────────┤
+                                     └───────────────────┘              ▼
+                                                                  ┌───────────┐
+                                                                  │ peer node │
+                                                                  └───────────┘
 ```
 
-Producers and workers connect over long-lived bidirectional gRPC
-streams. Each request hits the in-memory lease table first, then commits
-to a Pebble shard chosen by `hash(taskID) % N`. Each shard runs its own
-commit pipeline and compaction loop, which is what lets a 4-shard
-configuration roughly double the single-shard throughput on the same
-hardware.
+Ports and protocols at a glance:
 
-## Performance
+- `:8080` — HTTP/JSON API (Gin), used by `codeq-cli`, curl, dashboards.
+- `:9092` — Producer gRPC bidirectional stream (`internal/producer/server.go`).
+- `:9091` — Worker gRPC bidirectional stream (`internal/worker/server.go`).
+- `:7000` — Raft transport, multiplexed across shards by a 4-byte
+  big-endian group ID prefix (`internal/raft/mux_transport.go:15-52`).
 
-All numbers measured on a 12-core Linux box, Go 1.25.0, loopback gRPC,
-Pebble with `fsyncOnCommit=false`. Full bench harness lives in
-`internal/bench/`.
+Every write goes through the in-memory lease table, then is committed
+to Pebble. When Raft is enabled, the write is first proposed to the
+replicated log; once a majority quorum acks, the FSM applies it to
+Pebble (`internal/raft/fsm.go:43-62`, `SetRepr → Commit(NoSync)`).
 
-| Workload | Throughput | Harness |
-|---|---:|---|
-| Full cycle (create + claim + complete), 4 Pebble shards | **83,420 tasks/s** | `internal/bench/profile_full_cycle_test.go::TestProfile_FullCycle` (`PHASE8_SHARDS=4 PHASE6_BATCH=32 PHASE6_PROD_BATCH=8`) |
-| Producer-only, batched stream | **136,392 creates/s** | `internal/bench/producer_stream_vs_rest_test.go::TestProducerThroughput_StreamBatchPath` |
-| Worker-only, batched claim+complete | **23,518 tasks/s** | `internal/bench/worker_stream_saturation_test.go::TestSaturation_StreamPath` (c=4, `PHASE6_BATCH=32`) |
-| Shard sweep (full cycle, 1 / 2 / 4 / 6 / 8 shards) | 42k / 65k / **83k** / 68k / 67k tasks/s | same as full cycle harness with `PHASE8_SHARDS` swept |
+### Sharding
 
-Sweet spot is 4 shards on a 12-core box; past that, write
-amplification and goroutine contention start to dominate. See
-[docs/30-performance-baselines.md](docs/30-performance-baselines.md)
-for raw output and per-release history.
+When `sharding.numShards > 1`, the repository routes each task to
+shard `FNV-1a-64(taskID) % N`
+(`internal/repository/pebble/sharded_task_repository.go:61-65`). Each
+shard owns its own Pebble DB, its own WAL, and its own group-commit
+coalescer (`maxMergeBatch = 64`,
+`internal/repository/pebble/db.go:71-82, 341-401`). This buys
+write parallelism on multi-core hardware without crossing the network.
 
-## Why codeq vs alternatives
+### Group commit
 
-| Feature | codeq | Asynq | BullMQ | Celery | Kafka |
-|---|---|---|---|---|---|
-| External dependency | **None** (embedded Pebble) | Redis | Redis | Redis or RabbitMQ | ZooKeeper / KRaft cluster |
-| Single-node full-cycle throughput | **83k tasks/s** | ~10k tasks/s | ~5k tasks/s | ~3k tasks/s | n/a (no task semantics) |
-| Language affinity | Go server + Go SDK (gRPC) | Go only | Node only | Python only | Polyglot |
-| Durability | Pebble batch + group-commit; optional fsync | Redis AOF / RDB | Redis AOF / RDB | Broker-dependent | Replicated log |
-| Multi-tenant isolation | **Built in** (JWT tenantId namespacing) | DIY | DIY | DIY | DIY |
-| Time-to-first-task | `docker run` + `curl` | Run Redis + Asynq | Run Redis + worker | Run broker + workers + result backend | Multi-step cluster bootstrap |
+Both the Pebble layer and the Raft FSM batch concurrent writes before
+fsync/apply:
 
-codeq is the right call when you want task-queue semantics (claims,
-leases, retries, DLQ, results) without standing up a broker. It is the
-wrong call if you need Kafka-scale event streaming or distributed
-consensus by default — multi-node deployments rely on cluster mode and
-the consistent-hash ring, not Paxos/Raft.
+- Pebble coalescer merges up to **64** in-flight batches per commit
+  (`internal/repository/pebble/db.go:71-82`, `commitChanBuf = 1024`).
+- Raft Apply coalescer merges up to **128** committed entries per FSM
+  call (`internal/raft/db.go`, `raftMergeBatch = 128`).
 
-## Quick start (5 minutes)
+Trade-off: higher batch sizes increase tail latency for the first
+caller in a batch but raise steady-state throughput.
+
+## Deployment modes and measured throughput
+
+All numbers are from in-tree benchmarks. Re-run them with
+`go test -run TestProfile_FullCycle ./internal/bench/...` etc. Loopback
+network, Go 1.25, `fsyncOnCommit=false` unless noted.
+
+| Mode                            | Throughput (full cycle: create + claim + complete) | Bench source                                                         |
+|---------------------------------|----------------------------------------------------|----------------------------------------------------------------------|
+| Single node, 4 Pebble shards    | **~83k tasks/s** (gRPC stream)                     | `internal/bench/profile_full_cycle_test.go`                          |
+| 3-node Raft cluster, HTTP       | **~3.9k cycles/s** (1-shard and 4-shard, smart routing) | `pkg/app/raft_smart_routing_bench_test.go`                      |
+| 3-node Raft, full-cycle baseline | reported alongside single-node REST in same harness | `pkg/app/raft_bench_test.go`                                        |
+
+The order-of-magnitude gap between single-node and Raft is the cost
+of consensus: every write costs one round-trip across `:7000` plus a
+majority disk fsync on followers. Pick Raft when you need fault
+tolerance (f = 1 with N = 3); pick single-node with shards when you
+need higher throughput on one box.
+
+## When to use codeq
+
+- You want claim/lease/retry/DLQ semantics, not a raw log.
+- You want one binary, one disk directory, no broker.
+- You need either single-node throughput **or** a small replicated
+  cluster — not both at once.
+- You speak Go (or are happy talking HTTP from any language).
+
+## When not to use codeq
+
+| If you need…                              | Pick…                                      |
+|-------------------------------------------|--------------------------------------------|
+| Pub/sub at Kafka scale, retained log      | Kafka                                      |
+| At-least-once delivery with cloud queueing| SQS                                        |
+| A Python-native task framework            | Celery                                     |
+| A Redis-backed Go task queue              | Asynq (note: needs Redis)                  |
+| Cross-DC replication, geo-aware routing   | Build on Kafka or use a managed system     |
+
+codeq matches Asynq's API surface but stores tasks in an embedded LSM
+instead of Redis. Trade-off: the storage layer is local to the process
+(no shared broker), so durability and HA come from Pebble + Raft, not
+from a separately-managed data store.
+
+## Quick start
 
 ```bash
 git clone https://github.com/osvaldoandrade/codeq
@@ -110,10 +138,9 @@ docker compose \
   up -d
 ```
 
-This brings up the codeq server on `http://localhost:8080` with the
-embedded Pebble backend and seeds example tasks.
+Server is now on `http://localhost:8080` with Pebble at `./data`.
 
-Create a task:
+Create a task over HTTP:
 
 ```bash
 curl -X POST http://localhost:8080/v1/codeq/tasks \
@@ -122,7 +149,7 @@ curl -X POST http://localhost:8080/v1/codeq/tasks \
   -d '{"command":"GENERATE_MASTER","payload":{"jobId":"j-123"},"priority":3}'
 ```
 
-Claim a task (as a worker):
+Claim a task:
 
 ```bash
 curl -X POST http://localhost:8080/v1/codeq/tasks/claim \
@@ -140,37 +167,17 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
   -d '{"status":"COMPLETED","result":{"ok":true}}'
 ```
 
-For high-throughput producers and workers, use the gRPC streaming API
-(2-3x the HTTP throughput, amortized auth, pipelined acks): see
-[docs/34-streaming-api-guide.md](docs/34-streaming-api-guide.md).
-
-## Where next
-
-- [Getting started tutorial](docs/00-getting-started.md) — your first
-  task, end to end.
-- [Overview](docs/01-overview.md) — goals, non-goals, when (and when
-  not) to pick codeq.
-- [Architecture](docs/03-architecture.md) — package layout and request
-  flows.
-- [Performance tuning](docs/17-performance-tuning.md) — shard counts,
-  batch sizes, fsync trade-offs.
-- [Operational runbooks](docs/29-operational-runbooks.md) — on-call
-  procedures for the common failure modes.
-- [Streaming API guide](docs/34-streaming-api-guide.md) — gRPC
-  producer and worker streams.
-- [Cluster architecture](docs/05-cluster-architecture.md) — multi-node
-  consistent-hash deployment.
-- [Style guide](docs/_STYLE.md) — voice, numbers, diagrams, links.
+For high-throughput producers and workers, prefer the gRPC streaming
+API (long-lived bidirectional stream, amortized auth, pipelined acks):
+see [docs/34-streaming-api-guide.md](docs/34-streaming-api-guide.md).
 
 ## Go SDK
 
-codeq ships a Go SDK that talks to the server over gRPC streams. It
-lives inside the main module:
+The Go SDK lives inside the main module — there is no separate
+package to install:
 
-- `pkg/producerclient` — task creation (single + batched, streaming).
-- `pkg/workerclient` — claim, heartbeat, result submission (streaming).
-
-Install:
+- `pkg/producerclient` — create tasks (single + batched, streaming on `:9092`).
+- `pkg/workerclient` — claim, heartbeat, complete (streaming on `:9091`).
 
 ```bash
 go get github.com/osvaldoandrade/codeq
@@ -200,31 +207,56 @@ taskID, _ := sess.Produce(ctx, producerclient.CreateRequest{
 })
 ```
 
-See [docs/integrations/go-integration.md](docs/integrations/go-integration.md)
-and [docs/34-streaming-api-guide.md](docs/34-streaming-api-guide.md) for the
-full surface. For non-Go callers, use the HTTP API
-([docs/04-http-api.md](docs/04-http-api.md)) directly.
+Callers outside Go talk to the HTTP API on `:8080`
+([docs/04-http-api.md](docs/04-http-api.md)).
+
+## Comparison
+
+| Property                         | codeq                          | Asynq      | BullMQ     | Celery       | Kafka                    |
+|----------------------------------|--------------------------------|------------|------------|--------------|--------------------------|
+| Storage                          | Pebble (LSM), embedded         | Redis      | Redis      | Redis/Rabbit | Replicated log           |
+| External dependency              | **None**                       | Redis      | Redis      | Broker + RB  | KRaft / ZooKeeper        |
+| Task semantics (claim/lease/DLQ) | Yes                            | Yes        | Yes        | Yes          | No (log only)            |
+| HA model                         | Raft consensus (f=1 with N=3)  | Redis repl | Redis repl | Broker-dep   | ISR + leader election    |
+| Client surface                   | Go (HTTP + gRPC, Go SDK only)  | Go only    | Node only  | Python only  | Polyglot                 |
+| Single-node throughput (full cycle) | ~83k tasks/s (4 shards, gRPC) | not measured here | not measured here | not measured here | n/a (no task semantics) |
+
+Only the codeq number is from an in-tree benchmark
+(`internal/bench/profile_full_cycle_test.go`). The other rows describe
+storage and topology, not throughput — measure each candidate on your
+own workload before deciding.
 
 ## Repo layout
 
 ```text
-cmd/                  CLI entrypoints (codeq install, server)
+cmd/                  CLI entrypoints (codeq, codeq-cli, server)
 internal/             unexported packages
   bench/              throughput + latency benchmarks (source of truth for perf claims)
-  cluster/            consistent-hash ring, gRPC router, bloom gossip
+  cluster/            consistent-hash ring + gRPC router (kept for reference; use raft for HA)
   controllers/        HTTP handlers (Gin)
   middleware/         auth, tracing, rate-limit, tenant extraction
-  producer/           gRPC producer-stream server
-  worker/             gRPC worker-stream server
-  repository/         persistence implementations (Pebble)
+  producer/           producer gRPC stream server (:9092)
+  raft/               replicated log, FSM, mux transport (:7000)
+  repository/         Pebble persistence + sharded repository
   services/           scheduler, results, callbacks, subscriptions
-pkg/                  public packages (app, auth, config, domain,
-                      producerclient, workerclient — the Go SDK)
+  worker/             worker gRPC stream server (:9091)
+pkg/                  public packages
+  app/                application bootstrap (single, sharded, raft)
+  auth/               JWT + tenant scoping
+  config/             config parsing, mode mutual-exclusion checks
+  domain/             task model
+  producerclient/     Go producer SDK
+  workerclient/       Go worker SDK
 deploy/               docker-compose and Kubernetes config
-helm/codeq/           Helm chart and size profiles
 docs/                 specifications, runbooks, performance baselines
-examples/             end-to-end example applications
+examples/             example applications and integration patterns
+helm/codeq/           Helm chart and size profiles
+npm/                  npm distribution wrapper for codeq-cli
 ```
+
+Cluster mode (consistent-hash ring + gRPC routing) is preserved for
+reference. For new HA deployments, use Raft replication —
+see [docs/40-raft-replication.md](docs/40-raft-replication.md).
 
 ## Install the CLI
 
@@ -234,15 +266,15 @@ macOS, Linux, or Windows via Git Bash:
 curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.sh | sh
 ```
 
-Or via npm:
+Or via npm (the npm package is a thin wrapper that downloads the Go binary):
 
 ```bash
 npm i -g @osvaldoandrade/codeq
 codeq --help
 ```
 
-To generate a Docker or Kubernetes install bundle (with embedded Pebble
-by default, no Redis required):
+Generate a Docker or Kubernetes install bundle (Pebble-backed, no
+external broker):
 
 ```bash
 codeq install
@@ -251,11 +283,23 @@ codeq install
 See [docs/15-cli-reference.md](docs/15-cli-reference.md) for the full
 CLI surface.
 
+## Where next
+
+- [Getting started](docs/00-getting-started.md) — first task end to end.
+- [Overview](docs/01-overview.md) — goals, non-goals, fit.
+- [Architecture](docs/03-architecture.md) — package layout, request flows.
+- [HTTP API reference](docs/04-http-api.md).
+- [Streaming API guide](docs/34-streaming-api-guide.md) — gRPC producer and worker streams.
+- [Performance baselines](docs/30-performance-baselines.md) — raw bench output and per-release history.
+- [Performance tuning](docs/17-performance-tuning.md) — shard counts, batch sizes, fsync trade-offs.
+- [Raft replication](docs/40-raft-replication.md) — leader lease, snapshots, quorum behavior.
+- [Operational runbooks](docs/29-operational-runbooks.md) — on-call procedures.
+- [Style guide](docs/_STYLE.md) — voice, numbers, diagrams, links.
+
 ## Contributing
 
 Issues and PRs are welcome. Before opening a PR, read
-[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, and
-[docs/_STYLE.md](docs/_STYLE.md) for the documentation style.
+[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/_STYLE.md](docs/_STYLE.md).
 
 ## License
 
