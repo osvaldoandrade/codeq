@@ -16,17 +16,15 @@ into the Go client and the server fan-out that backs it.
 
 ## 1. What and why
 
-The producer streaming SDK exists for one reason: to remove the per-call
-HTTP middleware tax that dominated CPU on the create hot path once Phase
-2 had lifted the worker side. Every `POST /v1/codeq/tasks` request pays
-for Gin routing, auth middleware, tenant resolution, JSON binding, and
-response marshalling. None of that work is interesting on the second
-request from the same producer — only the create itself is.
+The producer streaming SDK is the Go client for the producer stream on
+`:9092`. It opens one long-lived bidirectional gRPC stream per
+process, sends `Hello` once for authentication, and pipelines
+`CreateTask` events thereafter — each correlated to its `CreateAck` by
+a producer-assigned `seq`.
 
-The streaming protocol amortises all of that to a single `Hello`
-handshake at connect time. After that, producers pipeline `CreateTask`
-events down a long-lived bidirectional gRPC stream and receive
-`CreateAck` events back, correlated by a producer-assigned `seq`.
+For the rationale (per-request HTTP middleware tax, REST connection-
+pool contention) and the cross-path measured numbers, see
+[gRPC streaming API guide § Why gRPC streams over HTTP](./34-streaming-api-guide.md#1-why-grpc-streams-over-http).
 
 ### Measured headroom
 
@@ -38,25 +36,10 @@ events down a long-lived bidirectional gRPC stream and receive
 
 That is 8.29× over REST for the batched stream path on the reference
 box (12-core Linux, Go 1.25.0, loopback gRPC, Pebble persistence, no
-fsync, 6 s measurement window). The reference number for the
-[canonical performance baseline](./_STYLE.md#7-numbers-must-come-from-measurement)
-is `136,392 creates/s`.
-
-> **Performance**: the batched stream path is the only producer path
-> that hits six-figure creates/s on a single node. If you need that
-> throughput, you need `ProduceBatch`. `Produce` is for low-latency
-> single-task submission with the same wire format.
-
-The trade-off is honest:
-
-- The stream replaces a stateless HTTP request with a stateful gRPC
-  session. A dead stream takes every in-flight `Produce` with it; you
-  reconnect and retry at the application level.
-- Auth happens once at `Hello`. There is no per-call permission check —
-  the tenant resolved at handshake stays for the life of the stream.
-- The wire shape is protobuf, not JSON. Webhooks, idempotency keys, and
-  delays carry over verbatim from the REST body, but the encoding is
-  different.
+fsync, 6 s measurement window). The batched path is the only producer
+path that hits six-figure creates/s on a single node; if you need that
+throughput, you need `ProduceBatch`. `Produce` is for low-latency
+single-task submission with the same wire format.
 
 ## 2. Architecture
 
@@ -79,7 +62,7 @@ graph TB
     READ[readLoop]
     PEND[pending sync.Map seq -> ackCh]
   end
-  subgraph Wire[gRPC bidi stream]
+  subgraph Wire[gRPC bidi stream on :9092]
     STREAM[ProducerStream.Stream]
   end
   subgraph Server[internal/producer/server.go]
@@ -556,6 +539,7 @@ import (
     "log/slog"
     "os"
     "sync"
+    "sync/atomic"
     "time"
 
     "github.com/osvaldoandrade/codeq/pkg/producerclient"
@@ -592,7 +576,7 @@ func main() {
     }
     close(work)
 
-    var ok, fail int64
+    var ok, fail atomic.Int64
     var wg sync.WaitGroup
     for w := 0; w < goroutines; w++ {
         wg.Add(1)
@@ -608,26 +592,22 @@ func main() {
                 })
                 switch {
                 case err == nil:
-                    atomicAdd(&ok)
+                    ok.Add(1)
                 case errors.Is(err, context.Canceled),
                     errors.Is(err, context.DeadlineExceeded):
                     return
                 default:
                     log.Printf("Produce %d failed: %v", i, err)
-                    atomicAdd(&fail)
+                    fail.Add(1)
                 }
             }
         }()
     }
     wg.Wait()
 
-    log.Printf("done: ok=%d fail=%d", ok, fail)
+    log.Printf("done: ok=%d fail=%d", ok.Load(), fail.Load())
 }
 ```
-
-(`atomicAdd` is a stand-in for `sync/atomic.AddInt64` on a `*int64`;
-the real example would declare those as `atomic.Int64` for the same
-result without the helper.)
 
 For the batch variant, replace the inner `for i := range work` body
 with a buffered slice of `CreateRequest` of size 16 and call

@@ -1,970 +1,525 @@
-# gRPC Streaming API Guide
+# gRPC streaming API guide
 
-## Overview
+The streaming surface is the hot-path alternative to the REST API for
+two flows: task creation (producer) and task claim/complete (worker).
+Each is a separate gRPC bidirectional stream on its own port:
 
-The codeQ streaming API provides high-throughput alternatives to the HTTP API for task submission (producer) and task claiming (worker). By using long-lived bidirectional gRPC streams, the streaming API eliminates the per-call authentication and HTTP middleware overhead, achieving **2-3x higher throughput** than the REST API while maintaining the same semantics.
+- Producer stream — `:9092` — `internal/producer/server.go`
+- Worker stream   — `:9091` — `internal/worker/server.go`
 
-**Key benefits:**
-- **Producer:** Pipelined task submission (~33k tasks/sec per stream)
-- **Worker:** Concurrent task claiming with configurable parallelism
-- **Protocol:** Fully asynchronous; multiple requests can be in flight before responses arrive
-- **Authentication:** Single bearer token validation at stream open, amortized across all messages
-- **Backward compatible:** REST APIs remain unchanged; streaming is optional
+A stream is one HTTP/2 connection, opened once per process and reused
+for the life of the process. After a single `Hello` handshake, both
+sides exchange events asynchronously over the same connection: the
+producer pipelines `CreateTask` events and consumes `CreateAck`s; the
+worker advertises capacity with `Ready`, receives `Task` or
+`TaskBatch`, runs the handler, and sends `Result` or `ResultBatch`.
+
+Where this differs from REST: there is no per-event TLS handshake, no
+per-event JWT verify, no per-event tenant resolution. Authentication
+happens once at `Hello`. All subsequent events on that stream inherit
+the resolved tenant and subject. The wire is protobuf, framed by gRPC
+on top of HTTP/2 multiplexing.
+
+For the Go SDKs that sit on top of this protocol, see
+[Producer streaming SDK](./35-producer-streaming-sdk.md) and
+[Worker streaming SDK](./36-worker-streaming-sdk.md).
 
 ---
 
-## Diagrams
+## 1. Why gRPC streams over HTTP
 
-The three sequence diagrams below summarise the streaming protocol at a
-glance: how the producer pipelines `CreateTask` messages on a single
-stream, how a single-mode worker loops Ready → Task → Result, and how a
-batch-mode worker (Phase 6 Q2 + Phase 7) drains many tasks per round
-trip. For the full SDK surfaces, see
-[Producer streaming SDK](./35-producer-streaming-sdk.md) (U8) and
-[Worker streaming SDK](./36-worker-streaming-sdk.md) (U9).
+The REST surface is fine for one-off submissions and polyglot clients
+without a Go SDK. The streaming surface exists because, under load, the
+REST path is bounded by per-request overhead unrelated to the actual
+task write.
 
-### Diagram 1: Producer pipeline (3 in-flight CreateTask)
+### Measured numbers
 
-A producer `Session` keeps a bidirectional gRPC stream open and can have
-multiple `CreateTask` messages in flight before any `CreateAck` arrives.
-The server fans each message into the `SchedulerService`, which writes
-to Pebble; acknowledgments come back asynchronously and may arrive
-out-of-order relative to submission.
+Reference box: 12-core Linux, Go 1.25.0, loopback gRPC, Pebble
+persistence, no fsync, 32 producer goroutines, 6 s measurement window.
+
+| Path | Throughput | Harness |
+|---|---|---|
+| `POST /v1/codeq/tasks` (REST) | ~16,453 creates/s | `internal/bench/producer_stream_vs_rest_test.go::TestProducerThroughput_RESTPath` |
+| `Session.Produce` (stream, single) | ~46,000 creates/s | `internal/bench/producer_stream_vs_rest_test.go::TestProducerThroughput_StreamPath` |
+| `Session.ProduceBatch` (stream, batch=16) | 136,392 creates/s | `internal/bench/producer_stream_vs_rest_test.go::TestProducerThroughput_StreamBatchPath` |
+| Full producer + worker cycle (stream both sides) | 76,639 tasks/s | `internal/bench/profile_full_cycle_test.go::TestProfile_FullCycle` |
+
+### Where the REST headroom goes
+
+Profiling the REST path under saturation found the dominant non-Pebble
+cost was inside the HTTP client's connection pool, not codeQ:
+`http.Transport.tryPutIdleConn` showed up at the top of the contention
+profile because every request returned its connection to a single
+shared idle pool guarded by `sync.Mutex`. On top of that, each request
+pays for Gin routing, the auth middleware, tenant resolution, JSON
+binding, response marshalling, and panic recovery — every one of these
+runs once per task.
+
+The streaming surface collapses all of that. One stream is one HTTP/2
+connection; HTTP/2 frame multiplexing carries every event on it. One
+`Hello` validates the token. Subsequent events skip the entire HTTP
+middleware chain because there is no HTTP request — only protobuf
+events on the open bidirectional stream.
+
+### Honest tradeoffs
+
+- A stream is stateful. A dead stream takes every in-flight call with
+  it; the caller reconnects and retries at the application level. The
+  REST path is stateless and recovers on the next request.
+- Auth happens once. There is no per-call permission check after
+  `Hello` — the tenant and subject resolved at handshake stay for the
+  life of the stream. If you rotate tokens you must reopen the stream.
+- The wire is protobuf, not JSON. Webhooks, idempotency keys, delays
+  and trace context carry over verbatim from the REST body, but the
+  encoding is different — debugging requires `grpcurl` or wire dumps,
+  not `curl`.
+
+---
+
+## 2. Wire shape
+
+### 2.1 Producer pipeline (`:9092`)
+
+A producer `Session` keeps a bidirectional gRPC stream open and may
+have N `CreateTask` events in flight before the first `CreateAck`
+arrives. Each `CreateTask` carries a producer-assigned monotonically
+increasing `seq`; the server echoes it on the matching `CreateAck` so
+the client can correlate the reply to the originating `Produce` call.
 
 ```mermaid
 sequenceDiagram
   participant Session as Producer Session
-  participant Stream as Server Stream
-  participant Scheduler as SchedulerService
+  participant Wire as gRPC stream<br/>(producer :9092)
+  participant Server as producer.Server
   participant Pebble
-  Session->>Stream: CreateTask{seq=1}
-  Session->>Stream: CreateTask{seq=2}
-  Session->>Stream: CreateTask{seq=3}
-  Stream->>Scheduler: dispatch(seq=1)
-  Stream->>Scheduler: dispatch(seq=2)
-  Stream->>Scheduler: dispatch(seq=3)
-  Scheduler->>Pebble: BatchCommit(seq=2)
-  Pebble-->>Scheduler: ok
-  Scheduler-->>Stream: ack(seq=2)
-  Stream-->>Session: CreateAck{seq=2}
-  Scheduler->>Pebble: BatchCommit(seq=1)
-  Pebble-->>Scheduler: ok
-  Scheduler-->>Stream: ack(seq=1)
-  Stream-->>Session: CreateAck{seq=1}
-  Scheduler->>Pebble: BatchCommit(seq=3)
-  Pebble-->>Scheduler: ok
-  Scheduler-->>Stream: ack(seq=3)
-  Stream-->>Session: CreateAck{seq=3}
+  Session->>Wire: CreateTask{seq=1}
+  Session->>Wire: CreateTask{seq=2}
+  Session->>Wire: CreateTask{seq=3}
+  Wire->>Server: dispatch(seq=1)
+  Wire->>Server: dispatch(seq=2)
+  Wire->>Server: dispatch(seq=3)
+  Server->>Pebble: BatchCommit(seq=2)
+  Pebble-->>Server: ok
+  Server-->>Wire: ack(seq=2)
+  Wire-->>Session: CreateAck{seq=2}
+  Server->>Pebble: BatchCommit(seq=1)
+  Pebble-->>Server: ok
+  Server-->>Wire: ack(seq=1)
+  Wire-->>Session: CreateAck{seq=1}
+  Server->>Pebble: BatchCommit(seq=3)
+  Pebble-->>Server: ok
+  Server-->>Wire: ack(seq=3)
+  Wire-->>Session: CreateAck{seq=3}
 ```
 
-The producer correlates each `CreateAck` to the originating `Produce`
-call via `seq`, so callers see the right `taskID` even though the
-acknowledgments are interleaved. See
-[Producer streaming SDK](./35-producer-streaming-sdk.md) (U8) for the
-matching client API.
+Acks may arrive out of order relative to send order — the server fans
+each `CreateTask` into its own goroutine
+(`internal/producer/server.go:154`), so the order in which Pebble
+commits land determines the ack order. The seq is what binds the reply
+to the right caller.
 
-### Diagram 2: Worker Ready → Task → Result loop (single mode, count=1)
+For high-rate producers there is a batch form: `CreateTaskBatch` packs
+N requests into one wire frame and the server replies with one
+`CreateAckBatch`. The server processes the batch serially in a single
+goroutine (`handleCreateBatch` in `internal/producer/server.go`) — N
+goroutines per recv contended with the Pebble commit coalescer in
+profile, so the batch path keeps one goroutine and one allocation per
+recv.
 
-A worker opens one stream, completes the `Hello` / `HelloAck` handshake
-once, and then loops: declare capacity with `Ready{count=1}`, wait for
-a `Task`, process it, send a `Result`, and read the `ResultAck` before
-asking for the next task.
+### 2.2 Worker Ready → Task → Result loop (`:9091`, count=1)
+
+A worker opens one stream, completes `Hello`/`HelloAck` once, then
+loops: declare capacity with `Ready{count=1}`, receive one `Task`,
+process it, send a `Result`, and on to the next `Ready`.
 
 ```mermaid
 sequenceDiagram
   participant Worker
-  participant Server
-  Worker->>Server: Hello{token, worker_id}
-  Server-->>Worker: HelloAck{tenant_id}
+  participant Wire as gRPC stream<br/>(worker :9091)
+  participant Server as worker.Server
+  Worker->>Wire: Hello{token, worker_id}
+  Wire->>Server: validate token
+  Server-->>Wire: HelloAck{tenant_id}
+  Wire-->>Worker: HelloAck
   loop Ready -> Task -> Result
-    Worker->>Server: Ready{count=1}
-    Server-->>Worker: Task{id, command, payload}
+    Worker->>Wire: Ready{count=1}
+    Wire->>Server: ClaimTask
+    Server-->>Wire: Task{id, command, payload}
+    Wire-->>Worker: Task
     Note over Worker: Handler runs
-    Worker->>Server: Result{id, status}
-    Server-->>Worker: ResultAck{id}
+    Worker->>Wire: Result{id, status}
+    Wire->>Server: BatchCommit (status, body, ttl)
+    Server-->>Wire: ResultAck{id}
+    Wire-->>Worker: ResultAck (SDK drops it)
   end
 ```
 
-This is the path used when `Config.BatchSize <= 1`. See
-[Worker streaming SDK](./36-worker-streaming-sdk.md) (U9) for the slot
-model and reconnection rules.
+This is the path used when the worker SDK's `Config.BatchSize <= 1`.
+The SDK does not block on `ResultAck` — slot loops resume immediately
+after sending the `Result`. See
+[Worker streaming SDK § Concurrency model](./36-worker-streaming-sdk.md#concurrency-model)
+for why.
 
-### Diagram 3: Worker batch loop (Phase 6 Q2 + Phase 7)
+### 2.3 Worker batch loop (`:9091`, count=N)
 
 When `Config.BatchSize > 1`, the worker advertises capacity with
-`Ready{count=32}`. The server calls `ClaimManyTasks` against a single
-Pebble batch, returns up to 32 tasks in one `TaskBatch`, and the worker
-processes them locally before submitting a `ResultBatch`. Pebble commits
-once for the whole batch on the way in and once on the way out.
+`Ready{count=N}`. The server claims up to N tasks against a single
+Pebble batch via `ClaimMany`, returns one `TaskBatch`, and the worker
+processes all N before submitting one `ResultBatch`. Pebble commits
+once on the way in and once on the way out.
 
 ```mermaid
 sequenceDiagram
   participant Worker
-  participant Server
+  participant Wire as gRPC stream<br/>(worker :9091)
+  participant Server as worker.Server
   participant Pebble
-  Worker->>Server: Hello{token, worker_id}
-  Server-->>Worker: HelloAck{tenant_id}
+  Worker->>Wire: Hello{token, worker_id}
+  Wire->>Server: validate token
+  Server-->>Wire: HelloAck{tenant_id}
+  Wire-->>Worker: HelloAck
   loop Batch claim -> process -> submit
-    Worker->>Server: Ready{count=32}
-    Server->>Pebble: ClaimManyTasks(count=32)
-    Pebble-->>Server: BatchCommit(N tasks)
-    Server-->>Worker: TaskBatch{tasks[N<=32]}
-    Note over Worker: Handler processes N tasks
-    Worker->>Server: ResultBatch{results[N]}
-    Server->>Pebble: BatchSubmit(results[N])
-    Pebble-->>Server: ok
-    Server-->>Worker: ResultAckBatch{N}
+    Worker->>Wire: Ready{count=32}
+    Wire->>Server: ClaimManyTasks(32)
+    Server->>Pebble: one Batch (state + lease + ttl)
+    Pebble-->>Server: 32 task bodies
+    Server-->>Wire: TaskBatch{tasks[N<=32]}
+    Wire-->>Worker: TaskBatch
+    Note over Worker: Handler runs N times
+    Worker->>Wire: ResultBatch{results[N]}
+    Wire->>Server: BatchSubmit(results[N])
+    Server->>Pebble: one Batch (status + body + ttl)
+    Server-->>Wire: ResultAckBatch{N}
+    Wire-->>Worker: ResultAckBatch (SDK drops it)
   end
 ```
 
-The batch path is the one measured at 23,518 tasks/s in
-`internal/bench/worker_stream_saturation_test.go::TestSaturation_StreamPath`
-(c=4, `PHASE6_BATCH=32`). See
-[Worker streaming SDK](./36-worker-streaming-sdk.md) (U9) for how
-`Concurrency` and `BatchSize` combine to bound in-flight tasks.
+The batched path measures 23,518 tasks/s at c=4 BatchSize=32 in
+`internal/bench/worker_stream_saturation_test.go::TestSaturation_StreamPath`.
+At c=1 BatchSize=32 the same harness reports ~16k tasks/s — the
+client-side fan-out is already absorbed by the server's batched claim.
 
 ---
 
-## Part 1: Tutorials (Learning-Oriented)
+## 3. Connection lifecycle
 
-### Producer Streaming Tutorial
+A stream goes through three phases: handshake, in-flight, and close.
 
-#### Prerequisites
-- A running codeQ server (see `docs/00-getting-started.md`)
-- A valid bearer token with `producer` scope
-- Go 1.21 or later with `github.com/osvaldoandrade/codeq/pkg/producerclient`
+### 3.1 Open and handshake
 
-#### Step 1: Create a Session
+Both client SDKs dial via `grpc.NewClient` (lazy — no TCP yet) and then
+open the stream rpc. The first event on the wire must be `Hello`
+carrying the bearer token. The server validates the token via the
+configured `auth.Validator`, resolves the tenant, and replies with
+`HelloAck{tenantId, subject}`. Until the handshake completes, no
+domain events are accepted.
 
-```go
-package main
+| Failure | gRPC status | What the SDK returns |
+|---|---|---|
+| Empty / malformed token | `Unauthenticated` | `Connect` (producer) or `Run` (worker) returns the error wrapping the auth message. |
+| First event is not `Hello` | `FailedPrecondition` | Same — wrapped error. |
+| TLS handshake / dial failure | `Unavailable` | Same. The underlying `grpc.ClientConn` is still reusable; the stream is not. |
 
-import (
-	"context"
-	"log"
-	"time"
+The resolved `tenantID` and `subject` are stamped on the session and
+available as `Session.TenantID()` / `Session.Subject()` on the
+producer side. They are not exposed on the worker side because each
+claim already includes them on the `Task`.
 
-	"github.com/osvaldoandrade/codeq/pkg/producerclient"
-)
+### 3.2 In-flight
 
-func main() {
-	ctx := context.Background()
+After `HelloAck` the stream is in steady state. Both sides have one
+writer goroutine that owns the `stream.Send` side and one reader
+goroutine that owns `stream.Recv`. They are independent — sends and
+receives interleave freely on the same HTTP/2 stream, which is what
+makes pipelining work.
 
-	// Create a producer session
-	session, err := producerclient.Client{
-		Config: producerclient.Config{
-			Addr:  "localhost:9092",  // gRPC server address
-			Token: "your-bearer-token",
-		},
-	}.Connect(ctx)
-	if err != nil {
-		log.Fatalf("Failed to connect: %v", err)
-	}
-	defer session.Close()
+Application-level concurrency:
 
-	log.Println("Connected to producer stream")
-}
-```
+- **Producer**: many goroutines may call `Session.Produce` or
+  `Session.ProduceBatch` concurrently. Each call allocates a new
+  `seq`, registers a per-seq ack channel in `Session.pending`, and
+  pushes the event onto `sendCh`.
+- **Worker**: `Concurrency` slot goroutines each loop
+  Ready → recv batch → handler → Result. There is no cross-slot
+  coordination beyond the shared `batchCh` and `sendCh`.
 
-#### Step 2: Submit a Task
+### 3.3 Close
 
-```go
-// Inside the session context:
-task := producerclient.CreateTask{
-	Command: "send_email",
-	Payload: []byte(`{"email": "user@example.com", "subject": "Hello"}`),
-	Priority: 1,
-}
+There are four ways a stream ends:
 
-taskID, err := session.Produce(ctx, &task)
-if err != nil {
-	log.Fatalf("Failed to produce task: %v", err)
-}
-log.Printf("Task created: %s\n", taskID)
-```
+1. **Caller closes.** Producer: `Session.Close()` closes `sendCh`,
+   waits for the writer to drain, calls `stream.CloseSend()`, and
+   cancels the stream context so the reader exits. Worker: `Run`
+   returns when the parent ctx fires; the deferred `closeWriter`
+   drains the writer.
+2. **Caller cancels ctx.** Same teardown, propagated through the
+   derived stream context.
+3. **Server crashes / restarts.** The reader's `stream.Recv()` returns
+   a gRPC error (`codes.Unavailable` typically). The reader stores it,
+   fans the error out to every pending seq (producer), and exits.
+   In-flight `Produce` calls return `producerclient: stream closed: …`;
+   in-flight worker slots see the error on their next `send` and exit.
+4. **Network drop mid-stream.** Identical to (3) from the client's
+   point of view — the gRPC runtime surfaces a transport error on
+   `Recv` and/or `Send`.
 
-#### Step 3: Submit Multiple Tasks Concurrently
-
-The producer client supports pipelining: multiple `Produce` calls from different goroutines can be in flight simultaneously, waiting only for their individual acknowledgments.
-
-```go
-import "sync"
-
-// Submit 100 tasks concurrently
-var wg sync.WaitGroup
-for i := 0; i < 100; i++ {
-	wg.Add(1)
-	go func(i int) {
-		defer wg.Done()
-		task := producerclient.CreateTask{
-			Command: "process_data",
-			Payload: []byte(`{"id": ` + string(rune(i)) + `}`),
-		}
-		taskID, err := session.Produce(ctx, &task)
-		if err != nil {
-			log.Printf("Task %d failed: %v\n", i, err)
-		} else {
-			log.Printf("Task %d created: %s\n", i, taskID)
-		}
-	}(i)
-}
-wg.Wait()
-```
+The recovery pattern is the same for all of these: drop the dead
+`Session`, dial a new one via `Client.Connect` (producer) or `Run`
+(worker), and resume. The outer retry loop is application code; the
+SDK does not paper over a dead stream.
 
 ---
 
-### Worker Streaming Tutorial
+## 4. Backpressure
 
-#### Prerequisites
-- A running codeQ server with tasks available
-- A valid bearer token with `worker` scope
-- Go 1.21 or later with `github.com/osvaldoandrade/codeq/pkg/workerclient`
+The streaming surface combines two backpressure mechanisms.
 
-#### Step 1: Define a Task Handler
+### 4.1 gRPC HTTP/2 flow control
 
-```go
-package main
+gRPC inherits HTTP/2's per-stream window. If the receiver is slow,
+`stream.Send` on the sender side blocks until the receiver advances
+the window. This is the wire-level backpressure and it operates
+without any application involvement.
 
-import (
-	"context"
-	"encoding/json"
-	"log"
+### 4.2 Channel-bounded send queues
 
-	"github.com/osvaldoandrade/codeq/pkg/workerclient"
-)
+On top of HTTP/2, every server-side `streamSession` and client-side
+`session` runs its writes through a single writer goroutine that
+drains a buffered channel of capacity 256:
 
-func handleTask(ctx context.Context, task workerclient.Task) workerclient.Result {
-	log.Printf("Processing task: %s (command: %s)\n", task.ID, task.Command)
+| Side | Constant | Location |
+|---|---|---|
+| Producer server | `sendChanBuffer` | `internal/producer/server.go:70` |
+| Worker server | `sendChanBuffer` | `internal/worker/server.go:98` |
+| Producer client | `sendChanBufferClient` | `pkg/producerclient/client.go:136` |
+| Worker client | `sendChanBufferClient` | `pkg/workerclient/client.go:169` |
 
-	// Parse the payload
-	var payload map[string]interface{}
-	if err := json.Unmarshal(task.Payload, &payload); err != nil {
-		return workerclient.Failed(task.ID, err.Error())
-	}
+The channel-based pattern replaces a mutex around `stream.Send` that
+profiling showed contributed ~74% of the worker server's mutex
+profile under 128-slot load (and ~26% of the matching client profile).
+The fix: one writer per direction, every caller pushes events onto a
+buffered channel, the writer drains it FIFO.
 
-	// Simulate processing
-	result := map[string]interface{}{"processed": true}
-	resultJSON, _ := json.Marshal(result)
+The buffer size (256) bounds how many events can queue between the
+caller and the wire. When it fills:
 
-	return workerclient.Completed(task.ID, resultJSON)
-}
+- Producer server: per-event handler goroutines block on
+  `sess.send(...)`, which pressures the read loop's per-event
+  goroutine spawn rate (`internal/producer/server.go:101`). Since the
+  read loop reads as fast as it can, the bound effectively backs into
+  the producer client — `stream.Recv` on the producer client side
+  blocks on HTTP/2 flow control, which blocks `stream.Send` on the
+  client, which blocks the slot pushing onto its own `sendCh`.
+- Worker server: same propagation in the other direction. Slow worker
+  → server's `sendCh` fills → handlers block on `sess.send` → less new
+  work is dispatched.
 
-func main() {
-	ctx := context.Background()
+This is intentional. A slow consumer that does not drain its acks
+must eventually slow its producer down rather than accumulate
+unbounded memory. The bound is 256 events × the maximum event size,
+which is small in practice because protobuf events are compact.
 
-	// Create a worker session with concurrency
-	client := workerclient.Client{
-		Config: workerclient.Config{
-			Addr:        "localhost:9091",  // gRPC server address
-			Token:       "your-bearer-token",
-			WorkerID:    "worker-1",
-			Concurrency: 5,  // Process up to 5 tasks in parallel
-		},
-		Handler: handleTask,
-	}
+### 4.3 What you should and should not see
 
-	// Run the worker (blocks until context is cancelled)
-	if err := client.Run(ctx); err != nil {
-		log.Fatalf("Worker error: %v", err)
-	}
-}
-```
+Healthy operation: the writer's channel has 0–2 events queued; the
+slot loops process tasks at full handler rate; ack latency tracks
+Pebble commit latency.
 
-#### Step 2: Handle Task Completion Types
-
-Workers can signal different completion states:
-
-```go
-import "github.com/osvaldoandrade/codeq/pkg/workerclient"
-
-func advancedHandler(ctx context.Context, task workerclient.Task) workerclient.Result {
-	switch task.Command {
-	case "send_email":
-		if err := sendEmail(task); err != nil {
-			// Permanent failure - don't retry
-			return workerclient.Failed(task.ID, err.Error())
-		}
-		return workerclient.Completed(task.ID, nil)
-
-	case "long_operation":
-		// Temporary failure - requeue after 30 seconds
-		return workerclient.Nack(task.ID, 30, "service unavailable")
-
-	case "cleanup":
-		// Release task immediately without result
-		return workerclient.Abandon(task.ID)
-
-	default:
-		return workerclient.Failed(task.ID, "unknown command")
-	}
-}
-```
+Saturation symptoms: rising ack latency, `ctx.Err()` returns from
+slow callers, `sendCh` overflow logs (none today — overflow surfaces
+as `ctx.Done()` falling through in `send`). If you see those, the
+consumer is slower than the producer and either capacity needs to
+grow or the producer needs to back off.
 
 ---
 
-## Part 2: How-To Guides (Problem-Oriented)
+## 5. Authentication
 
-### How to Enable TLS/mTLS
+Both producer and worker authenticate with a bearer token carried on
+the first event of the stream:
 
-The producer and worker clients support custom gRPC dial options for TLS.
+```protobuf
+// producerpb.Hello
+message Hello { string token = 1; }
 
-**Producer with TLS:**
-
-```go
-import (
-	"crypto/tls"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-)
-
-tlsConfig := &tls.Config{
-	InsecureSkipVerify: false,  // Enable certificate verification
-}
-
-session, err := producerclient.Client{
-	Config: producerclient.Config{
-		Addr:  "codeq.example.com:9092",
-		Token: "your-token",
-		DialOptions: []grpc.DialOption{
-			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		},
-	},
-}.Connect(ctx)
+// workerpb.Hello
+message Hello { string token = 1; string worker_id = 2; }
 ```
 
-**Worker with mTLS:**
+The server passes the token to the configured `auth.Validator`
+(`pkg/auth/`) which returns `Claims{Subject, EventTypes, Audience,
+TenantID, …}`. The session stores the resolved tenant and subject
+once; every subsequent event inherits them. There is no way for a
+client to override the tenant after the handshake.
+
+### 5.1 Scopes
+
+The worker server enforces per-event scope checks against the claims
+(`internal/worker/server.go`):
+
+| Event | Required scope |
+|---|---|
+| `Ready` | `codeq:claim` |
+| `Result`, `ResultBatch` | `codeq:result` |
+| `Nack` | `codeq:result` |
+| `Heartbeat` | `codeq:result` |
+| `Abandon` | `codeq:result` |
+
+If the scope is missing, the event is silently ignored (the slot will
+retry the Ready loop). The producer server does not currently scope-
+check `CreateTask` separately — tenancy is established at `Hello` and
+the event itself carries no scope-distinguishable variants.
+
+### 5.2 Token rotation
+
+There is no on-stream rotation. To swap tokens, the client must close
+the session and reopen with the new token. Long-lived workers should
+either pin a long-lived token (operationally simple) or wrap `Run` in
+a retry loop that refreshes the token on disconnect.
+
+---
+
+## 6. Go SDK entry points
+
+A minimal producer-and-worker pair against the protocol above:
 
 ```go
-cert, err := tls.LoadX509KeyPair("/path/to/client.crt", "/path/to/client.key")
-if err != nil {
-	log.Fatal(err)
-}
+// Producer side
+cli, _ := producerclient.New(producerclient.Config{
+    Addr:  "localhost:9092",
+    Token: os.Getenv("CODEQ_PRODUCER_TOKEN"),
+})
+defer cli.Close()
+sess, _ := cli.Connect(ctx)
+defer sess.Close()
+taskID, err := sess.Produce(ctx, producerclient.CreateRequest{
+    Command: "PROCESS_ORDER",
+    Payload: []byte(`{"orderId":"123"}`),
+})
 
-tlsConfig := &tls.Config{
-	Certificates: []tls.Certificate{cert},
-	ServerName:   "codeq.example.com",
-}
-
-err := workerclient.Client{
-	Config: workerclient.Config{
-		Addr:  "codeq.example.com:9091",
-		Token: "your-token",
-		DialOptions: []grpc.DialOption{
-			grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
-		},
-	},
-	Handler: handleTask,
-}.Run(ctx)
+// Worker side
+w, _ := workerclient.New(workerclient.Config{
+    Addr:        "localhost:9091",
+    Token:       os.Getenv("CODEQ_WORKER_TOKEN"),
+    Commands:    []string{"PROCESS_ORDER"},
+    Concurrency: 4,
+})
+defer w.Close()
+err = w.Run(ctx, func(ctx context.Context, t workerclient.Task) workerclient.Result {
+    return workerclient.Completed(map[string]any{"ok": true})
+})
 ```
 
-### How to Configure Retry and Backoff
+Full SDK references — error handling, batching, TLS dial options,
+retry patterns, and complete runnable programs — live in the dedicated
+docs:
 
-The worker client respects the task's `MaxAttempts` setting. Use `Nack` to request requeuing with a delay:
+- [Producer streaming SDK](./35-producer-streaming-sdk.md) — covers
+  `Config`, `Client.Connect`, `Session.Produce`, `Session.ProduceBatch`,
+  the seq correlation model, and the batch-mode trade-offs.
+- [Worker streaming SDK](./36-worker-streaming-sdk.md) — covers
+  `Config`, `Client.Run`, the `Handler` contract, the four `Result`
+  builders, slot concurrency, batch sizing guidance, and lease
+  management.
 
-```go
-func handleWithRetry(ctx context.Context, task workerclient.Task) workerclient.Result {
-	// Check attempt count
-	if task.Attempts >= task.MaxAttempts {
-		return workerclient.Failed(task.ID, "max attempts exceeded")
-	}
+For TLS/mTLS, both SDKs accept `[]grpc.DialOption` via
+`Config.DialOptions`; with `DialOptions` empty the dial uses
+`insecure.NewCredentials()` — appropriate for loopback only. The
+server's matching TLS configuration is in `codeq.yml` under
+`workerStreamTLS` / `producerStreamTLS`; see
+[Configuration](./14-configuration.md).
 
-	// Try the operation with exponential backoff
-	delaySeconds := 1 << uint(task.Attempts)  // 1, 2, 4, 8, ...
-	if delaySeconds > 300 {
-		delaySeconds = 300  // Cap at 5 minutes
-	}
+---
 
-	if err := tryOperation(ctx); err != nil {
-		if isTransient(err) {
-			return workerclient.Nack(task.ID, delaySeconds, err.Error())
-		}
-		return workerclient.Failed(task.ID, err.Error())
-	}
+## 7. Reference: events on the wire
 
-	return workerclient.Completed(task.ID, nil)
-}
-```
+The full protobuf definitions live at
+`internal/producer/proto/producerpb.proto` and
+`internal/worker/proto/workerpb.proto`. The subset below is the
+behavioural contract — what each event means and which direction it
+flows.
 
-### How to Handle Streaming Disconnections
+### 7.1 Producer (`:9092`)
 
-Both client types handle reconnections automatically. To implement custom reconnection logic:
+| Event | Direction | Purpose |
+|---|---|---|
+| `Hello` | client → server | First message; bearer token. |
+| `HelloAck` | server → client | Resolved `tenant_id` and `subject`. |
+| `CreateTask` | client → server | One task; carries producer-assigned `seq`. |
+| `CreateAck` | server → client | One reply; echoes `seq`, carries `task_id` or `error_message`. |
+| `CreateTaskBatch` | client → server | N tasks in one frame; each carries its own `seq`. |
+| `CreateAckBatch` | server → client | N acks in one frame, in input order. |
+| `ServerError` | server → client | Protocol error; the stream may still be alive. |
+
+`CreateTask` fields mirror the REST POST body: `command`, `payload`,
+`priority`, `webhook`, `max_attempts`, `idempotency_key`, `run_at`,
+`delay_seconds`, `trace_parent`, `trace_state`.
+
+### 7.2 Worker (`:9091`)
+
+| Event | Direction | Purpose |
+|---|---|---|
+| `Hello` | client → server | First message; bearer token + optional `worker_id`. |
+| `HelloAck` | server → client | Resolved `tenant_id`, `worker_id`. |
+| `Ready` | client → server | Declare capacity for `count` tasks; optional `commands` filter, `lease_seconds`. |
+| `Task` | server → client | One task in response to `Ready{count=1}`. |
+| `TaskBatch` | server → client | Up to `count` tasks in response to `Ready{count>1}`. |
+| `Result` | client → server | Per-task completion (`COMPLETED` or `FAILED`). |
+| `ResultBatch` | client → server | Per-batch completion; server runs `BatchSubmit`. |
+| `Nack` | client → server | Requeue with `delay_seconds`. |
+| `Abandon` | client → server | Release lease without writing a result. |
+| `Heartbeat` | client → server | Extend the lease on an in-flight task. |
+| `ResultAck`, `ResultAckBatch`, `NackAck`, `AbandonAck`, `HeartbeatAck` | server → client | Per-event acks. SDK drops them. |
+| `ServerError` | server → client | Protocol error. |
+
+`Ready.count` is the only knob that switches the single-task path
+(`count<=1`) for the batch path (`count>1`).
+
+### 7.3 Sequencing and ordering
 
 **Producer:**
-
-```go
-session, err := producerclient.Client{...}.Connect(ctx)
-if err != nil {
-	// Implement exponential backoff and retry
-	retries := 0
-	for retries < maxRetries {
-		time.Sleep(time.Duration(math.Pow(2, float64(retries))) * time.Second)
-		session, err = producerclient.Client{...}.Connect(ctx)
-		if err == nil {
-			break
-		}
-		retries++
-	}
-}
-```
+- `seq` is producer-assigned and strictly monotonic per session
+  (`Session.seq.Add(1)` atomic).
+- The server echoes `seq` on the matching `CreateAck`.
+- Acks may arrive out of order — the server fans each `CreateTask`
+  into its own goroutine.
 
 **Worker:**
-
-```go
-for {
-	err := workerclient.Client{...}.Run(ctx)
-	if err != nil {
-		log.Printf("Worker disconnected: %v", err)
-		time.Sleep(5 * time.Second)
-		// Reconnect on next loop iteration
-	}
-}
-```
-
-### How to Monitor Streaming Performance
-
-Both clients emit structured logging events. Configure a custom logger:
-
-```go
-import "log/slog"
-
-handler := slog.NewJSONHandler(os.Stderr, nil)
-logger := slog.New(handler)
-
-session, err := producerclient.Client{
-	Config: producerclient.Config{
-		Addr:   "localhost:9092",
-		Token:  "your-token",
-		Logger: logger,
-	},
-}.Connect(ctx)
-```
-
-The logger receives:
-- `level=info msg="connected"` - Stream established
-- `level=warn msg="ack_timeout"` - Acknowledgment delayed
-- `level=error msg="stream_error"` - Protocol errors
-
-### How to Use Batch Mode (Phase 6)
-
-Phase 6 introduces batch submission and claiming for higher throughput:
-
-**Producer batch mode:**
-
-```go
-batch := producerclient.CreateTaskBatch{
-	Tasks: []producerclient.CreateTask{
-		{Command: "task1", Payload: []byte(`{}`)},
-		{Command: "task2", Payload: []byte(`{}`)},
-		{Command: "task3", Payload: []byte(`{}`)},
-	},
-}
-
-ackBatch, err := session.ProduceBatch(ctx, &batch)
-if err != nil {
-	log.Fatal(err)
-}
-
-for i, ack := range ackBatch.Acks {
-	if !ack.Ok {
-		log.Printf("Task %d failed: %s\n", i, ack.ErrorMessage)
-	} else {
-		log.Printf("Task %d created: %s\n", i, ack.TaskID)
-	}
-}
-```
-
-**Worker batch mode (automatic):**
-
-```go
-client := workerclient.Client{
-	Config: workerclient.Config{
-		Addr:        "localhost:9091",
-		Token:       "your-token",
-		Concurrency: 10,
-		BatchSize:   5,  // Claim up to 5 tasks per batch
-	},
-	Handler: handleTask,
-}
-
-// Automatically uses batch mode when BatchSize > 1
-client.Run(ctx)
-```
+- Tasks within a single tenant + command are claimed in
+  (priority desc, FIFO) order; see
+  [Queueing model](./05-queueing-model.md).
+- `ResultBatch` is applied atomically against Pebble — partial
+  success is not exposed to the worker.
 
 ---
 
-## Part 3: Technical Reference (Information-Oriented)
-
-### Producer Streaming API
-
-#### Protocol Messages
-
-**Client → Server:**
-
-- `Hello` (first message): Bearer token for authentication
-- `CreateTask`: Submit a single task
-- `CreateTaskBatch`: Submit multiple tasks in one message
-
-**Server → Client:**
-
-- `HelloAck`: Confirms authentication; includes tenant_id and subject
-- `CreateAck`: Acknowledges a single task; includes task_id or error_message
-- `CreateAckBatch`: Acknowledges multiple tasks
-- `ServerError`: Stream-level error
-
-#### CreateTask Message
-
-```protobuf
-message CreateTask {
-  uint64 seq = 1;                              // Monotonically increasing sequence
-  string command = 2;                          // Task command (required)
-  bytes payload = 3;                           // Opaque JSON payload
-  int32 priority = 4;                          // Task priority (0-255)
-  string webhook = 5;                          // Optional webhook URL
-  int32 max_attempts = 6;                      // Max retry attempts
-  string idempotency_key = 7;                  // Deduplication key
-  google.protobuf.Timestamp run_at = 8;        // Scheduled run time
-  int32 delay_seconds = 9;                     // Delay before claiming
-  string trace_parent = 10;                    // W3C trace context
-  string trace_state = 11;                     // W3C trace state
-}
-```
-
-#### Session.Produce Method
-
-```go
-func (s *Session) Produce(ctx context.Context, task *CreateTask) (string, error)
-```
-
-- **Behavior:** Blocks until the matching `CreateAck` arrives or context cancels
-- **Returns:** Task ID on success; error on failure or timeout
-- **Concurrency:** Safe for concurrent calls from multiple goroutines (pipelining)
-
-#### Session.ProduceBatch Method
-
-```go
-func (s *Session) ProduceBatch(ctx context.Context, batch *CreateTaskBatch) (*CreateAckBatch, error)
-```
-
-- **Behavior:** Submits multiple tasks in a single message; blocks until `CreateAckBatch` arrives
-- **Returns:** Batch acknowledgments; order matches input order
-- **Performance:** Lower latency and network overhead than individual `Produce` calls
-
-#### Error Handling
-
-Errors are returned in the `CreateAck.error_message` field:
-
-| Error Message | Meaning | Retryable |
-|:---|:---|:---:|
-| `"invalid_command"` | Command not recognized | No |
-| `"invalid_payload"` | Payload is not valid JSON | No |
-| `"invalid_priority"` | Priority out of range | No |
-| `"duplicate_key"` | Idempotency key already used | No |
-| `"internal_error"` | Server-side error | Yes |
-| `"unavailable"` | Server temporarily unavailable | Yes |
-
----
-
-### Worker Streaming API
-
-#### Protocol Messages
-
-**Client → Server:**
-
-- `Hello` (first message): Bearer token; includes optional worker_id
-- `Ready`: Declare capacity for N tasks
-- `Result`: Submit task completion (COMPLETED or FAILED)
-- `Nack`: Requeue task with delay
-- `Heartbeat`: Extend lease on in-flight task
-- `Abandon`: Release task without result
-- `ResultBatch`: Submit results for multiple tasks
-
-**Server → Client:**
-
-- `HelloAck`: Confirms authentication; includes tenant_id and scopes
-- `TaskAssignment`: Single task assignment (legacy/single-task mode)
-- `TaskBatch`: Multiple tasks (batch mode, Phase 6)
-- `ResultAck`: Acknowledgment of result submission
-- `ServerError`: Stream-level error
-
-#### Ready Message
-
-```protobuf
-message Ready {
-  repeated string commands = 1;    // Restrict to specific commands (empty = all)
-  int32 lease_seconds = 2;         // Lease duration for assigned tasks
-  int32 count = 3;                 // Max tasks to claim per Ready
-}
-```
-
-- **count = 1 or 0:** Server responds with single `TaskAssignment`
-- **count > 1:** Server responds with `TaskBatch` (up to `count` tasks)
-
-#### Result Message
-
-```protobuf
-message Result {
-  string task_id = 1;              // ID of completed task
-  string status = 2;               // "COMPLETED" or "FAILED"
-  bytes result_json = 3;           // Result payload (if COMPLETED)
-  string error = 4;                // Error message (if FAILED)
-}
-```
-
-#### Result Disposition Types
-
-| Method | Purpose | Behavior |
-|:---|:---|:---|
-| `Completed(id, payload)` | Task succeeded | Task marked COMPLETED; payload stored |
-| `Failed(id, error)` | Task failed permanently | Task marked FAILED; respects MaxAttempts |
-| `Nack(id, delaySeconds, reason)` | Temporary failure | Task returned to queue; requeue after delay |
-| `Abandon(id)` | Graceful shutdown | Task lease released; returns to PENDING |
-
-#### Config.Concurrency
-
-Controls how many tasks the worker claims in parallel:
-
-```go
-Config{
-	Concurrency: 5,  // Up to 5 tasks claimed simultaneously
-}
-```
-
-Each slot runs an independent `Ready → Task(s) → Result(s)` cycle:
-- Slot 1: Ready → TaskAssignment → Result → Ready → ...
-- Slot 2: Ready → TaskAssignment → Result → Ready → ...
-- ...
-- Slot 5: Ready → TaskAssignment → Result → Ready → ...
-
-One slot's error does not block other slots.
-
-#### Config.BatchSize
-
-When `BatchSize > 1`, the worker requests multiple tasks per `Ready`:
-
-```go
-Config{
-	Concurrency: 5,
-	BatchSize:   10,  // Each slot claims up to 10 tasks per batch
-}
-```
-
-The server responds with `TaskBatch` containing up to 10 tasks, which the worker processes sequentially before sending the next `Ready`.
-
-#### Error Handling
-
-Errors are returned in `ServerError` or cause stream closure:
-
-| Condition | Handling |
-|:---|:---|
-| Invalid token | Stream closes with `Unauthenticated` status |
-| Unknown command | `Ready` is ignored; server continues listening |
-| Task not found | `Result` returns `NOT_FOUND` error |
-| Worker not authorized | Stream closes with `PermissionDenied` status |
-
----
-
-### Shared Concepts
-
-#### Authentication
-
-Both producer and worker use bearer tokens:
-
-```go
-Config{
-	Token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-}
-```
-
-The token is validated exactly once when `Hello` is sent. All subsequent messages inherit the authenticated tenant and subject.
-
-#### Sequencing and Ordering
-
-**Producer:**
-- Request seq numbers must be monotonically increasing per stream
-- Server echoes seq in `CreateAck` for correlation
-- No ordering guarantee on acknowledgments across concurrent `Produce` calls
-
-**Worker:**
-- Tasks are assigned in priority order (highest first)
-- Within same priority, FIFO order
-- Results are applied atomically; no ordering constraints
-
-#### Throughput Characteristics
-
-| Path | Throughput | Latency | Notes |
-|:---|:---|:---|:---|
-| REST POST /tasks | ~10k tasks/sec | 5-10ms | One HTTP round-trip per task |
-| Producer stream (serial) | ~20k tasks/sec | 2-4ms | Pipelined; amortized auth |
-| Producer stream (batch) | ~33k tasks/sec | 1-2ms | Batch message coalescing |
-| Worker REST | ~2k tasks/sec | 10-20ms | Two HTTP round-trips per task |
-| Worker stream (serial) | ~5k tasks/sec | 3-5ms | Single stream; concurrency=1 |
-| Worker stream (batch) | ~15k tasks/sec | 2-4ms | Concurrency=5; BatchSize=10 |
-
----
-
-## Part 4: Explanation (Understanding-Oriented)
-
-### Why Streaming?
-
-The HTTP REST API processes each request independently:
-
-1. **Per-request overhead:** Each `POST /tasks` or `POST /tasks/{id}/result` incurs:
-   - TLS handshake (if new connection)
-   - Bearer token validation
-   - Tenant lookup
-   - Middleware execution (logging, instrumentation)
-   - HTTP/2 frame overhead
-
-2. **Ceiling:** The middleware tax and network stack latency create a practical throughput ceiling around 10k requests/sec per producer/worker.
-
-The streaming API amortizes these costs across many messages on a single stream:
-
-1. **Single auth:** Bearer token validated once at stream open
-2. **Persistent connection:** No handshake or connection setup on each message
-3. **Minimal overhead:** gRPC messages are binary; no HTTP middleware
-4. **Pipelining:** Multiple requests in flight; acknowledgments arrive asynchronously
-
-Result: **2-3x higher throughput** with **lower latency**.
-
-### Concurrency Model (Worker)
-
-The worker client uses a slot-based concurrency model:
-
-```
-config.Concurrency = 3  (three independent cycles running in parallel)
-
-Slot 1:  Ready → TaskAssignment → Result → Ready → ...
-Slot 2:  Ready → TaskAssignment → Result → Ready → ...
-Slot 3:  Ready → TaskAssignment → Result → Ready → ...
-```
-
-Each slot:
-- Sends a `Ready` message declaring capacity
-- Receives one or more `TaskAssignment` messages (or a `TaskBatch` in batch mode)
-- Processes tasks sequentially via the `Handler` callback
-- Sends `Result` messages back
-- Loops back to `Ready`
-
-**Advantages:**
-- Simple: each slot is a single goroutine; no complex synchronization
-- Resilient: one slot's error doesn't block other slots
-- Scalable: total in-flight tasks = `Concurrency * BatchSize`
-
-### Batch Mode (Phase 6)
-
-Phase 6 introduces batch submission and claiming:
-
-**Producer batch mode:**
-- Instead of `CreateTask` messages, send `CreateTaskBatch` with multiple tasks
-- Server processes batch with one fan-out goroutine instead of per-task goroutines
-- Pebble commit coalescer (Phase 1.1) merges batched writes into fewer commits
-- Result: reduced gRPC framing, fewer context switches, better CPU cache locality
-- **Improvement:** +4% throughput
-
-**Worker batch mode:**
-- Worker sends `Ready` with `count > 1`
-- Server responds with `TaskBatch` containing up to `count` tasks
-- Worker processes tasks sequentially, then sends `ResultBatch`
-- **Improvement:** Reduced Ready→Task latency; better server-side load distribution
-
-### Protocol Design Philosophy
-
-1. **Simplicity:** Few message types; clear state machine
-2. **Async-first:** No blocking on either side; multiple requests in flight
-3. **Correlation:** Seq numbers allow producer to match responses to requests without round-tripping
-4. **Streaming:** Long-lived bidirectional connections; no reconnect per message
-5. **Compatibility:** Worker streaming phase is optional; REST APIs unchanged
-
----
-
-## Part 5: Examples
-
-### Example 1: Bulk Task Submission
-
-```go
-// Submit 10,000 tasks with pipelining
-package main
-
-import (
-	"context"
-	"log"
-	"sync"
-	"sync/atomic"
-	"time"
-
-	"github.com/osvaldoandrade/codeq/pkg/producerclient"
-)
-
-func main() {
-	session, err := producerclient.Client{
-		Config: producerclient.Config{
-			Addr:  "localhost:9092",
-			Token: "token",
-		},
-	}.Connect(context.Background())
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer session.Close()
-
-	ctx := context.Background()
-	var produced int64
-	start := time.Now()
-
-	// Submit tasks from 10 goroutines concurrently
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 1000; j++ {
-				task := producerclient.CreateTask{
-					Command: "process",
-					Payload: []byte(`{"id": 123}`),
-				}
-				if _, err := session.Produce(ctx, &task); err == nil {
-					atomic.AddInt64(&produced, 1)
-				}
-			}
-		}()
-	}
-
-	wg.Wait()
-	elapsed := time.Since(start)
-	rate := float64(produced) / elapsed.Seconds()
-	log.Printf("Produced %d tasks in %.2fs (%.0f tasks/sec)\n", produced, elapsed.Seconds(), rate)
-}
-```
-
-### Example 2: Worker with Graceful Shutdown
-
-```go
-package main
-
-import (
-	"context"
-	"log"
-	"os"
-	"os/signal"
-	"syscall"
-
-	"github.com/osvaldoandrade/codeq/pkg/workerclient"
-)
-
-func handleTask(ctx context.Context, task workerclient.Task) workerclient.Result {
-	log.Printf("Task %s: %s\n", task.ID, task.Command)
-	// Simulate work
-	return workerclient.Completed(task.ID, nil)
-}
-
-func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Graceful shutdown on SIGTERM
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		sig := <-sigChan
-		log.Printf("Received signal: %v. Shutting down...\n", sig)
-		cancel()
-	}()
-
-	client := workerclient.Client{
-		Config: workerclient.Config{
-			Addr:        "localhost:9091",
-			Token:       "token",
-			Concurrency: 5,
-		},
-		Handler: handleTask,
-	}
-
-	if err := client.Run(ctx); err != nil {
-		log.Printf("Worker stopped: %v\n", err)
-	}
-}
-```
-
-### Example 3: Error Handling and Retries
-
-```go
-package main
-
-import (
-	"context"
-	"encoding/json"
-	"errors"
-	"log"
-	"time"
-
-	"github.com/osvaldoandrade/codeq/pkg/workerclient"
-)
-
-func handleEmailTask(ctx context.Context, task workerclient.Task) workerclient.Result {
-	var payload struct {
-		Email string `json:"email"`
-	}
-	if err := json.Unmarshal(task.Payload, &payload); err != nil {
-		return workerclient.Failed(task.ID, "invalid payload: "+err.Error())
-	}
-
-	// Simulate email sending with transient failure
-	if err := sendEmail(payload.Email); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			// Transient: timeout, retry after 30s
-			return workerclient.Nack(task.ID, 30, "timeout")
-		}
-		// Check if permanent
-		if isPermanent(err) {
-			return workerclient.Failed(task.ID, err.Error())
-		}
-		// Unknown: let retries decide
-		return workerclient.Nack(task.ID, 10, err.Error())
-	}
-
-	return workerclient.Completed(task.ID, nil)
-}
-
-func sendEmail(email string) error {
-	// Simulate flaky service
-	return errors.New("service temporarily unavailable")
-}
-
-func isPermanent(err error) bool {
-	return errors.Is(err, errors.New("invalid email"))
-}
-```
-
----
-
-## Glossary
+## 8. Glossary
 
 | Term | Definition |
-|:---|:---|
-| **Stream** | Long-lived bidirectional gRPC connection |
-| **Session** | Producer-side wrapper around a stream; provides `Produce` and `ProduceBatch` methods |
-| **Ready** | Worker message declaring capacity for tasks |
-| **TaskAssignment** | Server response with a single task (legacy mode) |
-| **TaskBatch** | Server response with multiple tasks (Phase 6, batch mode) |
-| **Seq** | Producer-assigned monotonically-increasing sequence number for correlation |
-| **Ack** | Server acknowledgment of task submission (includes task_id or error) |
-| **Lease** | Time window during which a worker exclusively holds a task |
-| **Nack** | Worker rejection of task with requeue request |
-| **Abandon** | Worker release of task lease without result |
-| **Slot** | Independent worker concurrency unit running Ready→Task→Result cycles |
-| **Tenant** | Isolated namespace for tasks and workers; resolved from bearer token |
-| **Pipelining** | Multiple requests in flight before first response arrives |
+|---|---|
+| **Stream** | One long-lived gRPC bidirectional rpc on one HTTP/2 connection. |
+| **Session** | Producer-side wrapper over a stream; exposes `Produce`, `ProduceBatch`, `Close`. |
+| **Slot** | Worker-side independent goroutine running `Ready → Task → Result`. There are `Config.Concurrency` of them per `Run`. |
+| **Seq** | Producer-assigned monotonic uint64 carried on `CreateTask`; the correlation key for `CreateAck`. |
+| **Backpressure** | Combined effect of gRPC HTTP/2 flow control and per-stream `sendCh` bounded channel. |
+| **Fan-out** | The pattern of spawning one goroutine per event on the server side so a slow downstream call (Pebble commit) does not block the read loop. |
+| **Lease** | Time window during which a worker exclusively owns a task. Kept in the server's in-memory `leaseTable`. |
+| **Nack** | Worker rejection that requeues the task after a delay. |
+| **Abandon** | Worker release of the lease without writing a result. |
+| **Tenant** | Isolation boundary established at `Hello` from the validated token's claims. |
 
 ---
 
 ## See also
 
-- [Producer streaming SDK](./35-producer-streaming-sdk.md) — client API
-  behind Diagram 1 (U8).
-- [Worker streaming SDK](./36-worker-streaming-sdk.md) — client API
-  behind Diagrams 2 and 3 (U9).
-- [HTTP API](./04-http-api.md) — REST surface; streaming is an opt-in
-  alternative for hot paths.
-- [Performance tuning](./17-performance-tuning.md) — knobs that govern
-  `Concurrency`, `BatchSize`, and the Pebble commit coalescer cited in
-  Diagram 3.
+- [Producer streaming SDK](./35-producer-streaming-sdk.md) — Go client
+  for the producer stream.
+- [Worker streaming SDK](./36-worker-streaming-sdk.md) — Go client for
+  the worker stream.
+- [HTTP API](./04-http-api.md) — REST surface. The streaming surface
+  is opt-in; REST stays available.
+- [Performance tuning](./17-performance-tuning.md) — `Concurrency`,
+  `BatchSize`, and the Pebble commit coalescer cited above.
+- [Performance baselines](./30-performance-baselines.md) — raw bench
+  output for every measured number cited here.
