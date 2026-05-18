@@ -1,89 +1,155 @@
-# codeQ Specification
+# codeQ Documentation
 
-This specification defines codeq, a reactive task queue with an embedded
-Pebble persistence engine (CockroachDB's RocksDB-style LSM). codeq is
-implemented in Go and runs as a single binary — server, persistence
-layer, lease table, and gRPC + HTTP API all in one process.
+codeQ is a reactive task queue with an embedded Pebble persistence engine
+(CockroachDB's RocksDB-style LSM). It is written in Go and runs as a single
+binary — HTTP/gRPC API, queueing logic, lease table, and on-disk LSM live
+inside one process.
 
-> **Note on Documentation Structure**: This `docs/` directory contains the **canonical specification and technical documentation** organized by the [Diátaxis framework](https://diataxis.fr/).
+This index is organised by **user journey**. Pick the section that matches
+what you're trying to do; each entry says what's actually in the file.
 
-## Index
+---
 
-### Tutorials (Learning-Oriented)
+## 1. New to codeQ? Start here
 
-0. `docs/00-getting-started.md` - Step-by-step tutorial for first-time users
+- [`00-getting-started.md`](00-getting-started.md) — zero to a running task in
+  ~10 minutes on a single node (download, start, enqueue, claim, complete).
+- [`01-overview.md`](01-overview.md) — what codeQ is, in CS terms: queue
+  semantics, persistence model, process layout.
+- `43-tutorial-raft-cluster.md` — 3-node RAFT cluster walkthrough
+  (*in flight*).
+- `44-tutorial-go-sdk.md` — end-to-end Go SDK tutorial using
+  `pkg/producerclient` and `pkg/workerclient` (*in flight*).
 
-### How-To Guides (Problem-Oriented)
+## 2. Choosing a deployment
 
-13. `docs/13-examples.md` - Usage examples and common patterns
-14. `docs/14-configuration.md` - Configuration reference
-15. `docs/15-cli-reference.md` - Complete CLI command reference
-22. `docs/22-local-development.md` - Local development with Docker Compose
-26. `docs/26-load-testing.md` - Load testing framework and benchmarks
-28. `docs/28-troubleshooting.md` - Troubleshooting guide for common issues
-29. `docs/29-operational-runbooks.md` - Operational runbooks for incidents, maintenance, scaling, monitoring, and data management
-30. `docs/30-performance-baselines.md` - Baseline load test results and regression benchmarks
-33. `docs/33-staging-validation-runbook.md` - Staging performance validation runbook
-34. `docs/34-streaming-api-guide.md` - gRPC streaming API tutorials, how-tos, and protocol reference
+- `41-deployment-modes.md` — decision guide: single-node vs RAFT vs
+  multi-shard, with tradeoffs (*in flight*).
+- `42-raft-failover-walkthrough.md` — what happens when a node dies: leader
+  election, log replay, client behaviour (*in flight*).
+- [`06-sharding.md`](06-sharding.md) — shard count sizing: intra-process
+  sharding and how to pick a number.
+- [`17-performance-tuning.md`](17-performance-tuning.md) — knobs: Pebble cache,
+  fsync mode, batch sizes, GOMAXPROCS, lease intervals.
 
-### Technical Reference (Information-Oriented)
+## 3. Architecture
 
-1. `docs/01-overview.md` - System overview and goals
-2. `docs/02-domain-model.md` - Core entities and relationships
-3. `docs/03-architecture.md` - System architecture and components
-4. `docs/04-http-api.md` - HTTP API reference
-5. `docs/05-cluster-architecture.md` - Horizontal scaling via consistent-hash ring and gRPC routing
-6. `docs/05-queueing-model.md` - Queue semantics and behavior
-7. `docs/06-sharding.md` - Sharding strategy: Phase 8 intra-process + cluster mode
-7b. `docs/07b-storage-pebble.md` - Pebble embedded storage layout
-8. `docs/08b-pebble-sharding-internals.md` - Phase 8 intra-process sharding internals
-9. `docs/08-consistency.md` - Consistency guarantees
-10. `docs/09-security.md` - Authentication and authorization
-11. `docs/10-operations.md` - Operational procedures
-12. `docs/11-backoff.md` - Retry and backoff logic
-13. `docs/12-webhooks.md` - Webhook notifications
-17. `docs/16-workflows.md` - GitHub Actions workflows guide
-18. `docs/17-performance-tuning.md` - Performance optimization and tuning guide
-19. `docs/18-package-reference.md` - Package structure and codebase guide
-20. `docs/19-testing.md` - Test coverage and testing strategy
-21. `docs/20-authentication-plugins.md` - Authentication plugin system
-22. `docs/21-developer-guide.md` - Developer guide for contributors
-28. `docs/27-persistence-plugin-system.md` - Persistence plugin interface (Pebble is the supported backend; memory provider for tests)
-34. `docs/34-streaming-api-guide.md` - gRPC streaming API protocol reference, throughput characteristics, and concurrency model
-40. `docs/40-raft-replication.md` - Opt-in HA via hashicorp/raft: single-shard, multi-shard, failover, status endpoint, limitations
+- [`03-architecture.md`](03-architecture.md) — package graph, data flow, and
+  process layout.
+- [`07b-storage-pebble.md`](07b-storage-pebble.md) — Pebble LSM internals as
+  used by codeQ: keyspaces, group commit, fsync policy, WAL.
+- [`08b-pebble-sharding-internals.md`](08b-pebble-sharding-internals.md) —
+  FNV-1a routing, per-shard atomic invariants, intra-process shard layout.
+- [`40-raft-replication.md`](40-raft-replication.md) — multi-shard raft via
+  `hashicorp/raft`: FSM, mux transport, single- and multi-shard modes,
+  current limitations.
+- [`19b-cluster-grpc-protocol.md`](19b-cluster-grpc-protocol.md) — inter-node
+  gRPC protocol for the legacy consistent-hash cluster mode.
+- [`27-persistence-plugin-system.md`](27-persistence-plugin-system.md) —
+  persistence plugin interface (Pebble is the supported backend; memory
+  provider is for tests).
 
-### Integration Guides
+## 4. Domain & semantics
 
-- `docs/integrations/go-integration.md` - Official Go SDK
-  (`pkg/producerclient` + `pkg/workerclient`) with standard library,
-  Gin, Echo.
-- `sdks/README.md` - Go SDK overview and quick start.
-- `examples/` - Long-form walk-throughs (e.g. custom auth plugin).
+- [`02-domain-model.md`](02-domain-model.md) — core entities: Task, Result,
+  Subscription, and their relationships.
+- [`05-queueing-model.md`](05-queueing-model.md) — FIFO ordering, priority,
+  visibility timeout, delayed delivery.
+- [`06b-lease-management.md`](06b-lease-management.md) — in-memory lease
+  table: claim, extend, expire, reclaim.
+- [`08-consistency.md`](08-consistency.md) — at-least-once delivery,
+  idempotency, edge cases under failure.
+- [`11-backoff.md`](11-backoff.md) — retry policies and backoff curves.
+- [`39-multi-tenancy.md`](39-multi-tenancy.md) — tenant isolation in storage,
+  auth, and worker claim paths.
+
+## 5. APIs
+
+- [`04-http-api.md`](04-http-api.md) — REST API on `:8080` (task lifecycle,
+  results, admin endpoints).
+- [`34-streaming-api-guide.md`](34-streaming-api-guide.md) — gRPC streaming
+  API overview, protocol, throughput characteristics.
+- [`35-producer-streaming-sdk.md`](35-producer-streaming-sdk.md) —
+  `pkg/producerclient` against the producer stream on `:9092`.
+- [`36-worker-streaming-sdk.md`](36-worker-streaming-sdk.md) —
+  `pkg/workerclient` against the worker stream on `:9091`.
+- [`15-cli-reference.md`](15-cli-reference.md) — `codeq-cli` commands and
+  flags.
+- [`18-package-reference.md`](18-package-reference.md) — public Go packages
+  and their stability contracts.
+
+## 6. Operations
+
+- [`10-operations.md`](10-operations.md) — boot sequence, graceful shutdown,
+  signal handling.
+- [`14-configuration.md`](14-configuration.md) — full config YAML reference.
+- [`28-troubleshooting.md`](28-troubleshooting.md) — common issues and
+  diagnostic steps.
+- [`29-operational-runbooks.md`](29-operational-runbooks.md) — incident
+  response, maintenance, scaling, monitoring, data management.
+- [`30-performance-baselines.md`](30-performance-baselines.md) — measured
+  throughput history and regression benchmarks.
+- [`33-staging-validation-runbook.md`](33-staging-validation-runbook.md) —
+  staging performance validation procedure.
+
+## 7. Security & observability
+
+- [`09-security.md`](09-security.md) — authentication, JWKS, rate limiting.
+- [`20-authentication-plugins.md`](20-authentication-plugins.md) — auth
+  plugin interface and the identity-middleware migration appendix.
+- [`37-observability.md`](37-observability.md) — Prometheus metrics and
+  OpenTelemetry traces; what's exposed and where.
+- [`12-webhooks.md`](12-webhooks.md) — result callback webhooks.
+- [`38-result-storage-callbacks.md`](38-result-storage-callbacks.md) —
+  result persistence and callback delivery semantics.
+
+## 8. Testing
+
+- [`19-testing.md`](19-testing.md) — test layout, what's covered, how to run
+  the suite.
+- [`26-load-testing.md`](26-load-testing.md) — k6 scenarios and load-test
+  harness.
+
+## 9. Examples & integrations
+
+- [`13-examples.md`](13-examples.md) — short code recipes against the HTTP
+  and gRPC APIs.
+- [`integrations/go-integration.md`](integrations/go-integration.md) — Go
+  integration guide for `pkg/producerclient` and `pkg/workerclient` with
+  net/http, Gin, and Echo.
+- [`../examples/custom-auth-plugin.md`](../examples/custom-auth-plugin.md) —
+  worked example of an out-of-tree auth plugin.
 
 Non-Go callers should use the [HTTP API](04-http-api.md) directly; no
-language-specific SDKs ship with codeq.
+language-specific SDKs ship with codeQ.
 
-### Deployment Assets
+## 10. Legacy / reference
 
-- `deploy/docker-compose/` - Local and single-node server Compose templates
-- `deploy/kubernetes/` - Kubernetes example manifests; use Helm for server installs
-- `deploy/config/codeq.example.yml` - Server configuration example (Redis backend)
-- `deploy/config/codeq-pebble.example.yml` - Server configuration example (Pebble embedded backend)
-- `helm/codeq/` - Helm chart and size profiles
+- [`05-cluster-architecture.md`](05-cluster-architecture.md) — Phase 5
+  consistent-hash cluster mode, preserved for reference. For HA, use RAFT
+  ([`40-raft-replication.md`](40-raft-replication.md)).
+- [`22-local-development.md`](22-local-development.md) — Docker Compose
+  development environment.
+- [`21-developer-guide.md`](21-developer-guide.md) — contributor workflow:
+  layout, tooling, conventions.
+- [`25-plugin-architecture-hld.md`](25-plugin-architecture-hld.md) —
+  high-level design for the persistence + auth plugin architecture.
+- [`24-queue-sharding-hld.md`](24-queue-sharding-hld.md) — sharding RFC
+  (intra-process Phase 8 sharding).
+- [`32-shard-migration-guide.md`](32-shard-migration-guide.md) — shard
+  rebalancing tooling.
+- [`16-workflows.md`](16-workflows.md) — GitHub Actions CI/CD pipeline.
 
-### Explanation (Understanding-Oriented)
+---
 
-- `docs/40-raft-replication.md` - When to enable raft, mutual exclusion with the static-ring cluster mode, current limitations and follow-ups
+## Deployment assets (not docs, but useful)
 
-### Design Documents (Architecture-Oriented)
+- `deploy/docker-compose/` — Compose templates for local and single-node.
+- `deploy/kubernetes/` — example Kubernetes manifests; use Helm for real
+  installs.
+- `deploy/config/codeq.example.yml` — annotated server config example.
+- `helm/codeq/` — Helm chart with size profiles.
 
-24. `docs/24-queue-sharding-hld.md` - High-Level Design and RFC for queue sharding implementation
-25. `docs/25-plugin-architecture-hld.md` - High-Level Design for plugin architecture with persistence and authentication
+## Style
 
-### Migration Guides (Task-Oriented)
-
-31. `docs/31-persistence-migration-guide.md` - Persistence plugin migration, backward compatibility, and configuration guide
-32. `docs/32-shard-migration-guide.md` - Shard migration tooling for moving tasks between shards
-
-> Note: identity-middleware migration is covered in
-> [`docs/20-authentication-plugins.md`](20-authentication-plugins.md#migration-appendix-removing-the-identity-middleware-private-dependency).
+Contributors writing docs should follow [`_STYLE.md`](_STYLE.md).
