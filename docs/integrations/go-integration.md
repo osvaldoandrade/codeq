@@ -1,6 +1,9 @@
 # Go Integration Guide
 
-Complete guide for integrating CodeQ with Go microservices using standard library, Gin, Echo, and Fiber.
+Complete guide for integrating CodeQ with Go services using the official
+gRPC streaming clients — `pkg/producerclient` (task creation) and
+`pkg/workerclient` (claim + result). Covers standalone services, Gin,
+and long-running worker processes.
 
 ## Table of Contents
 
@@ -14,31 +17,50 @@ Complete guide for integrating CodeQ with Go microservices using standard librar
 
 ## Overview
 
-The CodeQ Go SDK provides a context-aware, strongly-typed API with zero external dependencies for:
-- **Producing tasks**: Create tasks with priority, webhooks, and delays
-- **Consuming tasks**: Claim, process, and complete tasks as a worker
-- **Task lifecycle**: Heartbeat, abandon, and NACK operations
+The CodeQ Go clients give a context-aware, strongly-typed gRPC streaming
+API for:
+
+- **Producing tasks**: open one persistent stream, then call `Produce`
+  concurrently from any goroutine. Acks return per-call.
+- **Consuming tasks**: register a handler with `Run`; the client opens
+  a bidirectional stream, fans out across `Concurrency` slots, and
+  dispatches claimed tasks to your handler.
+- **Task lifecycle**: handlers return `Completed`, `Failed`, `Nack`,
+  or `Abandon` — the client coalesces results back over the stream.
 
 ### Architecture
 
 ```
-┌─────────────────┐         ┌─────────────┐         ┌──────────────┐
-│  Go Service     │────────▶│   CodeQ     │◀────────│   Worker     │
-│  (Producer)     │  HTTP   │   Server    │  HTTP   │  (Consumer)  │
-└─────────────────┘         └─────────────┘         └──────────────┘
-        │                           │                        │
-        │                           ▼                        │
-        │                    ┌─────────────┐                │
-        └───────────────────▶│   Pebble    │◀───────────────┘
-                             │  (embedded) │
-                             └─────────────┘
+┌─────────────────┐   gRPC stream    ┌─────────────┐   gRPC stream   ┌──────────────┐
+│  Go Service     │ ───────────────▶ │   CodeQ     │ ◀────────────── │   Worker     │
+│  (Producer)     │   :9092          │   Server    │   :9091         │  (Consumer)  │
+└─────────────────┘                  └─────────────┘                 └──────────────┘
+        │                                   │                                │
+        │                                   ▼                                │
+        │                            ┌─────────────┐                         │
+        └──────────────────────────▶ │   Pebble    │ ◀───────────────────────┘
+                                     │  (embedded) │
+                                     └─────────────┘
 ```
+
+Both clients share one HTTP/2 connection per `Client` instance, so
+multiplexed Produce or Result calls from many goroutines do not open
+new sockets.
 
 ## SDK Installation
 
 ```bash
-go get github.com/osvaldoandrade/codeq/sdks/go
+go get github.com/osvaldoandrade/codeq
 ```
+
+```go
+import (
+    "github.com/osvaldoandrade/codeq/pkg/producerclient"
+    "github.com/osvaldoandrade/codeq/pkg/workerclient"
+)
+```
+
+The two clients live inside the main module — no separate dependency.
 
 ## Standard Library Integration
 
@@ -48,21 +70,32 @@ go get github.com/osvaldoandrade/codeq/sdks/go
 package main
 
 import (
+    "context"
     "encoding/json"
     "log"
     "net/http"
     "os"
 
-    codeq "github.com/osvaldoandrade/codeq/sdks/go"
+    "github.com/osvaldoandrade/codeq/pkg/producerclient"
 )
 
-var client *codeq.Client
+var prodSess *producerclient.Session
 
 func main() {
-    client = codeq.NewClient(
-        os.Getenv("CODEQ_BASE_URL"),
-        codeq.WithProducerToken(os.Getenv("CODEQ_PRODUCER_TOKEN")),
-    )
+    cli, err := producerclient.New(producerclient.Config{
+        Addr:  os.Getenv("CODEQ_PRODUCER_ADDR"), // e.g. "codeq.example.com:9092"
+        Token: os.Getenv("CODEQ_PRODUCER_TOKEN"),
+    })
+    if err != nil {
+        log.Fatalf("producerclient.New: %v", err)
+    }
+    defer cli.Close()
+
+    prodSess, err = cli.Connect(context.Background())
+    if err != nil {
+        log.Fatalf("Connect: %v", err)
+    }
+    defer prodSess.Close()
 
     http.HandleFunc("POST /tasks", createTaskHandler)
     log.Fatal(http.ListenAndServe(":3000", nil))
@@ -77,9 +110,11 @@ func createTaskHandler(w http.ResponseWriter, r *http.Request) {
         return
     }
 
-    task, err := client.CreateTask(r.Context(), codeq.CreateTaskOptions{
+    payload, _ := json.Marshal(map[string]string{"url": req.ImageURL})
+
+    taskID, err := prodSess.Produce(r.Context(), producerclient.CreateRequest{
         Command: "PROCESS_IMAGE",
-        Payload: map[string]string{"url": req.ImageURL},
+        Payload: payload,
     })
     if err != nil {
         http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -87,67 +122,62 @@ func createTaskHandler(w http.ResponseWriter, r *http.Request) {
     }
 
     w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(task)
+    _ = json.NewEncoder(w).Encode(map[string]string{"taskId": taskID})
 }
 ```
 
-### Worker — long-running goroutine
+### Worker — long-running process
+
+The worker client owns its own loop. You give it a `Handler`; it opens
+the stream, claims tasks in batches, dispatches them across
+`Concurrency` slots, and ships your results back. Returns when the
+context is cancelled.
 
 ```go
 package main
 
 import (
     "context"
+    "encoding/json"
     "log"
     "os"
     "os/signal"
     "syscall"
 
-    codeq "github.com/osvaldoandrade/codeq/sdks/go"
+    "github.com/osvaldoandrade/codeq/pkg/workerclient"
 )
 
 func main() {
-    client := codeq.NewClient(
-        os.Getenv("CODEQ_BASE_URL"),
-        codeq.WithWorkerToken(os.Getenv("CODEQ_WORKER_TOKEN")),
-    )
+    w, err := workerclient.New(workerclient.Config{
+        Addr:         os.Getenv("CODEQ_WORKER_ADDR"), // e.g. "codeq.example.com:9091"
+        Token:        os.Getenv("CODEQ_WORKER_TOKEN"),
+        Commands:     []string{"PROCESS_IMAGE"},
+        Concurrency:  4,
+        LeaseSeconds: 120,
+    })
+    if err != nil {
+        log.Fatalf("workerclient.New: %v", err)
+    }
+    defer w.Close()
 
     ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer stop()
 
-    waitSec := 30
-    for {
-        task, err := client.ClaimTask(ctx, codeq.ClaimTaskOptions{
-            Commands:    []string{"PROCESS_IMAGE"},
-            WaitSeconds: &waitSec,
-        })
-        if err != nil {
-            if ctx.Err() != nil {
-                log.Println("shutting down gracefully")
-                return
-            }
-            log.Printf("claim error: %v", err)
-            continue
+    handler := func(ctx context.Context, t workerclient.Task) workerclient.Result {
+        var p map[string]string
+        if err := json.Unmarshal(t.Payload, &p); err != nil {
+            return workerclient.Failed("invalid payload: " + err.Error())
         }
-        if task == nil {
-            continue // no tasks available, loop back to long-poll
-        }
+        log.Printf("processing task %s url=%s", t.ID, p["url"])
 
-        if err := processTask(ctx, client, task); err != nil {
-            log.Printf("task %s failed: %v", task.ID, err)
-        }
+        // do the actual work...
+
+        return workerclient.Completed(map[string]string{"message": "processed"})
     }
-}
 
-func processTask(ctx context.Context, client *codeq.Client, task *codeq.Task) error {
-    // Process the task payload…
-    log.Printf("processing task %s", task.ID)
-
-    _, err := client.SubmitResult(ctx, task.ID, codeq.SubmitResultOptions{
-        Status: codeq.StatusCompleted,
-        Result: map[string]string{"message": "processed successfully"},
-    })
-    return err
+    if err := w.Run(ctx, handler); err != nil {
+        log.Printf("worker exited: %v", err)
+    }
 }
 ```
 
@@ -159,58 +189,72 @@ func processTask(ctx context.Context, client *codeq.Client, task *codeq.Task) er
 package main
 
 import (
+    "context"
+    "encoding/json"
     "net/http"
     "os"
 
     "github.com/gin-gonic/gin"
-    codeq "github.com/osvaldoandrade/codeq/sdks/go"
+    "github.com/osvaldoandrade/codeq/pkg/producerclient"
 )
 
 func main() {
-    client := codeq.NewClient(
-        os.Getenv("CODEQ_BASE_URL"),
-        codeq.WithProducerToken(os.Getenv("CODEQ_PRODUCER_TOKEN")),
-    )
+    cli, err := producerclient.New(producerclient.Config{
+        Addr:  os.Getenv("CODEQ_PRODUCER_ADDR"),
+        Token: os.Getenv("CODEQ_PRODUCER_TOKEN"),
+    })
+    if err != nil {
+        panic(err)
+    }
+    defer cli.Close()
+
+    sess, err := cli.Connect(context.Background())
+    if err != nil {
+        panic(err)
+    }
+    defer sess.Close()
 
     r := gin.Default()
 
     r.POST("/tasks", func(c *gin.Context) {
         var req struct {
-            Command string `json:"command" binding:"required"`
-            Payload any    `json:"payload"`
+            Command  string `json:"command" binding:"required"`
+            Payload  any    `json:"payload"`
+            Priority int    `json:"priority"`
         }
         if err := c.ShouldBindJSON(&req); err != nil {
             c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
             return
         }
 
-        task, err := client.CreateTask(c.Request.Context(), codeq.CreateTaskOptions{
-            Command: req.Command,
-            Payload: req.Payload,
+        payload, _ := json.Marshal(req.Payload)
+        taskID, err := sess.Produce(c.Request.Context(), producerclient.CreateRequest{
+            Command:  req.Command,
+            Payload:  payload,
+            Priority: req.Priority,
         })
         if err != nil {
             c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
             return
         }
-        c.JSON(http.StatusCreated, task)
+        c.JSON(http.StatusCreated, gin.H{"taskId": taskID})
     })
 
-    r.GET("/tasks/:id", func(c *gin.Context) {
-        task, err := client.GetTask(c.Request.Context(), c.Param("id"))
-        if err != nil {
-            c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-            return
-        }
-        c.JSON(http.StatusOK, task)
-    })
-
-    r.Run(":3000")
+    _ = r.Run(":3000")
 }
 ```
 
+Reads (`GetTask`, queue stats, admin) still go through the REST API on
+port 8080 — the gRPC streams are write-path only. Use a normal
+`http.Client` for those.
+
 ## Worker Service
 
-### Worker with heartbeat and graceful shutdown
+### Worker with batching and graceful shutdown
+
+Setting `BatchSize > 1` makes each slot pull up to N tasks per Ready
+and coalesce their results back as one ResultBatch — amortises gRPC
+framing and Pebble commit cost across the batch.
 
 ```go
 package main
@@ -220,194 +264,151 @@ import (
     "log"
     "os"
     "os/signal"
-    "sync"
     "syscall"
-    "time"
 
-    codeq "github.com/osvaldoandrade/codeq/sdks/go"
-)
-
-const (
-    concurrency   = 4
-    heartbeatSec  = 120
-    leaseSec      = 300
+    "github.com/osvaldoandrade/codeq/pkg/workerclient"
 )
 
 func main() {
-    client := codeq.NewClient(
-        os.Getenv("CODEQ_BASE_URL"),
-        codeq.WithWorkerToken(os.Getenv("CODEQ_WORKER_TOKEN")),
-    )
+    w, err := workerclient.New(workerclient.Config{
+        Addr:         os.Getenv("CODEQ_WORKER_ADDR"),
+        Token:        os.Getenv("CODEQ_WORKER_TOKEN"),
+        Commands:     []string{"GENERATE_REPORT"},
+        Concurrency:  8,
+        LeaseSeconds: 300,
+        BatchSize:    16, // pull up to 16 tasks per slot per cycle
+    })
+    if err != nil {
+        log.Fatalf("workerclient.New: %v", err)
+    }
+    defer w.Close()
 
     ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer stop()
 
-    var wg sync.WaitGroup
-    for i := 0; i < concurrency; i++ {
-        wg.Add(1)
-        go func() {
-            defer wg.Done()
-            workerLoop(ctx, client)
-        }()
-    }
-    wg.Wait()
-    log.Println("all workers stopped")
-}
-
-func workerLoop(ctx context.Context, client *codeq.Client) {
-    lease := leaseSec
-    waitSec := 30
-    for {
-        task, err := client.ClaimTask(ctx, codeq.ClaimTaskOptions{
-            Commands:     []string{"GENERATE_REPORT"},
-            LeaseSeconds: &lease,
-            WaitSeconds:  &waitSec,
-        })
+    handler := func(ctx context.Context, t workerclient.Task) workerclient.Result {
+        result, err := generateReport(ctx, t.Payload)
         if err != nil {
-            if ctx.Err() != nil {
-                return
-            }
-            log.Printf("claim error: %v", err)
-            time.Sleep(2 * time.Second)
-            continue
+            // Retry-eligible error → NACK with a backoff hint (seconds).
+            return workerclient.Nack(5, err.Error())
         }
-        if task == nil {
-            continue
-        }
-
-        processWithHeartbeat(ctx, client, task)
+        return workerclient.Completed(result)
     }
+
+    if err := w.Run(ctx, handler); err != nil {
+        log.Printf("worker exited: %v", err)
+    }
+    log.Println("graceful shutdown complete")
 }
 
-func processWithHeartbeat(ctx context.Context, client *codeq.Client, task *codeq.Task) {
-    hbCtx, hbCancel := context.WithCancel(ctx)
-    defer hbCancel()
-
-    // Background heartbeat
-    go func() {
-        ticker := time.NewTicker(time.Duration(heartbeatSec) * time.Second)
-        defer ticker.Stop()
-        for {
-            select {
-            case <-hbCtx.Done():
-                return
-            case <-ticker.C:
-                if err := client.Heartbeat(hbCtx, task.ID, leaseSec); err != nil {
-                    log.Printf("heartbeat failed for %s: %v", task.ID, err)
-                }
-            }
-        }
-    }()
-
-    // Simulate long-running work
-    log.Printf("processing task %s", task.ID)
-    time.Sleep(10 * time.Second)
-
-    _, err := client.SubmitResult(ctx, task.ID, codeq.SubmitResultOptions{
-        Status: codeq.StatusCompleted,
-        Result: map[string]string{"report": "generated"},
-    })
-    if err != nil {
-        log.Printf("submit result error for %s: %v", task.ID, err)
-    }
+func generateReport(ctx context.Context, payload []byte) (any, error) {
+    // ... heavy lifting ...
+    return map[string]string{"report": "generated"}, nil
 }
 ```
+
+Lease renewal happens internally inside the worker client while your
+handler is running — no need for an explicit heartbeat ticker as long
+as the handler returns before `LeaseSeconds` × renewal-budget elapses.
 
 ## Best Practices
 
 ### 1. Share one Client per process
 
-The `codeq.Client` uses Go's `http.Client` internally, which maintains its own
-connection pool. Create one `Client` at startup and pass it to handlers and
-workers.
+Both `producerclient.Client` and `workerclient.Client` own a single
+gRPC connection. Construct once at startup, reuse across all
+handlers/goroutines.
 
 ```go
-var client *codeq.Client
+var (
+    prodSess *producerclient.Session
+)
 
 func init() {
-    client = codeq.NewClient(os.Getenv("CODEQ_BASE_URL"),
-        codeq.WithProducerToken(os.Getenv("CODEQ_PRODUCER_TOKEN")),
-        codeq.WithWorkerToken(os.Getenv("CODEQ_WORKER_TOKEN")),
-    )
+    cli, _ := producerclient.New(producerclient.Config{
+        Addr:  os.Getenv("CODEQ_PRODUCER_ADDR"),
+        Token: os.Getenv("CODEQ_PRODUCER_TOKEN"),
+    })
+    prodSess, _ = cli.Connect(context.Background())
 }
 ```
 
 ### 2. Use context for cancellation
 
-Always pass the request `context.Context` so cancellations and timeouts
-propagate correctly.
+Pass the request `context.Context` so cancellations propagate to the
+gRPC call.
 
 ```go
-task, err := client.CreateTask(r.Context(), opts)
+taskID, err := prodSess.Produce(r.Context(), req)
 ```
 
-### 3. Handle `nil` from ClaimTask
+### 3. Pick the right `Result` constructor
 
-When no tasks are available (HTTP 204), `ClaimTask` returns `nil, nil`.
-Always check for a nil task before processing.
+| Constructor | Semantics |
+|---|---|
+| `Completed(result any)` | Success. Marshal `result` as JSON. |
+| `Failed(reason string)` | Terminal failure. No retry. Counts toward DLQ. |
+| `Nack(backoffSec int, reason string)` | Transient. Re-queues after backoff. |
+| `Abandon()` | Releases the lease without success/failure record (lets another worker pick it up immediately). |
 
-```go
-task, err := client.ClaimTask(ctx, opts)
-if err != nil { /* handle */ }
-if task == nil { continue } // nothing available
-```
+### 4. Tune `Concurrency` + `BatchSize` together
 
-### 4. Use typed error checks
+- `Concurrency` = how many slots run in parallel inside one worker
+  process.
+- `BatchSize` > 1 makes each slot pull N tasks per Ready; only useful
+  when the queue is consistently deep. If the queue is shallow, slots
+  with batches > 1 will sit idle waiting for tasks.
+- Start with `Concurrency: 8, BatchSize: 0` and bump from there.
 
-```go
-import "errors"
+### 5. Producer pipelining is free
 
-var apiErr *codeq.APIError
-if errors.As(err, &apiErr) && apiErr.StatusCode == 429 {
-    log.Println("rate limited, backing off")
-}
-```
-
-### 5. Configure retry for your environment
-
-```go
-client := codeq.NewClient(url,
-    codeq.WithMaxRetries(5),
-    codeq.WithRetryBaseDelay(1 * time.Second),
-)
-```
+A single `Session` multiplexes concurrent `Produce` calls over one
+stream — goroutines can fire calls in parallel without opening new
+connections. No need for client-side pooling.
 
 ## Troubleshooting
 
 ### Connection refused
 
 ```
-codeq: request failed: dial tcp 127.0.0.1:8080: connect: connection refused
+producerclient: dial codeq.example.com:9092: connection refused
 ```
 
-**Solution**: Ensure the codeQ server is running and the `CODEQ_BASE_URL`
-environment variable points to the correct address.
+**Solution**: Verify the gRPC stream listener is enabled on the server
+via `ProducerStreamAddr` / `WorkerStreamAddr` config (or
+`PRODUCER_STREAM_ADDR` / `WORKER_STREAM_ADDR` env). These are separate
+from the HTTP API port.
 
 ### Authentication errors
 
 ```
-codeq: auth error: Unauthorized
+producerclient: server rejected hello: unauthenticated
 ```
 
-**Solution**: Verify your JWT tokens are valid and not expired. Use different
-tokens for producer, worker, and admin operations as each has a distinct scope.
+**Solution**: Confirm the bearer token in `Config.Token` is valid for
+the role. Producer and worker tokens have distinct scopes.
 
 ### Context deadline exceeded
 
 ```
-codeq: request failed: context deadline exceeded
+producerclient: send create: context deadline exceeded
 ```
 
-**Solution**: Increase the HTTP client timeout or add a longer deadline to your
-context:
+**Solution**: Increase the per-call context deadline or check the
+server isn't backpressured. Under sustained overload `Produce` blocks
+until the server acks.
 
-```go
-client := codeq.NewClient(url,
-    codeq.WithHTTPClient(&http.Client{Timeout: 60 * time.Second}),
-)
-```
+### Worker idle despite tasks queued
 
-### Rate limiting (429)
+If `Concurrency` slots are non-zero but no callbacks fire, check:
 
-**Solution**: The SDK automatically retries 5xx errors but does not retry 429
-responses. Add backoff logic in your application or reduce request frequency.
+1. `Commands` matches a command actually being produced.
+2. The worker JWT's `eventTypes` claim includes the command (or `*`).
+3. The server's `numShards` is balanced — a worker connected to one
+   node only sees tasks from shards led by that node when raft is on.
+
+### Rate limiting
+
+If the in-memory rate limiter is configured server-side, `Produce`
+returns `rate-limited` until the next refill window. Apply local
+backoff or raise the limit.
