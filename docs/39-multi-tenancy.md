@@ -172,11 +172,9 @@ task, ok, err := h.svc.ClaimTask(ctx, claims.Subject, req.Commands,
     req.LeaseSeconds, 0, tenantID)
 ```
 
-Under Pebble this resolves to a `PrefixPendingPrio(cmd, tenantID, prio)`
-scan — the worker literally cannot iterate another tenant's pending
-queue because the prefix doesn't include it. Under the Redis backend
-the inprog set and pending list are tenant-keyed via the same
-`(cmd, tenantID)` tuple.
+This resolves to a `PrefixPendingPrio(cmd, tenantID, prio)` scan over
+the local Pebble store — the worker literally cannot iterate another
+tenant's pending queue because the prefix doesn't include it.
 
 ```mermaid
 sequenceDiagram
@@ -218,16 +216,22 @@ the service hands it to the repository. This avoids two failure modes:
 ### The Phase 6 race fix
 
 Before the Phase 6 finalization fix, `UpdateTaskOnComplete` took only
-`(taskID, cmd, status, errorMsg)` — no tenant. Under the Redis backend
-this meant the inprog key used at finalization could be on the wrong
-tenant prefix relative to the claim path, which caused a rare
-resurrection race for completed tasks. The fix added `tenantID` to the
-signature so the finalize path and the claim path target the exact
-same inprog key. Details and the measured `-43%` DLQ depth improvement
-are in
+`(taskID, cmd, status, errorMsg)` — no tenant. Without the tenant in
+the signature, the inprog key used at finalization could land on a
+different tenant prefix than the one the claim path wrote, causing a
+rare resurrection race for completed tasks. The fix added `tenantID`
+to the signature so the finalize path and the claim path target the
+exact same inprog key. Details and the measured `-43%` DLQ depth
+improvement are in
 [Performance tuning § Result Submission Race](./17-performance-tuning.md#15-result-submission-race-condition-atomic-finalization).
 
 ## 5. Multi-tenant + cluster routing
+
+> Note: this section describes Phase 5 cluster mode
+> ([`docs/05-cluster-architecture.md`](./05-cluster-architecture.md)).
+> RAFT mode ([`docs/40-raft-replication.md`](./40-raft-replication.md))
+> is the recommended HA path; cluster mode is preserved for existing
+> deployments and is mutually exclusive with `raft.enabled`.
 
 Cluster mode uses a consistent-hash ring keyed by **task ID**, not by
 tenant. The ring layout, virtual nodes, and `Owner(key)` lookup are
