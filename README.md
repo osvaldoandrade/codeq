@@ -88,7 +88,7 @@ for raw output and per-release history.
 |---|---|---|---|---|---|
 | External dependency | **None** (embedded Pebble) | Redis | Redis | Redis or RabbitMQ | ZooKeeper / KRaft cluster |
 | Single-node full-cycle throughput | **83k tasks/s** | ~10k tasks/s | ~5k tasks/s | ~3k tasks/s | n/a (no task semantics) |
-| Language affinity | Go server, SDKs for Java, Node, Python, Go | Go only | Node only | Python only | Polyglot |
+| Language affinity | Go server + Go SDK (gRPC) | Go only | Node only | Python only | Polyglot |
 | Durability | Pebble batch + group-commit; optional fsync | Redis AOF / RDB | Redis AOF / RDB | Broker-dependent | Replicated log |
 | Multi-tenant isolation | **Built in** (JWT tenantId namespacing) | DIY | DIY | DIY | DIY |
 | Time-to-first-task | `docker run` + `curl` | Run Redis + Asynq | Run Redis + worker | Run broker + workers + result backend | Multi-step cluster bootstrap |
@@ -162,19 +162,48 @@ For high-throughput producers and workers, use the gRPC streaming API
   consistent-hash deployment.
 - [Style guide](docs/_STYLE.md) — voice, numbers, diagrams, links.
 
-## SDKs
+## Go SDK
 
-Official client libraries for the languages most likely to talk to
-codeq from application code:
+codeq ships a Go SDK that talks to the server over gRPC streams. It
+lives inside the main module:
 
-- **Go** — `go get github.com/osvaldoandrade/codeq/sdks/go` ([README](sdks/go/README.md))
-- **Java** (Spring Boot, Quarkus, Micronaut) — [sdks/java/README.md](sdks/java/README.md)
-- **Node.js / TypeScript** (Express, NestJS) — [sdks/nodejs/README.md](sdks/nodejs/README.md)
-- **Python** (FastAPI, Django, Flask) — [sdks/python/README.md](sdks/python/README.md)
+- `pkg/producerclient` — task creation (single + batched, streaming).
+- `pkg/workerclient` — claim, heartbeat, result submission (streaming).
 
-Integration recipes per framework live under
-[docs/integrations/](docs/integrations/). End-to-end example apps live
-under [examples/](examples/).
+Install:
+
+```bash
+go get github.com/osvaldoandrade/codeq
+```
+
+Minimal producer:
+
+```go
+import (
+    "context"
+    "github.com/osvaldoandrade/codeq/pkg/producerclient"
+)
+
+cli, _ := producerclient.New(producerclient.Config{
+    Addr:  "localhost:9092",
+    Token: producerToken,
+})
+defer cli.Close()
+
+sess, _ := cli.Connect(context.Background())
+defer sess.Close()
+
+taskID, _ := sess.Produce(ctx, producerclient.CreateRequest{
+    Command:  "GENERATE_MASTER",
+    Payload:  []byte(`{"jobId":"j-123"}`),
+    Priority: 3,
+})
+```
+
+See [docs/integrations/go-integration.md](docs/integrations/go-integration.md)
+and [docs/34-streaming-api-guide.md](docs/34-streaming-api-guide.md) for the
+full surface. For non-Go callers, use the HTTP API
+([docs/04-http-api.md](docs/04-http-api.md)) directly.
 
 ## Repo layout
 
@@ -190,8 +219,7 @@ internal/             unexported packages
   repository/         persistence implementations (Pebble)
   services/           scheduler, results, callbacks, subscriptions
 pkg/                  public packages (app, auth, config, domain,
-                      producerclient, workerclient)
-sdks/                 official SDKs (go, java, nodejs, python)
+                      producerclient, workerclient — the Go SDK)
 deploy/               docker-compose and Kubernetes config
 helm/codeq/           Helm chart and size profiles
 docs/                 specifications, runbooks, performance baselines

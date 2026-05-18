@@ -36,7 +36,6 @@ graph TB
   subgraph Ops[Build/Deploy/Docs]
     DEPLOY[deploy/]
     DOCS[docs/]
-    SDKS[sdks/]
   end
   CMD_SERVER --> PKG_APP
   CMD_CODEQ --> PKG_APP
@@ -50,6 +49,11 @@ graph TB
 ```
 
 Each public `pkg/` is intended to be importable by external code (SDK consumers). `internal/` is process-local and not stable API.
+
+The official Go SDK ships as two of those public packages —
+`pkg/producerclient` (task creation) and `pkg/workerclient` (claim +
+result), both backed by gRPC streams. Non-Go callers use the HTTP API
+documented in [`docs/04-http-api.md`](04-http-api.md).
 
 ## Public Packages (`pkg/`)
 
@@ -137,6 +141,80 @@ task := &domain.Task{
 - `LastKnownLocation` (optional): Optimization hint tracking task placement in queue system (`LocationPending`, `LocationDelayed`, `LocationInProgress`, `LocationDLQ`, `LocationNone`). Non-authoritative; used to avoid O(N) list scans during admin cleanup.
 
 **See**: `docs/02-domain-model.md` for entity definitions
+
+---
+
+### `pkg/producerclient`
+
+**Purpose**: gRPC producer client — the producer half of the Go SDK.
+
+**Key surface**:
+- `New(Config) (*Client, error)`: dial the producer stream server.
+- `(*Client).Connect(ctx) (*Session, error)`: open one authenticated stream.
+- `(*Session).Produce(ctx, CreateRequest) (taskID, error)`: enqueue one task.
+- `(*Session).ProduceBatch(ctx, []CreateRequest) ([]BatchResult, error)`: enqueue many.
+
+**Example**:
+````go
+import "github.com/osvaldoandrade/codeq/pkg/producerclient"
+
+cli, err := producerclient.New(producerclient.Config{
+    Addr:  "localhost:9092",
+    Token: producerToken,
+})
+if err != nil { return err }
+defer cli.Close()
+
+sess, err := cli.Connect(ctx)
+if err != nil { return err }
+defer sess.Close()
+
+taskID, err := sess.Produce(ctx, producerclient.CreateRequest{
+    Command: "GENERATE_MASTER",
+    Payload: []byte(`{"jobId":"j-1"}`),
+})
+````
+
+**See**: `docs/34-streaming-api-guide.md`, `docs/35-producer-streaming-sdk.md`.
+
+---
+
+### `pkg/workerclient`
+
+**Purpose**: gRPC worker client — the worker half of the Go SDK. Uses
+a long-lived stream and dispatches claimed tasks to a user-provided
+`Handler` running on N concurrent slots.
+
+**Key surface**:
+- `New(Config) (*Client, error)`: dial the worker stream server.
+- `(*Client).Run(ctx, Handler) error`: open stream, claim, dispatch
+  until ctx is cancelled.
+- `Handler func(ctx, Task) Result`: caller-supplied processor.
+- Result constructors: `Completed`, `Failed`, `Nack`, `Abandon`.
+
+**Example**:
+````go
+import "github.com/osvaldoandrade/codeq/pkg/workerclient"
+
+w, err := workerclient.New(workerclient.Config{
+    Addr:        "localhost:9091",
+    Token:       workerToken,
+    Commands:    []string{"GENERATE_MASTER"},
+    Concurrency: 4,
+    BatchSize:   8,
+})
+if err != nil { return err }
+defer w.Close()
+
+err = w.Run(ctx, func(ctx context.Context, t workerclient.Task) workerclient.Result {
+    if err := process(ctx, t); err != nil {
+        return workerclient.Nack(5, err.Error())
+    }
+    return workerclient.Completed(nil)
+})
+````
+
+**See**: `docs/34-streaming-api-guide.md`, `docs/36-worker-streaming-sdk.md`.
 
 ---
 
@@ -656,11 +734,7 @@ Full integration tests covering:
 
 ### `internal/repository/task_repository_test.go`
 
-Unit tests for repository layer (requires Redis)
-
-### `test/local_flow.py`
-
-Python script for manual end-to-end testing
+Unit tests for repository layer.
 
 ---
 
