@@ -98,6 +98,9 @@ of N independent submissions to **two Pebble commits**:
 - `BatchUpdateTasksOnComplete(updates)` — **one** Pebble batch that
   packs N×3 writes (`Set(Task)`, `Delete(Inprog)`, `Set(TTLIndex)` per
   task) into a single `CommitBatch`.
+- Result callback fan-out: after task finalization, invoke
+  `s.callback.Send` once per task where `task.Webhook` is non-empty
+  (see §3).
 
 Net effect: a 32-result batch goes from ~32 commits to ~33 (one per
 SaveResult, plus one shared commit for the task finalization). The
@@ -110,9 +113,6 @@ group-commit and the Pebble fast-path land on.
 > tasks/s on a 12-core Linux box. The batch path is what unlocks this
 > number; the single Submit path runs ~5x slower at the same
 > concurrency.
-
-> **Warning**: `BatchSubmit` does **not** invoke the result callback
-> today. See §4 below.
 
 ## 3. Webhook callback delivery
 
@@ -198,31 +198,20 @@ delivery wall-clock well beyond 30s while still respecting `maxAttempts`.
 
 ## 4. Webhook coverage — current state
 
-This is the most important table in the doc. Today, only the
-single-`Submit` path fires the callback. Other terminal transitions are
-**silent**:
+This table documents which task terminal transitions fire result callbacks:
 
-| Caminho | Webhook hoje |
+| Path | Webhook fires |
 |---|---|
 | Submit single (REST `/tasks/{id}/result`, Stream `Result` single) | Yes |
-| BatchSubmit (REST `/tasks/batch/results`, Stream `ResultBatch`) | No (known gap) |
-| Worker Nack until `MAX_ATTEMPTS` → DLQ | No |
-| Reaper lease-expired → DLQ | No |
+| BatchSubmit (REST `/tasks/batch/results`, Stream `ResultBatch`) | Yes |
+| Worker Nack until `MAX_ATTEMPTS` → DLQ | Yes |
+| Reaper lease-expired → DLQ | Yes |
 | TTL cleanup (24h `taskRetention`) | No |
 
-If your producer relies on the callback to drive downstream work, the
-**only** delivery path you can trust today is the single Submit. Batch
-submitters must poll `GET /tasks/{id}/result` or subscribe to a stream.
-
-This gap is on the roadmap. Tracking issue: **TBD** — file under the
-`callbacks` label when raising it. The fix is plumbing
-`resultCallback.Send` into `BatchSubmit` (and likely into the reaper and
-worker Nack paths too), guarded by per-task webhook URLs and the same
-rate limiter.
-
-> **Warning**: do not work around the gap by lying to producers about
-> their batch boundaries. The correct fix is in the server, not the
-> client.
+All major callback paths are now covered except TTL cleanup (which
+runs asynchronously in a background reaper and does not currently
+deliver callbacks). Producers can rely on webhooks to drive downstream
+workflows for the vast majority of terminal transitions.
 
 ## 5. Artifact storage
 

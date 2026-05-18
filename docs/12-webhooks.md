@@ -127,7 +127,9 @@ Result callbacks are used to avoid polling `GET /tasks/:id/result`. They are tri
 
 ### Callback flow
 
-After the worker submits a result, `resultsService.Submit` persists the record and then invokes `s.callback.Send(task, rec)` — but only if `task.Webhook` is non-empty. The callback service POSTs the JSON payload to the URL with the HMAC signature headers, then retries on transport or non-2xx errors:
+After the worker submits a result, `resultsService.Submit` persists the record and then invokes `s.callback.Send(task, rec)` — if `task.Webhook` is non-empty. The callback service POSTs the JSON payload to the URL with the HMAC signature headers, then retries on transport or non-2xx errors.
+
+Additionally, `BatchSubmit` (for batched result submissions), `NackTask` (when max attempts is exhausted), and the `Reaper` (on lease expiry leading to DLQ) also invoke callbacks to ensure producers receive terminal-state notifications across all result paths:
 
 ```mermaid
 sequenceDiagram
@@ -157,19 +159,6 @@ sequenceDiagram
   Results-->>Server: ResultRecord
   Server-->>Worker: 200 OK
 ```
-
-> **Warning**: the result-callback hook fires only in the single-task `Submit` path
-> ([`internal/services/results_service.go`](../internal/services/results_service.go) — see `s.callback.Send` near line 183).
-> It does **not** fire in:
->
-> - `BatchSubmit` (the batched results endpoint used by `/tasks/batch/results`),
-> - reaper-driven moves to DLQ after lease expiry,
-> - `Nack` paths that exhaust `maxAttempts`,
-> - TTL-based cleanup of completed/failed tasks.
->
-> Producers that rely on webhooks for terminal-state notification must still poll
-> `GET /tasks/:id/result` (or use the streaming API) for tasks that may complete
-> via these paths. This is a known coverage gap; tracking issue TBD.
 
 ### Registration
 
