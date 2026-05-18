@@ -94,6 +94,13 @@ For single-tenant deployments where JWT tokens don't include explicit tenant cla
 - Admin: require `role=ADMIN` or a separate admin issuer.
 - Tenant isolation: tasks are automatically scoped to the authenticated user's tenant.
 
+## See also
+
+- [Configuration](./14-configuration.md) — Authentication provider setup
+- [Operations](./10-operations.md) — Security monitoring and audit trails
+- [Authentication Plugins](./20-authentication-plugins.md) — Implementing custom auth providers
+- [Domain Model](./02-domain-model.md) — Tenant isolation concepts
+
 ## Webhook security
 
 Webhook registration requires a worker token. codeQ signs webhook notifications with an HMAC derived from the worker token or a configured shared secret. Workers must validate the signature and timestamp.

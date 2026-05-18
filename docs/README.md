@@ -84,3 +84,11 @@ layer, lease table, and gRPC + HTTP API all in one process.
 
 > Note: identity-middleware migration is covered in
 > [`docs/20-authentication-plugins.md`](20-authentication-plugins.md#migration-appendix-removing-the-identity-middleware-private-dependency).
+
+## See also
+
+- [Getting Started](./00-getting-started.md) — First-time user tutorial
+- [Architecture](./03-architecture.md) — System design overview
+- [HTTP API](./04-http-api.md) — Complete API reference
+- [Operations](./10-operations.md) — Operational guide
+- [Examples](./13-examples.md) — Usage examples and patterns

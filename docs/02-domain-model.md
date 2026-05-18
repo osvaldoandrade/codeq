@@ -41,6 +41,12 @@ The `tenantId` field enables complete queue isolation in multi-tenant deployment
 
 The `lastKnownLocation` field is an optimization hint that tracks where a task was last placed in the queue system. This allows the admin cleanup operation to avoid expensive O(N) list scans when removing tasks. The field is not authoritative and may be out of sync if tasks are moved by external processes.
 
+## See also
+
+- [Architecture](./03-architecture.md) — System design and core concepts
+- [Storage Layout: Pebble](./07b-storage-pebble.md) — Persistent keyspace layout
+- [Sharding](./06-sharding.md) — Multi-shard task routing and distribution
+
 ### TaskLocation enum
 
 The `TaskLocation` field tracks task placement for administrative cleanup optimization:

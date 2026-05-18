@@ -1381,3 +1381,11 @@ The authentication plugin system already exists in production, validating the pl
 Organizations gain flexibility to integrate codeQ with existing infrastructure investments while maintaining security boundaries. Plugin developers work within clear contracts that remain stable across codeQ versions. Operators configure plugins through standard configuration files without requiring code changes.
 
 The phased implementation approach delivers incremental value, starting with foundational interfaces and progressing to production-ready backends and example plugins.
+
+## See also
+
+- [Architecture](./03-architecture.md) — System design overview
+- [Persistence Plugin System](./27-persistence-plugin-system.md) — Persistence plugin interface
+- [Authentication Plugins](./20-authentication-plugins.md) — Auth plugin implementation guide
+- [Configuration](./14-configuration.md) — Plugin configuration options
+- [Developer Guide](./21-developer-guide.md) — Extending codeQ

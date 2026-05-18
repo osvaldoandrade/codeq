@@ -531,3 +531,11 @@ Sampling is parent-based by default, so if an incoming request has a sampled tra
 - **Integration Guides**:
   - [Java Integration](integrations/java-integration.md)
   - [Node.js Integration](integrations/nodejs-integration.md)
+
+## See also
+
+- [CLI Reference](./15-cli-reference.md) — Command-line interface reference
+- [HTTP API](./04-http-api.md) — Complete REST API documentation
+- [Getting Started](./00-getting-started.md) — First-time user tutorial
+- [Configuration](./14-configuration.md) — Configuration options and setup
+- [Webhooks](./12-webhooks.md) — Worker push notifications

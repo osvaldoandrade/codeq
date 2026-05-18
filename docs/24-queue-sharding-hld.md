@@ -910,3 +910,11 @@ The explicit sharding design through ShardSupplier, combined with a consistent-h
 **Next steps**: Implementation phases track to issue #31. Phase 1 (interface definition) begins immediately. Subsequent phases gate on production validation. Complete ETA: Aug/26.
 
 **Alternative considerations**: The plugin architecture section outlines a complementary approach for organizations with requirements beyond Pebble.
+
+## See also
+
+- [Architecture](./03-architecture.md) — System design overview
+- [Sharding](./06-sharding.md) — Sharding configuration and implementation
+- [Configuration](./14-configuration.md) — Shard configuration options
+- [Performance Tuning](./17-performance-tuning.md) — Throughput optimization
+- [Plugin Architecture HLD](./25-plugin-architecture-hld.md) — Plugin design patterns
