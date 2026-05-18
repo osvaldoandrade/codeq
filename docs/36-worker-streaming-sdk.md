@@ -15,26 +15,20 @@ proposition for streaming versus REST is in
 
 ## What and why
 
-The REST worker path requires three round-trips per task:
+The worker streaming SDK is the Go client for the worker stream on
+`:9091`. It opens one long-lived bidirectional gRPC stream per
+process, sends `Hello` once for authentication, and dispatches each
+`Task` it receives to a user-provided handler running on
+`Config.Concurrency` slot goroutines.
 
-1. `POST /claim` — authenticate, claim, return one task.
-2. `POST /tasks/<id>/result` — authenticate, write COMPLETED.
-3. Optional `POST /tasks/<id>/heartbeat` — authenticate, extend lease.
-
-Each request pays the full HTTP middleware tax (TLS handshake reuse
-aside): bearer-token parse, JWT verify, tenant resolution, request log,
-metrics, panic recovery. Under load this dominates CPU — Phase 1
-profiling showed >40% of worker-side cycles spent above the scheduler.
-
-The streaming SDK collapses all three round-trips into a single
-bidirectional stream:
-
-- One `Hello` at stream open authenticates for the lifetime of the
-  connection.
-- `Ready` / `Task` / `Result` / `ResultAck` flow as oneof events on the
-  same stream — no new TCP, no new TLS, no new JWT verify.
-- N slot goroutines pipeline work across the same stream so the wire
-  is never idle.
+The REST worker path requires three separate round-trips per task —
+`POST /claim`, `POST /tasks/<id>/result`, and the optional
+`POST /tasks/<id>/heartbeat` — each paying the full HTTP middleware
+chain. The streaming SDK collapses all three into one stream:
+`Ready` / `Task` / `Result` / (`Heartbeat`) flow as oneof events on
+the same connection, and N slot goroutines keep the wire saturated.
+For the cross-path rationale and connection-pool details, see
+[gRPC streaming API guide § Why gRPC streams over HTTP](./34-streaming-api-guide.md#1-why-grpc-streams-over-http).
 
 Measured speedup on the reference 12-core Linux box:
 
@@ -68,7 +62,7 @@ graph TB
     SE[session<br/>sendCh writer]
     RD[readLoop]
   end
-  subgraph Wire[gRPC bidi stream]
+  subgraph Wire[gRPC bidi stream on :9091]
     EV[WorkerEvent / ServerEvent oneofs]
   end
   subgraph ServerProc[codeq server]
@@ -361,6 +355,17 @@ Consequences for the SDK consumer:
   The lease entry survives until its TTL expires. If a worker crashes
   mid-handler, the task is unavailable to other workers until the
   reaper runs.
+- **Result ownership is enforced server-side**. If your handler
+  exceeds the lease, the reaper requeues the task and another worker
+  may claim it. When the original handler finally returns and the SDK
+  sends `Result`, the server's `ResultsService` checks
+  `task.WorkerID == req.WorkerID`
+  ([`internal/services/results_service.go:60`](../internal/services/results_service.go))
+  and rejects the late result with `not-owner`. The same check exists
+  on the batch path
+  ([`internal/services/results_service.go:248`](../internal/services/results_service.go)).
+  This means a re-claimed task is safe: the second worker's result
+  wins, the first worker's late result is dropped.
 
 > **Warning**: do not assume Heartbeat will save you from a stuck
 > handler. If your handler can hang, set a watchdog ctx and call
