@@ -15,6 +15,7 @@ type RaftGroupStatus interface {
 	SelfID() string
 	BindAddr() string
 	LeaderInfo() (id, addr string)
+	LeaderHTTPAddr() string
 }
 
 // raftStatusController exposes the local node's per-shard raft state.
@@ -31,13 +32,14 @@ func NewRaftStatusController(groups []RaftGroupStatus) *raftStatusController {
 }
 
 type raftGroupView struct {
-	ShardIdx    int    `json:"shardIdx"`
-	IsLeader    bool   `json:"isLeader"`
-	SelfID      string `json:"selfId"`
-	SelfAddr    string `json:"selfAddr"`
-	LeaderID    string `json:"leaderId"`
-	LeaderAddr  string `json:"leaderAddr"`
-	HasLeader   bool   `json:"hasLeader"`
+	ShardIdx       int    `json:"shardIdx"`
+	IsLeader       bool   `json:"isLeader"`
+	SelfID         string `json:"selfId"`
+	SelfAddr       string `json:"selfAddr"`
+	LeaderID       string `json:"leaderId"`
+	LeaderAddr     string `json:"leaderAddr"`
+	LeaderHTTPAddr string `json:"leaderHTTPAddr,omitempty"`
+	HasLeader      bool   `json:"hasLeader"`
 }
 
 type raftStatusResponse struct {
@@ -56,13 +58,14 @@ func (h *raftStatusController) Handle(c *gin.Context) {
 	for i, g := range h.groups {
 		leaderID, leaderAddr := g.LeaderInfo()
 		resp.Groups = append(resp.Groups, raftGroupView{
-			ShardIdx:   i,
-			IsLeader:   g.IsLeader(),
-			SelfID:     g.SelfID(),
-			SelfAddr:   g.BindAddr(),
-			LeaderID:   leaderID,
-			LeaderAddr: leaderAddr,
-			HasLeader:  leaderID != "",
+			ShardIdx:       i,
+			IsLeader:       g.IsLeader(),
+			SelfID:         g.SelfID(),
+			SelfAddr:       g.BindAddr(),
+			LeaderID:       leaderID,
+			LeaderAddr:     leaderAddr,
+			LeaderHTTPAddr: g.LeaderHTTPAddr(),
+			HasLeader:      leaderID != "",
 		})
 	}
 	c.JSON(http.StatusOK, resp)

@@ -72,6 +72,24 @@ func TestLoadConfigOptional_RaftDisabledByDefault(t *testing.T) {
 	}
 }
 
+func TestLoadConfigOptional_RaftPeerHTTPAddrs(t *testing.T) {
+	t.Setenv("RAFT_PEER_HTTP_ADDRS", "node-1=http://host1:8080,node-2=http://host2:8080,node-3=http://host3:8080")
+	cfg, err := LoadConfigOptional("")
+	if err != nil {
+		t.Fatalf("LoadConfigOptional: %v", err)
+	}
+	want := map[string]string{
+		"node-1": "http://host1:8080",
+		"node-2": "http://host2:8080",
+		"node-3": "http://host3:8080",
+	}
+	for id, url := range want {
+		if got := cfg.Raft.PeerHTTPAddrs[id]; got != url {
+			t.Errorf("PeerHTTPAddrs[%s]: want %q, got %q", id, url, got)
+		}
+	}
+}
+
 func TestLoadConfigOptional_RaftPeersIgnoresMalformed(t *testing.T) {
 	t.Setenv("RAFT_PEERS", "node-1=ok:7000,malformed-no-equals,=missing-id,trailing-empty=,node-2=ok:7001,")
 	cfg, err := LoadConfigOptional("")

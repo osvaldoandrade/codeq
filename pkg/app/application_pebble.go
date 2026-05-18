@@ -221,6 +221,7 @@ func newPebbleApplication(
 				BindAddr:      shardBind,
 				Bootstrap:     cfg.Raft.Bootstrap,
 				PeerAddrs:     shardPeers,
+				PeerHTTPAddrs: cfg.Raft.PeerHTTPAddrs,
 				HeartbeatMS:   cfg.Raft.HeartbeatMS,
 				ElectionMS:    cfg.Raft.ElectionMS,
 				LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
