@@ -266,7 +266,173 @@ a fresh worker.
 > window for the worst-case Pebble commit latency on your hardware (see
 > [Performance tuning](./17-performance-tuning.md)).
 
-## 7. Trade-offs
+## 7. Late-result race (worker submits after losing lease)
+
+The Heartbeat race in §6 covers the case where the worker is still
+holding the task and the reaper is about to take it. The mirror case
+is when the reaper has already requeued, a second worker claimed and
+is running, and the original worker — having been paused long enough
+to lose its lease — eventually finishes its (now obsolete) work and
+calls Submit.
+
+Timeline:
+
+1. Worker A claims task X at t=0, lease until t=60. Lease table:
+   `X → {A, untilU=60}`. Task body: `WorkerID=A`.
+2. A pauses (GC pause, stop-the-world, network partition) from t=10 to
+   t=70.
+3. At t=62, the reaper's sweep finds `X.untilU <= now`, double-checks
+   under the write lock, then runs `requeueExpiredOne`. Task body:
+   `WorkerID="", LeaseUntil="", Status=PENDING`. Lease table entry
+   for X is deleted.
+4. At t=63, worker B claims X. Task body: `WorkerID=B, LeaseUntil=t+60`.
+   Lease table: `X → {B, untilU=123}`.
+5. At t=70, A wakes up and finishes processing. A submits a result for
+   X with `req.WorkerID = A`.
+6. `BatchSubmit` loads X's task body, sees `task.WorkerID = B`, and
+   the ownership check fires:
+
+```go
+// internal/services/results_service.go:249
+if task.WorkerID != "" && req.WorkerID != "" && task.WorkerID != req.WorkerID {
+    responses[i] = domain.BatchSubmitResponse{TaskID: item.TaskID, Error: "not-owner"}
+    continue
+}
+```
+
+A's result is rejected with `not-owner`. B's eventual Submit (or
+B's own lease expiry) drives X to a terminal state. The single-Submit
+path applies the same check at `internal/services/results_service.go:60`.
+
+Key invariants this enforces:
+
+- **At-most-once Submit per claim instance.** A given (taskID,
+  workerID) pair can only complete the task while that worker still
+  owns the lease. Once the lease is lost — whether by reaper requeue
+  or by A's own Nack — any further Submit from A is rejected.
+- **No silent overwrite of B's progress.** Without the ownership
+  check, A's late Submit would race with B's work and could mark X
+  as `COMPLETED` with A's (stale) result, dropping B's in-flight
+  attempt on the floor.
+- **A's wasted work is discarded, not retried.** The contract is
+  at-least-once delivery, not exactly-once execution. A's processing
+  CPU is gone; the system stays consistent.
+
+The ownership check happens **before** any state mutation, so the
+rejected Submit is a pure read on A's side. No Pebble write, no
+notifier fan-out, no result record persisted. This is symmetric with
+the Heartbeat ownership check at
+`internal/repository/pebble/task_repository.go:843`.
+
+## 8. Interaction with raft
+
+In raft mode the lease table is per-shard and lives on the **leader**
+of each raft group. Wired at `pkg/app/application_pebble.go:433-439`:
+
+```go
+for i, shardDB := range dbs {
+    opts := reaperOpts
+    if cfg.Raft.Enabled && raftNodes[i] != nil {
+        ref := raftNodes[i]
+        opts.LeaderGate = ref.IsLeader   // only leader sweeps
+    }
+    pebblerepo.NewReaper(shardDB, loc, logger, opts).Start(bgCtx)
+}
+```
+
+Three properties follow:
+
+- **Followers don't sweep.** The reaper's `leaderGate` returns false
+  on followers (`internal/repository/pebble/reaper.go:140-145`) so
+  the sweep tick is a no-op. Followers still receive replicated
+  `KeyInprog` rows and task bodies via raft.Apply, so the durable
+  state stays consistent — they just don't observe their own copy of
+  the in-memory lease table.
+- **Followers don't populate the in-memory lease table.** The FSM
+  Apply path (`internal/raft/fsm.go:43-62`) commits the raw Pebble
+  batch via `batch.SetRepr(repr); batch.Commit(...)` and bypasses
+  the `TaskRepository.Claim` code. The follower's lease table
+  therefore stays empty until that node becomes a leader and runs
+  the recovery scan. The on-disk `KeyInprog` set is what gets
+  replicated, not the in-memory cache.
+- **Failover triggers a recovery scan, not an outage.** When a
+  follower wins an election it becomes the leader for that raft
+  group. Its lease table is empty, so the first thing the new
+  leader's reaper sweep does is read `KeyInprog` to rebuild state.
+  In practice the table is rebuilt the next time `Open()` runs —
+  which today means on process restart. Live failover without
+  restart still needs the in-memory table populated; the current
+  code path is "leader change → process restart → recoverLeases
+  walks `KeyInprog`" (~sub-second for 100k in-progress tasks).
+
+For deployments that want zero-restart failover, the missing piece
+is a hook on the raft leadership-change channel that calls
+`recoverLeases` on the new leader without bouncing the process. That
+hook is not implemented today; see `internal/raft/db.go` for the
+current leadership API.
+
+## 9. Capacity and complexity
+
+Memory cost per entry:
+
+- `leaseEntry`: 1 × int64 (`untilU`) + 3 × string header (16 bytes
+  each: pointer + length) = 56 bytes for the struct itself.
+- Each string's backing bytes adds the length: workerID (~36 bytes
+  uuid), tenantID (~36 bytes uuid), cmd (~10-20 bytes).
+- Go map slot overhead: ~16-24 bytes per entry.
+- Total: ~150-200 bytes per active lease in practice.
+
+For an in-flight workload of:
+
+| Concurrent leases | Heap cost |
+|---|---|
+| 10k | ~2 MiB |
+| 100k | ~20 MiB |
+| 1M | ~200 MiB |
+
+The 32-byte figure used elsewhere in this doc is the *struct only*
+without string backing bytes; the real-world cost is closer to the
+table above. At 1M concurrent leases the table fits in ~200 MiB of
+heap — order of magnitude below the task-body cache and well within
+the per-process heap budget of any reasonable deployment.
+
+Operation complexity:
+
+| Operation | Lock | Algorithmic cost |
+|---|---|---|
+| `Set` | write | O(1) amortised map insert |
+| `Get` | read | O(1) amortised map lookup |
+| `Extend` | write | O(1) lookup + 1 compare + 1 write |
+| `Delete` | write | O(1) map delete |
+| `SnapshotExpired(now, limit)` | read | O(N) scan, bounded by `limit` |
+
+The `SnapshotExpired` scan is the only non-O(1) operation. At 1M
+entries with a 256-entry batch the scan reads ~1M map slots per
+sweep — still in the millisecond range, and the reaper runs every
+2 s by default, so it consumes well under 1% of one core.
+
+A Pebble-backed equivalent would have:
+
+- Heartbeat: ~5 µs per Get + ~50-200 µs per CommitBatch (one
+  additional `KeyLease` Set on top of the task body Set).
+- Reaper sweep: a prefix Iter over `KeyLease` decoding each entry.
+
+The in-memory path is ~50× faster on Heartbeat and constant-time on
+the reaper-side (no Pebble I/O at all). The trade is the recovery
+scan and the loss of cross-process visibility — both of which match
+codeQ's "one server process per raft node" model.
+
+## 10. Trade-offs
+
+| Property | In-memory lease (current) | Pure-Pebble lease (pre-M2) |
+|---|---|---|
+| Heartbeat latency | ~100 ns (map ops only, after Pebble commit) | ~5 µs Get + 50-200 µs CommitBatch incl. lease write |
+| Memory cost | ~150-200 bytes per active lease | 0 (only on disk) |
+| Recovery cost on Open() | O(in-progress) point gets | 0 (already on disk) |
+| Reaper sweep cost | O(N) map scan, no Pebble I/O | Prefix Iter + decode every tick |
+| Cross-process visibility | No (single process) | Yes (any process can read `KeyLease`) |
+| Failover (raft) | New leader rebuilds via `recoverLeases` on next `Open()` | Already on disk; no recovery needed |
+| Write amplification on Heartbeat | 1 batch (body + ttl) | 1 batch (body + ttl + lease) |
 
 The in-memory lease table loses two things compared to the on-disk
 version, both bounded by the lease window:
@@ -298,12 +464,12 @@ What we explicitly do **not** lose:
   policy, the same `Attempts++ vs MaxAttempts` check, and the same
   DLQ transition.
 
-Cluster mode is unaffected. The lease table is per-shard / per-process
-and the gRPC routing layer that owns each task's home shard does not
-care where its lease lives, only that Heartbeat / Submit / Nack land
-on the same process.
+Cluster mode behavior is detailed in §8. The lease table is per-shard
+/ per-process and the gRPC routing layer that owns each task's home
+shard does not care where its lease lives, only that Heartbeat /
+Submit / Nack land on the leader of that shard.
 
-## 8. Benchmarks
+## 11. Benchmarks
 
 The headline number for this change is the `ciclo full` improvement
 recorded in commit `227d646`:
