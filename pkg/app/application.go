@@ -33,6 +33,7 @@ type RaftGroupStatus interface {
 	SelfID() string
 	BindAddr() string
 	LeaderInfo() (id, addr string)
+	LeaderHTTPAddr() string
 }
 
 type Application struct {

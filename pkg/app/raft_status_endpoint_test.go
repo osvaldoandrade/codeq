@@ -18,13 +18,14 @@ type raftStatusResp struct {
 	Enabled   bool `json:"enabled"`
 	NumGroups int  `json:"numGroups"`
 	Groups    []struct {
-		ShardIdx   int    `json:"shardIdx"`
-		IsLeader   bool   `json:"isLeader"`
-		SelfID     string `json:"selfId"`
-		SelfAddr   string `json:"selfAddr"`
-		LeaderID   string `json:"leaderId"`
-		LeaderAddr string `json:"leaderAddr"`
-		HasLeader  bool   `json:"hasLeader"`
+		ShardIdx       int    `json:"shardIdx"`
+		IsLeader       bool   `json:"isLeader"`
+		SelfID         string `json:"selfId"`
+		SelfAddr       string `json:"selfAddr"`
+		LeaderID       string `json:"leaderId"`
+		LeaderAddr     string `json:"leaderAddr"`
+		LeaderHTTPAddr string `json:"leaderHTTPAddr"`
+		HasLeader      bool   `json:"hasLeader"`
 	} `json:"groups"`
 }
 
@@ -116,6 +117,9 @@ func TestRaftStatusEndpoint_SingleShard_Leader(t *testing.T) {
 	if !g.HasLeader || g.LeaderID != "node-1" {
 		t.Errorf("LeaderID: want node-1 + HasLeader=true, got %q + %v", g.LeaderID, g.HasLeader)
 	}
+	if g.LeaderHTTPAddr != "http://127.0.0.1:8080" {
+		t.Errorf("LeaderHTTPAddr: want http://127.0.0.1:8080, got %q", g.LeaderHTTPAddr)
+	}
 }
 
 type singleNodeRaftApp struct {
@@ -160,6 +164,7 @@ func openSingleNodeRaftApp(t *testing.T) singleNodeRaftApp {
 			SelfID:              "node-1",
 			BindAddr:            "127.0.0.1:" + portString(port),
 			Bootstrap:           true,
+			PeerHTTPAddrs:       map[string]string{"node-1": "http://127.0.0.1:8080"},
 			HeartbeatMS:         50,
 			ElectionMS:          50,
 			LeaderLeaseMS:       50,

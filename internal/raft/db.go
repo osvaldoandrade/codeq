@@ -30,7 +30,12 @@ type Config struct {
 	SelfID          string
 	BindAddr        string
 	Bootstrap       bool
-	PeerAddrs       map[string]string // id → bind addr
+	PeerAddrs       map[string]string // id → raft bind addr
+	// PeerHTTPAddrs maps peer ID → HTTP base URL ("http://host:port").
+	// Optional. When set, LeaderHTTPAddr() returns the leader's HTTP
+	// URL so the status endpoint + smart clients can route writes
+	// directly to the leader.
+	PeerHTTPAddrs   map[string]string
 	HeartbeatMS     int               // raft heartbeat (default 1000)
 	ElectionMS      int               // raft election (default 1000)
 	LeaderLeaseMS   int               // raft leader lease (default 500)
@@ -341,6 +346,18 @@ func (d *DB) LeaderInfo() (id, addr string) {
 	}
 	rawAddr, rawID := d.raft.LeaderWithID()
 	return string(rawID), string(rawAddr)
+}
+
+// LeaderHTTPAddr returns the leader's HTTP base URL when cfg.PeerHTTPAddrs
+// has an entry for the leader, or "" otherwise. Used by the status
+// endpoint and (future) smart clients to route writes directly at the
+// leader's HTTP listener instead of relying on retry-on-not-leader.
+func (d *DB) LeaderHTTPAddr() string {
+	id, _ := d.LeaderInfo()
+	if id == "" || len(d.cfg.PeerHTTPAddrs) == 0 {
+		return ""
+	}
+	return d.cfg.PeerHTTPAddrs[id]
 }
 
 // SelfID returns the configured raft ServerID for this node.

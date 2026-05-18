@@ -131,6 +131,12 @@ type RaftConfig struct {
 	BindAddr      string            `yaml:"bindAddr"` // e.g. ":7000"
 	Bootstrap     bool              `yaml:"bootstrap"`
 	Peers         map[string]string `yaml:"peers"` // id → bindAddr (including self)
+	// PeerHTTPAddrs maps each raft peer ID to its HTTP base URL (e.g.
+	// "http://node-1:8080"). Surfaced in /v1/codeq/raft/status so ops
+	// tooling and smart clients can route writes directly at the
+	// leader's HTTP listener. Optional; status reports an empty URL
+	// when a peer's HTTP addr isn't configured.
+	PeerHTTPAddrs map[string]string `yaml:"peerHTTPAddrs"`
 	HeartbeatMS   int               `yaml:"heartbeatMS"`
 	ElectionMS    int               `yaml:"electionMS"`
 	LeaderLeaseMS int               `yaml:"leaderLeaseMS"`
@@ -270,6 +276,23 @@ func applyEnvAndDefaults(c *Config) {
 		}
 		if len(peers) > 0 {
 			c.Raft.Peers = peers
+		}
+	}
+	if v := os.Getenv("RAFT_PEER_HTTP_ADDRS"); v != "" {
+		http := make(map[string]string)
+		for _, pair := range strings.Split(v, ",") {
+			pair = strings.TrimSpace(pair)
+			if pair == "" {
+				continue
+			}
+			eq := strings.Index(pair, "=")
+			if eq <= 0 || eq == len(pair)-1 {
+				continue
+			}
+			http[strings.TrimSpace(pair[:eq])] = strings.TrimSpace(pair[eq+1:])
+		}
+		if len(http) > 0 {
+			c.Raft.PeerHTTPAddrs = http
 		}
 	}
 	if v := os.Getenv("RAFT_HEARTBEAT_MS"); v != "" {
