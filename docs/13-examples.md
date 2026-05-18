@@ -1,13 +1,12 @@
 # Usage Examples
 
-This document provides practical examples of using CodeQ via HTTP API, CLI, and official SDKs.
+This document provides practical examples of using CodeQ via HTTP API, CLI, and the official Go SDK.
 
 ## Table of Contents
 
 - [HTTP API Examples](#http-api-examples)
 - [CLI Examples](#cli-examples)
-- [SDK Examples](#sdk-examples)
-- [Framework Examples](#framework-examples)
+- [Go SDK Examples](#go-sdk-examples)
 
 ## HTTP API Examples
 
@@ -118,266 +117,98 @@ codeq task claim \
   --token $WORKER_TOKEN
 ```
 
-## SDK Examples
+## Go SDK Examples
 
-### Java SDK
+The Go SDK lives inside the main module under
+[`pkg/producerclient`](../pkg/producerclient) (task creation) and
+[`pkg/workerclient`](../pkg/workerclient) (claim + result). Both use
+gRPC streams under the hood.
 
-**Create a task**:
+**Install:**
 
-```java
-CodeQClient client = CodeQClient.builder()
-    .baseUrl("https://codeq.example.com")
-    .producerToken(System.getenv("CODEQ_PRODUCER_TOKEN"))
-    .workerToken(System.getenv("CODEQ_WORKER_TOKEN"))
-    .build();
-
-// Create task
-Map<String, Object> payload = Map.of("orderId", "123", "amount", 99.99);
-Task task = client.createTask("PROCESS_ORDER", payload, 5);
-System.out.println("Created task: " + task.getId());
+```bash
+go get github.com/osvaldoandrade/codeq
 ```
 
-**Claim and process task**:
+**Create a task (producer):**
 
-```java
-// Claim task
-Task task = client.claimTask(
-    List.of("PROCESS_ORDER"), 
-    120,  // lease seconds
-    10    // wait seconds
-);
+```go
+import (
+    "context"
+    "os"
 
-if (task != null) {
-    try {
-        // Process task
-        processOrder(task.getPayload());
-        
-        // Submit result
-        Map<String, Object> result = Map.of("status", "success");
-        client.submitResult(task.getId(), result);
-    } catch (Exception e) {
-        // NACK on failure
-        client.nackTask(task.getId(), "Processing failed: " + e.getMessage());
-    }
-}
-```
+    "github.com/osvaldoandrade/codeq/pkg/producerclient"
+)
 
-**Complete example**: See [examples/java/springboot](../examples/java/springboot/)
-
----
-
-### Node.js/TypeScript SDK
-
-**Create a task**:
-
-```typescript
-import { CodeQClient } from '@osvaldoandrade/codeq-client';
-
-const client = new CodeQClient({
-  baseUrl: 'https://codeq.example.com',
-  producerToken: process.env.CODEQ_PRODUCER_TOKEN,
-  workerToken: process.env.CODEQ_WORKER_TOKEN,
-});
-
-// Create task
-const task = await client.createTask({
-  command: 'PROCESS_ORDER',
-  payload: { orderId: '123', amount: 99.99 },
-  priority: 5,
-});
-console.log('Created task:', task.id);
-```
-
-**Claim and process task**:
-
-```typescript
-// Claim task
-const task = await client.claimTask({
-  commands: ['PROCESS_ORDER'],
-  leaseSeconds: 120,
-  waitSeconds: 10,
-});
-
-if (task) {
-  try {
-    // Process task
-    await processOrder(task.payload);
-    
-    // Submit result
-    await client.submitResult(task.id, {
-      status: 'COMPLETED',
-      result: { success: true },
-    });
-  } catch (error) {
-    // NACK on failure
-    await client.nackTask(task.id, `Processing failed: ${error.message}`);
-  }
-}
-```
-
-**Complete example**: See [examples/nodejs/nestjs](../examples/nodejs/nestjs/)
-
-## Framework Examples
-
-### Spring Boot Integration
-
-**Configuration**:
-
-```java
-@Configuration
-public class CodeQConfig {
-    @Bean
-    public CodeQClient codeQClient(
-        @Value("${codeq.base-url}") String baseUrl,
-        @Value("${codeq.producer-token}") String producerToken,
-        @Value("${codeq.worker-token}") String workerToken
-    ) {
-        return CodeQClient.builder()
-            .baseUrl(baseUrl)
-            .producerToken(producerToken)
-            .workerToken(workerToken)
-            .build();
-    }
-}
-```
-
-**Producer Service**:
-
-```java
-@Service
-public class OrderService {
-    @Autowired
-    private CodeQClient codeQClient;
-    
-    public String createOrderTask(Order order) {
-        Task task = codeQClient.createTask(
-            "PROCESS_ORDER",
-            Map.of("orderId", order.getId()),
-            5
-        );
-        return task.getId();
-    }
-}
-```
-
-**Worker Service**:
-
-```java
-@Service
-public class OrderWorker {
-    @Autowired
-    private CodeQClient codeQClient;
-    
-    @Scheduled(fixedDelay = 5000)
-    public void pollTasks() {
-        Task task = codeQClient.claimTask(
-            List.of("PROCESS_ORDER"),
-            120,
-            10
-        );
-        
-        if (task != null) {
-            processTask(task);
-        }
-    }
-    
-    private void processTask(Task task) {
-        try {
-            // Process order
-            Map<String, Object> result = Map.of("status", "success");
-            codeQClient.submitResult(task.getId(), result);
-        } catch (Exception e) {
-            codeQClient.nackTask(task.getId(), e.getMessage());
-        }
-    }
-}
-```
-
-**Full example**: [examples/java/springboot](../examples/java/springboot/)
-
-**Integration guide**: [Java Integration Guide](integrations/java-integration.md)
-
----
-
-### NestJS Integration
-
-**Module Configuration**:
-
-```typescript
-@Module({
-  providers: [
-    {
-      provide: 'CODEQ_CLIENT',
-      useFactory: () => {
-        return new CodeQClient({
-          baseUrl: process.env.CODEQ_BASE_URL,
-          producerToken: process.env.CODEQ_PRODUCER_TOKEN,
-          workerToken: process.env.CODEQ_WORKER_TOKEN,
-        });
-      },
-    },
-  ],
-  exports: ['CODEQ_CLIENT'],
+cli, err := producerclient.New(producerclient.Config{
+    Addr:  "codeq.example.com:9092",
+    Token: os.Getenv("CODEQ_PRODUCER_TOKEN"),
 })
-export class CodeQModule {}
+if err != nil {
+    return err
+}
+defer cli.Close()
+
+sess, err := cli.Connect(ctx)
+if err != nil {
+    return err
+}
+defer sess.Close()
+
+taskID, err := sess.Produce(ctx, producerclient.CreateRequest{
+    Command:  "PROCESS_ORDER",
+    Payload:  []byte(`{"orderId":"123","amount":99.99}`),
+    Priority: 5,
+})
 ```
 
-**Producer Controller**:
+**Process tasks (worker):**
 
-```typescript
-@Controller('orders')
-export class OrdersController {
-  constructor(@Inject('CODEQ_CLIENT') private codeQClient: CodeQClient) {}
+`Client.Run` opens a stream, dispatches claimed tasks to a `Handler`,
+and returns when the context is cancelled. The handler decides how to
+finalize each task with `Completed`, `Failed`, `Nack`, or `Abandon`.
 
-  @Post()
-  async createOrder(@Body() order: CreateOrderDto) {
-    const task = await this.codeQClient.createTask({
-      command: 'PROCESS_ORDER',
-      payload: { orderId: order.id },
-      priority: 5,
-    });
-    return { taskId: task.id };
-  }
+```go
+import (
+    "context"
+    "os"
+
+    "github.com/osvaldoandrade/codeq/pkg/workerclient"
+)
+
+w, err := workerclient.New(workerclient.Config{
+    Addr:         "codeq.example.com:9091",
+    Token:        os.Getenv("CODEQ_WORKER_TOKEN"),
+    Commands:     []string{"PROCESS_ORDER"},
+    Concurrency:  4,
+    LeaseSeconds: 120,
+    BatchSize:    8,
+})
+if err != nil {
+    return err
+}
+defer w.Close()
+
+handler := func(ctx context.Context, t workerclient.Task) workerclient.Result {
+    if err := processOrder(ctx, t.Payload); err != nil {
+        return workerclient.Nack(5, err.Error())
+    }
+    return workerclient.Completed(map[string]any{"success": true})
+}
+
+if err := w.Run(ctx, handler); err != nil {
+    return err
 }
 ```
 
-**Worker Service**:
+**See also**:
+- [Go Integration Guide](integrations/go-integration.md) — full surface
+  walk-through.
+- [Streaming API guide](34-streaming-api-guide.md) — high-throughput
+  producer/worker stream patterns.
 
-```typescript
-@Injectable()
-export class OrderWorker {
-  constructor(@Inject('CODEQ_CLIENT') private codeQClient: CodeQClient) {}
-
-  @Cron(CronExpression.EVERY_5_SECONDS)
-  async pollTasks() {
-    const task = await this.codeQClient.claimTask({
-      commands: ['PROCESS_ORDER'],
-      leaseSeconds: 120,
-      waitSeconds: 10,
-    });
-
-    if (task) {
-      await this.processTask(task);
-    }
-  }
-
-  private async processTask(task: Task) {
-    try {
-      // Process order
-      await this.codeQClient.submitResult(task.id, {
-        status: 'COMPLETED',
-        result: { success: true },
-      });
-    } catch (error) {
-      await this.codeQClient.nackTask(task.id, error.message);
-    }
-  }
-}
-```
-
-**Full example**: [examples/nodejs/nestjs](../examples/nodejs/nestjs/)
-
-**Integration guide**: [Node.js Integration Guide](integrations/nodejs-integration.md)
+For non-Go callers, use the HTTP API documented in
+[04-http-api.md](04-http-api.md).
 
 ## OpenTelemetry Distributed Tracing
 
@@ -522,12 +353,10 @@ Sampling is parent-based by default, so if an incoming request has a sampled tra
 
 ## Additional Resources
 
-- **SDK Documentation**: [sdks/README.md](../sdks/README.md)
+- **Go SDK overview**: [sdks/README.md](../sdks/README.md)
 - **HTTP API Reference**: [04-http-api.md](04-http-api.md)
 - **CLI Reference**: [15-cli-reference.md](15-cli-reference.md)
 - **Tracing Configuration**: [14-configuration.md](14-configuration.md#tracing-opentelemetry)
 - **Operations Guide**: [10-operations.md](10-operations.md#tracing-opentelemetry)
-- **All Examples**: [examples/](../examples/)
-- **Integration Guides**:
-  - [Java Integration](integrations/java-integration.md)
-  - [Node.js Integration](integrations/nodejs-integration.md)
+- **Examples directory**: [examples/](../examples/)
+- **Go Integration Guide**: [integrations/go-integration.md](integrations/go-integration.md)

@@ -54,12 +54,14 @@ layer, lease table, and gRPC + HTTP API all in one process.
 
 ### Integration Guides
 
-- `docs/integrations/java-integration.md` - Java SDK with Spring Boot, Quarkus, Micronaut
-- `docs/integrations/nodejs-integration.md` - Node.js/TypeScript SDK with Express, NestJS, React
-- `docs/integrations/python-integration.md` - Python SDK with FastAPI, Django, Flask
-- `docs/integrations/go-integration.md` - Go SDK with standard library, Gin, Echo
-- `sdks/README.md` - SDK overview and quick start guide
-- `examples/` - Working example applications
+- `docs/integrations/go-integration.md` - Official Go SDK
+  (`pkg/producerclient` + `pkg/workerclient`) with standard library,
+  Gin, Echo.
+- `sdks/README.md` - Go SDK overview and quick start.
+- `examples/` - Long-form walk-throughs (e.g. custom auth plugin).
+
+Non-Go callers should use the [HTTP API](04-http-api.md) directly; no
+language-specific SDKs ship with codeq.
 
 ### Deployment Assets
 

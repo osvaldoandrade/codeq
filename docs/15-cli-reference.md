@@ -514,59 +514,10 @@ done
 
 ### Custom Worker Handlers
 
-Handler script examples:
-
-**Python handler:**
-
-````python
-#!/usr/bin/env python3
-import json
-import sys
-
-# Read task from stdin
-task = json.load(sys.stdin)
-task_id = task['id']
-payload = json.loads(task['payload'])
-
-# Process task
-result = process_task(payload)
-
-# Output result
-print(json.dumps({
-    "status": "COMPLETED",
-    "result": result
-}))
-````
-
-**Node.js handler:**
-
-````javascript
-#!/usr/bin/env node
-const readline = require('readline');
-
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-  terminal: false
-});
-
-let input = '';
-rl.on('line', line => { input += line; });
-
-rl.on('close', async () => {
-  const task = JSON.parse(input);
-  const payload = JSON.parse(task.payload);
-  
-  // Process task
-  const result = await processTask(payload);
-  
-  // Output result
-  console.log(JSON.stringify({
-    status: 'COMPLETED',
-    result: result
-  }));
-});
-````
+A handler is any executable that reads the task JSON from stdin and
+writes a `{"status": "...", "result": ...}` JSON response to stdout —
+write it in whatever language you like. For native Go workers, use the
+[Go SDK](../pkg/workerclient) directly instead of shelling out.
 
 ## See Also
 
