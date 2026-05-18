@@ -23,6 +23,9 @@ func (h *abandonController) Handle(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Abandon(c.Request.Context(), taskID, claims.Subject); err != nil {
+		if maybeRedirectLeader(c, err) {
+			return
+		}
 		status := http.StatusInternalServerError
 		if err.Error() == "not-owner" {
 			status = http.StatusForbidden

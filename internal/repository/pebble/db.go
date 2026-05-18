@@ -21,13 +21,44 @@ import (
 type Replicator interface {
 	IsLeader() bool
 	Replicate(repr []byte) error
+	// LeaderHTTPAddr returns the leader's HTTP base URL (per the
+	// configured peer map) when known, or "" otherwise. Used to fill
+	// the LeaderURL on NotLeaderError so controllers can respond with
+	// HTTP 307 + Location.
+	LeaderHTTPAddr() string
 }
 
-// ErrNotLeader is returned by write APIs when this DB is attached to a
-// replicator and the local node isn't the leader. The repository code
-// surfaces it to the service layer; the cluster router (not the storage
-// layer) decides whether to forward to a leader.
+// ErrNotLeader is the sentinel returned by write APIs when this DB is
+// attached to a replicator and the local node isn't the leader. The
+// concrete return value is a *NotLeaderError, which carries the
+// leader hint; bare errors.Is(err, ErrNotLeader) still works because
+// NotLeaderError.Is matches the sentinel.
 var ErrNotLeader = errors.New("pebble: not leader")
+
+// NotLeaderError is the typed error returned by write APIs in raft
+// mode when the local node isn't the leader. LeaderURL is the
+// leader's HTTP base URL when known (resolved from the configured
+// peer map) — controllers use it to write a 307 redirect.
+//
+// Satisfies pkg/domain.LeaderHint via the LeaderHTTPAddr() method.
+type NotLeaderError struct {
+	LeaderURL string
+}
+
+func (e *NotLeaderError) Error() string {
+	if e.LeaderURL != "" {
+		return "pebble: not leader (try " + e.LeaderURL + ")"
+	}
+	return "pebble: not leader"
+}
+
+// LeaderHTTPAddr returns the configured HTTP URL for the current
+// leader, or "" if unknown. Satisfies pkg/domain.LeaderHint.
+func (e *NotLeaderError) LeaderHTTPAddr() string { return e.LeaderURL }
+
+// Is matches the package-level ErrNotLeader sentinel so existing
+// errors.Is callers keep working without code changes.
+func (e *NotLeaderError) Is(target error) bool { return target == ErrNotLeader }
 
 // DB wraps a *pebble.DB with the helpers the repository implementations
 // need: a process-wide monotonic sequence counter (used to order pending
@@ -244,7 +275,7 @@ func (d *DB) Has(key []byte) (bool, error) {
 func (d *DB) Set(key, value []byte) error {
 	if d.repl != nil {
 		if !d.repl.IsLeader() {
-			return ErrNotLeader
+			return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
 		}
 		b := d.db.NewBatch()
 		defer b.Close()
@@ -260,7 +291,7 @@ func (d *DB) Set(key, value []byte) error {
 func (d *DB) Delete(key []byte) error {
 	if d.repl != nil {
 		if !d.repl.IsLeader() {
-			return ErrNotLeader
+			return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
 		}
 		b := d.db.NewBatch()
 		defer b.Close()
@@ -291,7 +322,7 @@ func (d *DB) Batch() *pebbledb.Batch {
 func (d *DB) CommitBatch(b *pebbledb.Batch) error {
 	if d.repl != nil {
 		if !d.repl.IsLeader() {
-			return ErrNotLeader
+			return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
 		}
 		// Replicator owns serialization; the local pebble write happens
 		// on every node via the FSM. The caller still owns b and must

@@ -59,7 +59,7 @@ func (h *createTaskController) Handle(c *gin.Context) {
 
 	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, req.Idempotency, runAt, req.DelaySecs, tenantID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondWriteError(c, err)
 		return
 	}
 	c.JSON(http.StatusAccepted, task)
