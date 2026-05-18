@@ -7,9 +7,8 @@ the pending bucket once the score is due. After `maxAttempts` the task
 lands in the DLQ marked `FAILED` with the originating reason; the system
 never silently retries forever.
 
-This page documents the Pebble-backed path. The Redis backend implements
-the same semantics with `ZADD` + `ZRANGEBYSCORE`; see
-[Storage (kvrocks)](./07-storage-kvrocks.md) for the SET / ZSET layout.
+This page documents the Pebble-backed path; see
+[Storage (Pebble)](./07b-storage-pebble.md) for the keyspace layout.
 
 ## Triggers
 

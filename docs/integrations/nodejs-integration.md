@@ -29,8 +29,8 @@ The CodeQ Node.js SDK provides a modern, Promise-based API with full TypeScript 
         │                           │                        │
         │                           ▼                        │
         │                    ┌─────────────┐                │
-        └───────────────────▶│  KVRocks    │◀───────────────┘
-                             │  (Redis)    │
+        └───────────────────▶│   Pebble    │◀───────────────┘
+                             │  (embedded) │
                              └─────────────┘
 ```
 

@@ -33,8 +33,8 @@ The CodeQ Python SDK provides both async and sync APIs with full type hints for:
         │                           │                        │
         │                           ▼                        │
         │                    ┌─────────────┐                │
-        └───────────────────▶│  KVRocks    │◀───────────────┘
-                             │  (Redis)    │
+        └───────────────────▶│   Pebble    │◀───────────────┘
+                             │  (embedded) │
                              └─────────────┘
 ```
 

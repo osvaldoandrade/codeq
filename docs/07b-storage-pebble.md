@@ -1,6 +1,6 @@
 # Storage layout (Pebble)
 
-Pebble is an embedded key-value store (CockroachDB's LSM engine) that runs inside the codeQ process. Unlike Redis/KVRocks, it requires no external dependencies and is ideal for local development, testing, and small deployments.
+Pebble is an embedded key-value store (CockroachDB's RocksDB-style LSM) that runs inside the codeq process. It requires no external dependencies — server, persistence, and lease state share one binary and one data directory.
 
 ## Keyspace
 
@@ -175,7 +175,7 @@ Cleanup runs periodically and can be triggered manually via admin API.
 
 ## Single-writer Property
 
-Pebble's embedded design means only one process may hold the database lock at a time. This is enforced at the OS level (flock on the database directory). For distributed deployments, use Redis/KVRocks instead.
+Pebble's embedded design means only one process may hold the database lock at a time. This is enforced at the OS level (flock on the database directory). For multi-node deployments, run multiple codeq nodes joined by the consistent-hash ring (see [05-cluster-architecture.md](./05-cluster-architecture.md)); each node owns its own Pebble store.
 
 ## Performance Characteristics
 
@@ -232,39 +232,23 @@ sequenceDiagram
 > See [Pebble sharding internals](./08b-pebble-sharding-internals.md)
 > for the per-shard component layout.
 
-## Comparison with Redis/KVRocks
+## Scaling Pebble
 
-| Feature | Pebble | Redis/KVRocks |
-|---------|--------|---------------|
-| External dependency | No (embedded) | Yes (server) |
-| Multi-process access | No (exclusive lock) | Yes (shared) |
-| Distribution | Single machine only | Cluster capable |
-| Deployment simplicity | High (zero setup) | Medium (standalone service) |
-| Memory footprint | ~300 MiB (configurable) | Variable (depends on data) |
-| Persistence | Automatic to disk | Configurable RDB/AOF |
-| Replication | Manual (backup only) | Built-in cluster support |
+| Path | Mechanism | When |
+|---|---|---|
+| Intra-process (Phase 8) | `numShards: N` opens N independent Pebble stores under `path/shard<i>/`; routed by `hash(task_id) % N` | One box, hitting the commit pipeline ceiling. Sweet spot: 4 shards on 12 cores → 83,420 tasks/s. |
+| Multi-node cluster | N codeq nodes joined by consistent-hash ring; each owns its own Pebble store | One box exhausted (CPU / RAM / disk); need horizontal scale. |
 
-## When to Use Pebble
-
-- **Local development**: Zero setup, instant startup
-- **Testing**: Isolated databases, cleanup on process exit
-- **Single-machine production**: Small deployments, high availability via external failover
-- **Prototype**: Quick validation before Redis scale-out
-
-## When to Use Redis/KVRocks
-
-- **Distributed systems**: Multiple codeQ instances sharing one queue
-- **High availability**: Cluster replication and failover
-- **Large scale**: Horizontal scaling, sharding support
-- **Existing infrastructure**: Leverage existing Redis/KVRocks clusters
+The two paths are mutually exclusive (the startup path panics if both
+`numShards > 1` and `cluster.enabled=true`). See
+[08b-pebble-sharding-internals.md](./08b-pebble-sharding-internals.md)
+and [05-cluster-architecture.md](./05-cluster-architecture.md).
 
 ## See also
 
-- [Storage layout (Redis/KVRocks)](./07-storage-kvrocks.md) — the
-  network-backed alternative with the same data model.
 - [Pebble sharding internals](./08b-pebble-sharding-internals.md) —
   per-shard component layout behind `ShardedTaskRepository`.
 - [Persistence plugin system](./27-persistence-plugin-system.md) — how
-  Pebble plugs into the repository interface alongside Redis.
+  Pebble plugs into the repository interface.
 - [Performance tuning](./17-performance-tuning.md) — knobs for shard
   count, batch sizes, and the coalescer in the field.

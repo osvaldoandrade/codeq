@@ -19,7 +19,7 @@ Each Redis command is linearizable, but workflows span multiple keys without a m
 
 ## Clocks
 
-Lease TTL is enforced by KVRocks and is authoritative. `leaseUntil` is advisory and derived from the service clock. Multi-instance deployments must tolerate clock skew. Timestamps in records are not guaranteed to be globally monotonic.
+Lease expiry is enforced by Pebble's in-memory lease table plus the reaper sweep (`internal/repository/pebble/reaper.go::sweepLeases`); the persisted `LeaseUntil` field on the task body is authoritative across restarts. The service-clock `leaseUntil` returned to workers is advisory and may drift slightly under clock skew. Timestamps in records are not guaranteed to be globally monotonic.
 
 ## Complexity evidence
 

@@ -409,7 +409,7 @@ to change it on a production deployment.
 - [Storage layout (Pebble)](./07b-storage-pebble.md) — keyspace and
   on-disk format for one shard.
 - [Persistence plugin system](./27-persistence-plugin-system.md) — how
-  Pebble plugs in alongside Redis / KVRocks.
+  Pebble is the supported persistence backend.
 - [Cluster architecture](./05-cluster-architecture.md) — the
   cross-machine path that intra-process sharding is mutually exclusive
   with.

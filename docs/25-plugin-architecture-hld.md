@@ -12,29 +12,38 @@ The authentication plugin system already exists in production (`pkg/auth/Validat
 
 ### Current State
 
-codeQ currently couples persistence directly to Redis/KVRocks through concrete implementations in `internal/repository/`. The TaskRepository and ResultRepository access `redis.Client` directly, embedding storage-specific operations throughout the codebase. While this approach delivers simplicity for the common case, it creates constraints for organizations with existing infrastructure investments.
+Earlier releases of codeq coupled persistence directly to the backend through concrete implementations in `internal/repository/`. The current `internal/repository/pebble/` implementation talks to Pebble through a single repository interface so the service layer is storage-agnostic; the plugin abstraction in `pkg/persistence/` exists so future backends (cloud KV stores, replicated LSMs) can be plugged in without touching the services.
 
 Authentication follows a plugin model through the `pkg/auth/Validator` interface. Implementations exist for JWKS, static tokens, and OAuth2 introspection. The application loads validators from configuration, enabling operators to select authentication mechanisms without code changes.
 
-### Constraints of Tight Coupling
+### Why a plugin layer at all
 
-**Infrastructure Lock-In**: Organizations standardized on Apache Cassandra, HBase, or PostgreSQL must operate separate Redis infrastructure solely for codeQ, increasing operational complexity and data governance friction.
+Pebble is the shipped backend and the only one we recommend running in
+production. The plugin layer (`pkg/persistence/`) exists for two
+narrow reasons, neither of which justifies operating a second
+backend today:
 
-**Testing Friction**: Integration tests depend on Docker containers running Redis. Test suites that manage multiple backend processes increase flakiness and execution time.
-
-**Feature Parity**: Storage-specific optimizations (Bloom filters, Lua atomicity) embed assumptions about Redis data structures. Alternative backends cannot leverage equivalent capabilities in their native systems.
-
-**Deployment Flexibility**: Cloud environments with managed database services (Amazon DynamoDB, Azure Cosmos DB, Google Cloud Datastore) force customers into unmanaged Redis infrastructure or accept higher latency from managed Redis offerings.
+- **Testability**: an in-memory provider lets unit tests skip disk I/O
+  entirely. Pebble tests use `t.TempDir()` and need no separate
+  provider; cross-cutting service tests use memory.
+- **Future extension**: if a replicated LSM, a cloud-managed KV store,
+  or a different on-disk format ever needs to slot in, the interface
+  exists so the service layer doesn't have to be rewritten.
 
 ### Requirements
 
 A plugin architecture must satisfy:
 
-- **Backward Compatibility**: Existing Redis-based deployments continue unchanged. No migration effort for current users.
-- **Interface Stability**: Plugin contracts remain stable across codeQ versions. Breaking changes follow semantic versioning.
-- **Security Isolation**: Plugins cannot bypass authorization checks or access tenant data outside their scope.
-- **Configuration-Driven**: Operators select persistence backends through configuration files, not code recompilation.
-- **Testing Support**: Provide in-memory implementations for unit tests, eliminating external dependencies.
+- **Pebble first**: the default and recommended path is the embedded
+  Pebble store. Anything else is opt-in and unsupported.
+- **Interface Stability**: plugin contracts remain stable across codeq
+  versions. Breaking changes follow semantic versioning.
+- **Security Isolation**: plugins cannot bypass authorization checks
+  or access tenant data outside their scope.
+- **Configuration-Driven**: operators select backends through
+  configuration files, not code recompilation.
+- **Testing Support**: provide in-memory implementations for unit
+  tests, eliminating external dependencies.
 
 ## Architectural Overview
 
@@ -297,25 +306,25 @@ graph LR
     Plugin[Plugin Instance]
     PersistIface[PluginPersistence Interface]
     Adapter[Backend Adapter]
-    Redis[(Redis/KVRocks)]
-    Postgres[(PostgreSQL)]
-    DynamoDB[(DynamoDB)]
+    Pebble[(Pebble embedded LSM)]
+    Future1[(Future backend A)]
+    Future2[(Future backend B)]
     
     Plugin -->|Save| PersistIface
     PersistIface -->|Route| Adapter
-    Adapter -->|Redis Protocol| Redis
+    Adapter -->|Batched WriteOptions| Pebble
     Adapter -->|SQL| Postgres
     Adapter -->|AWS SDK| DynamoDB
     
     style Plugin fill:#50c878
     style PersistIface fill:#f39c12
     style Adapter fill:#e67e22
-    style Redis fill:#95a5a6
+    style Pebble fill:#95a5a6
     style Postgres fill:#95a5a6
     style DynamoDB fill:#95a5a6
 ```
 
-Plugins invoke persistence methods on the interface. The interface routes requests to the backend adapter selected by configuration. Adapters translate operations to backend-specific commands. Redis adapters use Redis protocol commands. PostgreSQL adapters generate SQL statements. DynamoDB adapters use AWS SDK calls. Responses flow back through the adapter to the interface to the plugin.
+Plugins invoke persistence methods on the interface. The interface routes requests to the backend adapter selected by configuration. The shipped Pebble adapter (`internal/repository/pebble/`) translates operations to Pebble's batched WriteOptions. Future adapters would translate to their backend's native API (PostgreSQL to SQL, DynamoDB to AWS SDK). Responses flow back through the adapter to the interface to the plugin.
 
 ### Namespacing
 
@@ -329,29 +338,29 @@ The persistence implementation prepends this prefix to all keys automatically. P
 
 ### Backend Implementations
 
-**Redis Adapter**:
+**Pebble Adapter** (shipped):
 
 ```go
-type RedisPersistence struct {
-    client redis.Client
+type PebblePersistence struct {
+    db       *pebble.DB
     pluginID string
     tenantID string
 }
 
-func (r *RedisPersistence) Save(ctx context.Context, key string, value interface{}) error {
+func (p *PebblePersistence) Save(ctx context.Context, key string, value interface{}) error {
     data, err := json.Marshal(value)
     if err != nil {
         return err
     }
     
-    fullKey := r.makeKey(key)
-    return r.client.Set(ctx, fullKey, data, 0).Err()
+    fullKey := p.makeKey(key)
+    return p.db.Set([]byte(fullKey), data)
 }
 
-func (r *RedisPersistence) Load(ctx context.Context, key string, dest interface{}) error {
-    fullKey := r.makeKey(key)
-    data, err := r.client.Get(ctx, fullKey).Bytes()
-    if err == redis.Nil {
+func (p *PebblePersistence) Load(ctx context.Context, key string, dest interface{}) error {
+    fullKey := p.makeKey(key)
+    data, err := p.db.Get([]byte(fullKey))
+    if err == pebble.ErrNotFound {
         return ErrNotFound
     }
     if err != nil {
@@ -361,8 +370,8 @@ func (r *RedisPersistence) Load(ctx context.Context, key string, dest interface{
     return json.Unmarshal(data, dest)
 }
 
-func (r *RedisPersistence) makeKey(key string) string {
-    return fmt.Sprintf("codeq:plugin:%s:%s:%s", r.pluginID, r.tenantID, key)
+func (p *PebblePersistence) makeKey(key string) string {
+    return fmt.Sprintf("codeq:plugin:%s:%s:%s", p.pluginID, p.tenantID, key)
 }
 ```
 
@@ -489,7 +498,7 @@ func (p *PostgresPersistence) Batch(ctx context.Context, ops []BatchOp) error {
 }
 ```
 
-Redis implements batch operations using Lua scripts or MULTI/EXEC transactions. Backends without native transaction support emulate atomicity through versioning or execute operations sequentially with rollback on failure.
+Pebble exposes batches via `db.Batch()`; commit is atomic across keys. Backends without native transaction support emulate atomicity through versioning or execute operations sequentially with rollback on failure.
 
 ### Schema Management
 
@@ -1209,7 +1218,7 @@ Support plugins in multiple programming languages:
 
 Enable plugins to share state across multiple core service instances:
 
-- Persistence layer supports distributed caches (Redis Cluster, Hazelcast)
+- Persistence layer supports replicated LSM backends
 - Plugins coordinate through distributed locks
 - State changes propagate through event streams (Kafka, NATS)
 - Consistency models balance latency and correctness
@@ -1315,13 +1324,11 @@ Dynamic loading enables faster iteration and testing.
 
 ### Phase 2: Persistence Backends (Months 3-4)
 
-- Implement Redis persistence adapter
 - Implement PostgreSQL persistence adapter
 - Add schema migration framework
 - Write persistence adapter tests
 
 **Deliverables**:
-- `pkg/plugin/persistence/redis.go`
 - `pkg/plugin/persistence/postgres.go`
 - `pkg/plugin/persistence/migrate.go`
 - Test coverage for all adapters

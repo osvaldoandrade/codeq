@@ -13,8 +13,8 @@ docker compose \
   up -d
 ```
 
-The local stack starts KVRocks, codeQ from source, seed data, and optional
-observability services.
+The local stack starts codeq from source with an embedded Pebble store,
+seed data, and optional observability services.
 
 ## Single-Node Production
 

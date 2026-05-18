@@ -319,7 +319,7 @@ task, err := schedulerSvc.CreateTask(ctx, CreateTaskRequest{
   - `ListActive()`: Query active subscriptions for event type (ZRANGEBYSCORE)
   - `CleanupExpired()`: Remove expired subscriptions (ZRANGEBYSCORE + ZREM + HDEL)
 
-**Redis layout**: See `docs/07-storage-kvrocks.md`
+**Pebble keyspace layout**: See `docs/07b-storage-pebble.md`
 
 **JSON Serialization**: All task, result, and subscription serialization uses **Bytedance Sonic** codec for 2-3x faster JSON operations and 40-50% fewer allocations compared to Go's standard `encoding/json`. See `docs/17-performance-tuning.md` for details.
 
@@ -564,12 +564,12 @@ defer span.End()
 
 ### `internal/shard`
 
-**Purpose**: Queue sharding support for horizontal scaling across multiple KVRocks instances.
+**Purpose**: legacy `ShardSupplier` interface for the older Redis-protocol multi-instance sharding model. Retained for backwards compatibility with existing deployments; new deployments should use Pebble Phase 8 intra-process sharding (`internal/repository/pebble/sharded_task_repository.go`) or cluster mode (`internal/cluster/`).
 
 **Key files**:
-- `static_supplier.go`: `StaticShardSupplier` implementation with config-driven routing
-- `client_map.go`: Multi-client management for shard-aware Redis access
-- `key.go`: Shard-aware queue key generation utilities
+- `static_supplier.go`: config-driven `ShardSupplier`
+- `client_map.go`: multi-client routing helper
+- `key.go`: shard-aware key generation utilities
 
 **Types**:
 - `StaticShardSupplier`: Implements `domain.ShardSupplier` with tenant override → command mapping → default shard precedence
@@ -682,7 +682,7 @@ CI/CD automation. See `docs/16-workflows.md` for workflow details.
 - **Architecture flows**: `docs/03-architecture.md`
 - **HTTP API**: `docs/04-http-api.md`
 - **Queue semantics**: `docs/05-queueing-model.md`
-- **Storage layout**: `docs/07-storage-kvrocks.md`
+- **Storage layout**: `docs/07b-storage-pebble.md`
 - **Security**: `docs/09-security.md`
 - **Configuration**: `docs/14-configuration.md`
 - **Contributing**: `CONTRIBUTING.md`

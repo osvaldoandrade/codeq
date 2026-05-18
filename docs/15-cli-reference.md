@@ -102,7 +102,7 @@ codeq install \
   --target kubernetes \
   --size medium \
   --namespace codeq \
-  --redis-addr kvrocks.prod.svc.cluster.local:6666 \
+  --pebble-path /var/lib/codeq/pebble \
   --identity-service-url https://issuer.example.com \
   --worker-jwks-url https://issuer.example.com/.well-known/jwks.json \
   --worker-issuer https://issuer.example.com \
@@ -116,7 +116,8 @@ codeq install \
 - `--execute`: Run `docker compose` or `helm upgrade --install` after generation
 - `--chart <path>`: Helm chart path or reference
 - `--namespace <name>`: Kubernetes namespace
-- `--redis-addr <host:port>`: External KVRocks/Redis address
+- `--pebble-path <dir>`: Data directory for the embedded Pebble store
+- `--num-shards <N>`: Number of intra-process Pebble shards (Phase 8); default 4 on `medium` and above
 
 ---
 

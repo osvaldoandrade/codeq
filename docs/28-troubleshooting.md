@@ -8,59 +8,43 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 |---|---|---|
 | API health | `GET /healthz` | `{"status":"ok"}` |
 | Prometheus scrape | `GET /metrics` | Prometheus text format, no errors |
-| KVRocks connectivity | `redis-cli -h <host> -p 6379 ping` | `PONG` |
+| Pebble data directory | `ls -la <pebbleDir>/LOCK` | File exists, owned by the codeq process |
 
 ## Common issues
 
-### 1. API fails to start with "preload repository scripts" error
+### 1. API fails to start with "open pebble: resource temporarily unavailable" or lock errors
 
-**Symptoms:** API startup fails with error: `preload repository scripts: ...` or similar.
-
-**Possible causes:**
-- KVRocks is unreachable during startup (connection timeout).
-- KVRocks memory is exhausted and cannot store Lua scripts.
-- Network connectivity issues between API and KVRocks.
-- KVRocks is running an incompatible version.
-
-**Resolution:**
-1. Verify KVRocks is running and reachable: `redis-cli -h <host> -p 6666 ping`.
-2. Check KVRocks memory usage: `redis-cli INFO memory` (look for `used_memory` vs `maxmemory`).
-3. Ensure KVRocks has sufficient memory (scripts are small; typically <5KB total).
-4. Review codeQ startup logs for the full error message.
-5. If necessary, increase KVRocks `maxmemory` or `timeout` settings.
-6. Ensure the API and KVRocks are on compatible versions (codeQ targets KVRocks 2.6+).
-
-### 2. Tasks fail with "NOSCRIPT" errors (visible in logs)
-
-**Symptoms:** Intermittent task claim failures or rate limiter rejections; logs show `NOSCRIPT` or script retry messages.
+**Symptoms:** API startup fails with `open pebble: ... lock`, `cannot acquire LOCK`, or `resource temporarily unavailable` referencing the configured `pebbleDir`.
 
 **Possible causes:**
-- Lua scripts were evicted from KVRocks memory due to memory pressure.
-- Script preload failed silently (this should not happen; check startup logs).
-- KVRocks restarted and lost script cache.
+- Another codeq process is already running against the same `pebbleDir` (Pebble enforces an exclusive lock via `<pebbleDir>/LOCK`).
+- A previous codeq process crashed without releasing the lock and `LOCK` is stale (rare; Pebble normally recovers).
+- The data directory is on a read-only mount or the process lacks write permission.
+- The data directory lives on a remote filesystem (NFS, SMB) that does not honor `flock`/`fcntl` locks — unsupported.
 
 **Resolution:**
-1. This is typically handled automatically: codeQ detects NOSCRIPT and falls back to EVAL (reloading the script).
-2. If failures persist, restart the API to trigger script preloading again.
-3. Increase KVRocks memory to prevent script eviction.
-4. Review KVRocks memory usage and consider persistence tuning.
+1. Run `lsof <pebbleDir>/LOCK` (or `fuser`) to confirm no other process is holding the lock.
+2. If no process is attached and the file is stale, remove `<pebbleDir>/LOCK` and restart codeq.
+3. Verify the codeq UID has read/write on `pebbleDir` and that the mount is not read-only (`mount | grep <pebbleDir>`).
+4. Move `pebbleDir` to a local disk if it is on NFS/SMB — Pebble requires POSIX-compliant local storage.
+5. Review the full startup log: Pebble surfaces the exact `os.OpenFile` error.
 
-### 3. API returns `503` or does not start
+### 2. API returns `503` or does not start
 
 **Symptoms:** `/healthz` is unreachable or returns an error.
 
 **Possible causes:**
-- KVRocks is unreachable or slow to accept connections.
+- `pebbleDir` is unreachable or the lock cannot be acquired (see issue 1).
 - Port conflict on the configured listen port.
 - Invalid YAML configuration file.
 
 **Resolution:**
-1. Verify KVRocks is running: `redis-cli -h <host> -p 6379 ping`.
-2. Check the codeQ log output for startup errors.
+1. Verify `pebbleDir` exists, is writable, and is not locked by another process.
+2. Check the codeq log output for startup errors.
 3. Validate `config.yml` syntax with a YAML linter.
 4. Ensure the listen port is not already in use.
 
-### 4. Tasks stuck in ready queue (not being claimed)
+### 3. Tasks stuck in ready queue (not being claimed)
 
 **Symptoms:** `codeq_queue_depth{queue="ready"}` grows while `codeq_task_claimed_total` rate is zero.
 
@@ -74,7 +58,7 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 2. Check worker logs for connection errors.
 3. Verify network connectivity between worker and API.
 
-### 5. Growing dead-letter queue (DLQ)
+### 4. Growing dead-letter queue (DLQ)
 
 **Symptoms:** `codeq_dlq_depth` increases steadily.
 
@@ -82,34 +66,34 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 - Tasks fail repeatedly and exhaust retry attempts.
 - Worker bugs cause consistent processing failures.
 - Malformed task payloads.
-- **Rare, under load:** Task resurrection due to result submission race condition (see note below).
 
 **Resolution:**
 1. Inspect DLQ tasks via `GET /v1/codeq/admin/tasks?status=FAILED`.
 2. Check the `resultCode` and `resultPayload` for error details.
 3. Review worker logs at the time tasks failed.
-4. If DLQ grows under sustained high load (100+ rps), verify you are running the latest version with the atomic finalization fix ([Performance Tuning § Result Submission Race Condition](17-performance-tuning.md#15-result-submission-race-condition-atomic-finalization)). The fix reduces DLQ depth by ~43% under load.
-5. After fixing the root cause, requeue tasks from the DLQ.
+4. After fixing the root cause, requeue tasks from the DLQ.
 
-**Note on task resurrection:** In pre-fix versions under heavy load (~6% failure rate), a race condition in result submission could cause completed tasks to be resurrected and eventually land in the DLQ. This has been mitigated via atomic MULTI/EXEC finalization in UpdateTaskOnComplete.
-
-### 6. High end-to-end latency
+### 5. High end-to-end latency
 
 **Symptoms:** `histogram_quantile(0.95, ...)` on `codeq_task_processing_latency_seconds` is above expected SLO.
 
 **Possible causes:**
-- KVRocks is under memory or CPU pressure.
+- Pebble compaction backlog (write amplification spiking L0 → L6).
+- Disk pressure: `pebbleDir` near full, or the underlying device saturated on IOPS.
+- Too few shards for the producer rate (`numShards` too low — contention on a single Pebble instance).
 - Too few workers for the queue throughput.
-- Large task payloads increasing serialization time.
-- Network latency between API and KVRocks.
+- Large task payloads increasing batch commit time.
+- `fsyncOnCommit: true` without the budget for the latency cost (~20% throughput hit in our harness).
 
 **Resolution:**
-1. Check KVRocks resource utilization (`INFO` command).
-2. Scale workers horizontally.
-3. Review [Performance Tuning](17-performance-tuning.md) for KVRocks configuration.
-4. Consider reducing `artifactIn` payload size.
+1. Check Pebble metrics: `codeq_pebble_l0_files`, `codeq_pebble_compaction_bytes_in_flight`, `codeq_pebble_wal_size_bytes`. Sustained L0 file count above ~20 indicates compaction is falling behind.
+2. Check disk utilization on `pebbleDir` (`df`, `iostat -x 1`). If IOPS-bound, move to faster storage or reduce write rate.
+3. Increase `numShards` to spread writes across independent Pebble instances (see [Performance tuning](./17-performance-tuning.md)). Note: cluster mode and `numShards > 1` are mutually exclusive.
+4. Scale workers horizontally.
+5. Disable `fsyncOnCommit` if it is on and the durability budget allows (default is off).
+6. Consider reducing `artifactIn` payload size.
 
-### 7. Lease expirations spiking
+### 6. Lease expirations spiking
 
 **Symptoms:** `codeq_lease_expired_total` rate increases.
 
@@ -123,6 +107,23 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 2. Add liveness checks and resource monitoring to workers.
 3. Check worker logs for panics or OOM kills.
 4. Review task processing duration to set an appropriate lease value.
+
+### 7. Cluster bloom gossip lag (cross-node ID lookups miss)
+
+**Symptoms:** In cluster mode, `GetResult` or `GetTask` by ID intermittently returns `not found` for tasks that exist on another node; the request eventually succeeds on retry. Logs in `internal/cluster/` show bloom misses or stale routing decisions.
+
+**Possible causes:**
+- A peer node was just promoted or rejoined; its bloom filter has not yet been gossiped to the requesting node.
+- Network partition or high RTT between cluster members is slowing the bloom gossip cycle.
+- Clock skew between nodes is widening the bloom freshness window.
+- Bloom filter false-negative window during rapid task churn (rare; the cluster falls back to scatter-gather).
+
+**Resolution:**
+1. Check cluster membership and per-peer gossip health in the `/v1/codeq/cluster/status` endpoint and metrics under `codeq_cluster_*`.
+2. Verify pairwise connectivity and RTT between all cluster nodes; gossip is sensitive to multi-second partitions.
+3. Ensure NTP is configured on every node — drift above a few seconds skews bloom freshness checks.
+4. Confirm you are running the version with the cluster fix (`GetResult` cross-node routing + bloom on every ID-routed RPC + reaper context), commit `f315a14` or later.
+5. If gossip lag is persistent, scatter-gather fallback will still return correct results — investigate the network layer rather than disabling cluster mode.
 
 ### 8. Webhook delivery failures
 

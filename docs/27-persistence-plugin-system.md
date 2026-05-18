@@ -2,37 +2,14 @@
 
 ## Overview
 
-codeQ's persistence layer uses a plugin architecture that allows you to choose different storage backends without modifying core code. This enables organizations to use their existing database infrastructure and simplifies testing with in-memory storage.
+codeq's persistence layer is built around an embedded Pebble store
+(CockroachDB's RocksDB-style LSM). The pluggable interface in
+`pkg/persistence/` exists so future backends can be added without
+touching the service layer — but Pebble is the only supported and
+benchmarked path. Treat anything else in this document as architectural
+reference for extension, not deployment options.
 
-## Available Plugins
-
-### Redis Plugin (Default)
-
-The Redis plugin provides persistence using Redis or KVRocks (Redis protocol compatible).
-
-**Configuration:**
-
-```yaml
-persistenceProvider: redis
-persistenceConfig:
-  addr: localhost:6379
-  password: "" # optional
-```
-
-**Environment Variables:**
-
-```bash
-PERSISTENCE_PROVIDER=redis
-PERSISTENCE_CONFIG='{"addr":"localhost:6379","password":""}'
-```
-
-**Features:**
-- Production-ready persistence
-- Atomic operations using Redis transactions
-- Bloom filters for performance optimization
-- Full backward compatibility with existing deployments
-
-### Pebble Plugin (Embedded, Single-Node)
+## Pebble (default, embedded)
 
 The Pebble plugin provides embedded persistence using [Pebble](https://github.com/cockroachdb/pebble), a RocksDB-inspired key-value store. Ideal for single-node deployments where embedding a database simplifies infrastructure.
 
@@ -75,16 +52,15 @@ PERSISTENCE_CONFIG='{"path":"./codeq-pebble","fsyncOnCommit":false,"numShards":4
 - **Durability-critical**: `numShards: 4`, `fsyncOnCommit: true` (persistent on commit, ~20% throughput hit)
 
 **Limitations:**
-- **Single-node only**: Cluster mode (multi-node consensus) is not compatible with intra-process sharding in this release
-- **No HA by design**: Embedded database loses availability if process restarts; use Redis plugin for high-availability requirements
+- **Cluster + sharding mutually exclusive**: `numShards > 1` is not compatible with `cluster.enabled=true` in this release. The startup path rejects the combination.
+- **HA**: a single-process Pebble loses availability across restarts. Multi-node HA is the cluster path (consistent-hash ring over N Pebble nodes), not a shared database.
 
-**Use Cases:**
+**Use cases:**
 - Self-contained deployments (edge, embedded systems)
 - Development and testing with full production parity
-- Organizations with existing Pebble expertise
-- Throughput-optimized single-node setups (replacing KVRocks)
+- Throughput-optimized single-node production
 
-### Memory Plugin (Testing Only)
+### Memory (testing only)
 
 The memory plugin provides in-memory storage for unit tests. **Not suitable for production.**
 
@@ -153,30 +129,6 @@ type PluginPersistence interface {
 - GetByCommand: Find subscriptions for specific commands
 - GetByWorker: Retrieve all subscriptions for a worker
 - RemoveExpired: Remove expired subscriptions before a specified time
-
-## Backward Compatibility
-
-### Default Behavior
-
-If no `persistenceProvider` is configured, codeQ defaults to Redis with the following settings:
-
-```yaml
-persistenceProvider: redis
-persistenceConfig:
-  addr: <value from redisAddr>
-  password: <value from redisPassword>
-```
-
-This ensures existing configurations work without modification.
-
-### Migration Path
-
-Existing deployments continue to work unchanged. To explicitly configure the persistence plugin:
-
-1. Add `persistenceProvider: redis` to your config file
-2. Move Redis connection settings to `persistenceConfig`
-3. Test the configuration
-4. (Optional) Migrate to alternative backends
 
 ## Developing Custom Plugins
 
@@ -275,44 +227,42 @@ func TestMyFeature(t *testing.T) {
 
 ### Integration Tests
 
-Use Redis plugin with miniredis for fast integration tests:
+Pebble integration tests use `t.TempDir()` and don't need a separate
+process or container:
 
 ```go
 import (
-    "github.com/alicebob/miniredis/v2"
-    _ "github.com/osvaldoandrade/codeq/pkg/persistence/redis"
+    "testing"
+    "time"
+
+    _ "github.com/osvaldoandrade/codeq/pkg/persistence/memory"
+    "github.com/osvaldoandrade/codeq/pkg/persistence"
 )
 
 func TestIntegration(t *testing.T) {
-    mr, _ := miniredis.Run()
-    defer mr.Close()
-    
     plugin, _ := persistence.NewPersistence(
         persistence.ProviderConfig{
-            Type: "redis",
-            Config: []byte(fmt.Sprintf(`{"addr":"%s"}`, mr.Addr())),
+            Type:   "pebble",
+            Config: []byte(`{"path":"` + t.TempDir() + `","fsyncOnCommit":false,"numShards":1}`),
         },
-        persistence.PluginConfig{},
+        persistence.PluginConfig{Timezone: time.UTC},
     )
+    _ = plugin
     // Run integration tests
 }
 ```
 
-## Benefits
+## Why a plugin interface at all
 
-1. **Infrastructure Flexibility**: Use existing database infrastructure (Redis, PostgreSQL, etc.)
-2. **Testing Simplification**: In-memory plugin eliminates Docker dependencies for unit tests
-3. **Cloud Native**: Integrate with managed database services (DynamoDB, Cosmos DB, etc.)
-4. **Extensibility**: Add new backends without modifying core code
-5. **Backward Compatible**: Existing deployments work without changes
+Pebble is the only supported path today. The interface exists to keep
+the storage layer swappable for two scenarios:
 
-## Future Enhancements
+1. **In-process testing**: the memory provider lets unit tests skip disk
+   I/O entirely.
+2. **Future backends**: anything that wants to replace Pebble (a
+   replicated LSM, a cloud-managed KV store) plugs in here without
+   touching `internal/services` or the HTTP/gRPC surfaces.
 
-Planned plugin implementations:
-
-- **PostgreSQL Plugin**: Use PostgreSQL for persistence
-- **DynamoDB Plugin**: AWS-native persistence
-- **Cassandra Plugin**: Distributed database for scale
-- **TiKV Plugin**: RAFT-backed consensus storage
+There are no concrete plans to ship a non-Pebble production backend.
 
 See `docs/25-plugin-architecture-hld.md` for detailed design documentation.

@@ -24,7 +24,7 @@ graph LR
   end
   subgraph Compose[docker compose local-dev]
     HTTP[codeq HTTP :8080]
-    KV[KVRocks]
+    PB[Pebble embedded]
   end
   subgraph GoBench[internal/bench]
     PROF[TestProfile_FullCycle]

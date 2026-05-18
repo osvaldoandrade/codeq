@@ -29,8 +29,8 @@ The CodeQ Java SDK provides a simple, type-safe API for:
         │                           │                        │
         │                           ▼                        │
         │                    ┌─────────────┐                │
-        └───────────────────▶│  KVRocks    │◀───────────────┘
-                             │  (Redis)    │
+        └───────────────────▶│   Pebble    │◀───────────────┘
+                             │  (embedded) │
                              └─────────────┘
 ```
 

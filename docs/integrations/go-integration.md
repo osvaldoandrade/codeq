@@ -29,8 +29,8 @@ The CodeQ Go SDK provides a context-aware, strongly-typed API with zero external
         │                           │                        │
         │                           ▼                        │
         │                    ┌─────────────┐                │
-        └───────────────────▶│  KVRocks    │◀───────────────┘
-                             │  (Redis)    │
+        └───────────────────▶│   Pebble    │◀───────────────┘
+                             │  (embedded) │
                              └─────────────┘
 ```
 

@@ -16,7 +16,7 @@ By the end of this tutorial, you'll understand how to:
 
 - Basic familiarity with command-line interfaces
 - Understanding of task queues and worker patterns
-- For local development: Docker or access to a KVRocks instance
+- For local development: Docker (or Go installed if running from source)
 
 ## Installation
 
@@ -54,7 +54,7 @@ The easiest way to get started is using Docker Compose, which sets up everything
 git clone https://github.com/osvaldoandrade/codeq
 cd codeq
 
-# Start all services (KVRocks + codeQ API + example tasks)
+# Start codeq (Pebble store + API + example tasks)
 docker compose \
   -f deploy/docker-compose/local-dev/compose.yaml \
   -f deploy/docker-compose/local-dev/compose.override.yaml \
@@ -65,8 +65,7 @@ curl -sSf http://localhost:8080/metrics | head
 ````
 
 This will start:
-- **KVRocks**: Redis-compatible storage on port 6666
-- **codeQ API**: HTTP server on port 8080 with hot reload
+- **codeq API**: HTTP server on port 8080 with hot reload, backed by an embedded Pebble store under `./data/pebble`
 - **Seed service**: Creates example tasks automatically
 
 To view logs:
@@ -88,33 +87,6 @@ docker compose \
 ````
 
 For more details on local development with Docker Compose, including hot reload and observability stack, see [Local Development Guide](22-local-development.md).
-
-### Alternative: Manual Setup with Redis/KVRocks
-
-If you prefer manual setup or need more control with Redis/KVRocks:
-
-#### Step 1: Start a Local KVRocks Instance
-
-````bash
-docker run -d -p 6666:6666 --name kvrocks apache/kvrocks:latest
-````
-
-#### Step 2: Configure codeQ Profile
-
-````bash
-codeq config init dev
-codeq config set baseUrl http://localhost:8080
-codeq config set redisAddr localhost:6666
-````
-
-#### Step 3: Start the codeQ Server
-
-````bash
-# From the repository root
-go run ./cmd/server
-````
-
-The server will start on port 8080 by default.
 
 ### Alternative: Manual Setup with Pebble (Embedded)
 
@@ -417,7 +389,7 @@ See `docs/10-operations.md` for production tracing configuration and `docs/14-co
 
 - Verify the codeQ server is running
 - Check your profile configuration: `codeq config show`
-- Ensure KVRocks is accessible at the configured address
+- Ensure the Pebble data directory exists and is writable (`persistenceConfig.path`)
 
 ### Authentication errors
 

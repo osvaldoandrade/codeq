@@ -383,12 +383,12 @@ Queue keys include the tenant ID segment:
 Tenant isolation does not significantly impact performance:
 
 - Queue operations remain O(1) or O(log n)
-- Redis memory scales linearly with tenant count
+- Pebble disk usage scales linearly with tenant count
 - Each tenant's queues are independent (no cross-tenant contention)
 
 For deployment guidance and multi-tenant configuration, see:
 - Security configuration: [09-security.md](./09-security.md)
-- Storage layout: [07b-storage-pebble.md](./07b-storage-pebble.md) (primary) or [07-storage-kvrocks.md](./07-storage-kvrocks.md) (legacy Redis)
+- Storage layout: [07b-storage-pebble.md](./07b-storage-pebble.md)
 - Queue semantics: [05-queueing-model.md](./05-queueing-model.md)
 
 ## Repair flows

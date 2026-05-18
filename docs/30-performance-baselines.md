@@ -7,29 +7,25 @@ framework. These baselines serve as regression benchmarks for future releases.
 
 | Component     | Detail                                      |
 |---------------|---------------------------------------------|
-| CPU           | AMD EPYC 9V74 80-Core (4 vCPUs allocated)  |
+| CPU           | AMD EPYC 9V74 80-Core (4 vCPUs allocated)   |
 | Go version    | 1.24                                        |
-| KVRocks       | apache/kvrocks:latest (single-node)         |
+| Persistence   | Pebble embedded (`numShards=1`, `fsyncOnCommit=false`) |
 | k6 version    | 0.55.0                                      |
 | Network       | localhost (loopback)                        |
 
-> **Note:** All tests ran against a single codeQ instance and a single KVRocks node on
-> the same machine. Production deployments with network latency, multiple replicas, or
-> sharding will show different numbers. Use these baselines for relative comparisons
-> between releases, not as absolute production targets.
->
-> **Implementation details:** These baselines were collected with Redis pipelining optimizations enabled,
-> which consolidate multiple Redis round-trips into single batches in hot paths (AdminQueues, QueueStats,
-> result operations). See [`docs/17-performance-tuning.md` Section 9](17-performance-tuning.md#9-redis-pipelining-performance)
-> for details on pipelining performance improvements (90%+ RTT reductions in admin operations).
+> **Note:** These k6 baselines ran against a single codeq instance backed
+> by an embedded Pebble store under `t.TempDir()`. They isolate codeq's
+> HTTP/queue overhead on the loopback. For full-cycle in-process numbers
+> (4-shard Pebble, no HTTP layer), see Phase 8 results in
+> [`docs/17-performance-tuning.md`](17-performance-tuning.md).
 
 ---
 
-## Go Benchmarks (In-Process, miniredis)
+## Go Benchmarks (In-Process)
 
 These benchmarks run the full Create → Claim → Complete cycle through the Gin HTTP
-router (or directly through the scheduler) backed by an in-memory Redis (miniredis).
-They isolate codeQ's own processing overhead from network and storage latency.
+router (or directly through the scheduler) backed by an embedded Pebble store under
+`t.TempDir()`. They isolate codeq's own processing overhead from network latency.
 
 ```
 goos: linux
@@ -53,14 +49,14 @@ BenchmarkScheduler_CreateClaimComplete-4     3885   3059117 ns/op   1985484 B/op
 | Scheduler Create→Claim→Complete        | 3,064,863   | ~326        | 8,486         |
 
 - HTTP layer overhead is ~5% above the scheduler-level benchmark.
-- Memory allocation per cycle is ~2 MB (dominated by JSON encoding and Redis commands).
+- Memory allocation per cycle is ~2 MB (dominated by JSON encoding and Pebble batch construction).
 
 ---
 
 ## k6 Load Test Results
 
-All scenarios used `CODEQ_BASE_URL=http://localhost:8080` with a single codeQ instance
-and single KVRocks node. Error rates were **0.00%** across every scenario.
+All scenarios used `CODEQ_BASE_URL=http://localhost:8080` with a single codeq instance
+backed by Pebble. Error rates were **0.00%** across every scenario.
 
 ### Scenario 1 — Sustained Throughput
 
@@ -207,11 +203,11 @@ Phase 8 introduces intra-process sharding for the embedded Pebble backend, achie
 
 ### Latency Characteristics
 
-Pebble baseline latencies are significantly lower than KVRocks (network overhead removed):
+Pebble's in-process commit path keeps tail latency low:
 
-- **Create → Claim → Complete cycle**: ~1.5–2.5 ms (single-shard Pebble) vs ~3.2 ms (Redis)
-- **p95 latency under sustained 50k tasks/s load**: 2–3 ms (Pebble) vs 10–15 ms (Redis)
-- **GC pressure**: Reduced allocation overhead vs Redis JSON serialization path
+- **Create → Claim → Complete cycle**: ~1.5–2.5 ms (single-shard, `fsyncOnCommit=false`)
+- **p95 latency under sustained 50k tasks/s load**: 2–3 ms (4-shard, `fsyncOnCommit=false`)
+- **GC pressure**: dominated by JSON encoding via `bytedance/sonic`; batch construction and commit add little allocation churn
 
 ### Durability Trade-off
 
@@ -261,7 +257,7 @@ By default, Pebble writes are not synced to disk (`fsyncOnCommit: false`):
 
 3. **Latency profile** — Under moderate load (200 req/s producer), p95 latency stays
    below 15 ms. At higher rates (500 req/s producer), p95 climbs to 33–39 ms as
-   KVRocks contention increases.
+   Pebble commit pipeline contention increases (mitigate with `numShards > 1`).
 
 4. **Burst handling** — The system absorbs a 500 req/s burst for 10 s and drains the
    backlog within the 30 s drain window with no errors. Peak latency during burst
@@ -302,7 +298,7 @@ Run each scenario with the same parameters documented above and compare:
 
 For automated regression testing, add a workflow step that:
 
-1. Starts KVRocks + codeQ via the local Compose files in `deploy/docker-compose/local-dev/`.
+1. Starts codeq via the local Compose files in `deploy/docker-compose/local-dev/` (Pebble store under `./data/pebble`).
 2. Runs a representative subset of k6 scenarios (e.g., scenario 01 at reduced rate).
 3. Uses k6 thresholds (already defined in each script) to fail the build on regressions.
 4. Archives k6 JSON output as a workflow artifact for trend analysis.

@@ -20,8 +20,7 @@ On a 12-core Linux box, that single binary sustains **83,420 tasks/s**
 for the full create → claim → complete cycle and **136,392 creates/s**
 for producer-only workloads — measured by the in-tree benchmarks in
 `internal/bench/`. When one machine is no longer enough, cluster mode
-(consistent-hash ring + gRPC routing between nodes) and a legacy Redis
-backend are opt-in.
+(consistent-hash ring + gRPC routing between nodes) is opt-in.
 
 ## Architecture overview
 
@@ -45,7 +44,6 @@ graph TB
   end
   subgraph Optional[Opt-in scaling]
     CL[Cluster -- consistent-hash + gRPC]
-    REDIS[Redis backend -- legacy HA]
   end
   PSDK --> PGRPC
   WSDK --> WGRPC
@@ -57,7 +55,6 @@ graph TB
   LEASE --> P1
   LEASE --> PN
   Server -.-> CL
-  Server -.-> REDIS
 ```
 
 Producers and workers connect over long-lived bidirectional gRPC
@@ -98,9 +95,9 @@ for raw output and per-release history.
 
 codeq is the right call when you want task-queue semantics (claims,
 leases, retries, DLQ, results) without standing up a broker. It is the
-wrong call if you need Kafka-scale event streaming, distributed
-consensus by default, or HA without configuring the Redis backend or
-cluster mode.
+wrong call if you need Kafka-scale event streaming or distributed
+consensus by default — multi-node deployments rely on cluster mode and
+the consistent-hash ring, not Paxos/Raft.
 
 ## Quick start (5 minutes)
 
@@ -114,7 +111,7 @@ docker compose \
 ```
 
 This brings up the codeq server on `http://localhost:8080` with the
-embedded Pebble backend (no Redis required) and seeds example tasks.
+embedded Pebble backend and seeds example tasks.
 
 Create a task:
 
@@ -190,7 +187,7 @@ internal/             unexported packages
   middleware/         auth, tracing, rate-limit, tenant extraction
   producer/           gRPC producer-stream server
   worker/             gRPC worker-stream server
-  repository/         persistence implementations (Redis legacy + Pebble)
+  repository/         persistence implementations (Pebble)
   services/           scheduler, results, callbacks, subscriptions
 pkg/                  public packages (app, auth, config, domain,
                       producerclient, workerclient)

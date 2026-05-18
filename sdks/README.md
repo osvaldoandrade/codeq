@@ -324,7 +324,7 @@ npm run start:dev
   - NestJS deployment with autoscaling
   - Ingress configuration
 - [Docker Compose](../deploy/docker-compose/)
-  - Complete stack with CodeQ + KVRocks
+  - Complete stack with codeq + embedded Pebble store
   - Local development and single-node server templates
 
 ### Core Documentation
