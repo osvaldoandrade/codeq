@@ -34,11 +34,13 @@ On the reference 12-core Linux box (`internal/bench/profile_full_cycle_test.go::
 4 shards is **1.95×** the throughput of 1 shard (83,420 tasks/s vs
 42,731 tasks/s) on the full cycle.
 
-> **Performance**: shards are an intra-process parallelism trick. They
-> do not give you HA, do not survive a process crash any differently
-> than one shard would, and do not help you scale across machines.
-> Cross-machine scaling is [cluster mode](./05-cluster-architecture.md),
-> which is mutually exclusive with `numShards > 1` (see §9).
+> **Performance**: shards are an intra-process parallelism trick. By
+> themselves they do not give you HA — a process crash takes every
+> shard with it. For HA, layer raft on top: `cfg.Raft.Enabled` with
+> `numShards > 1` opens one raft group per shard (M2 mode, see §9 and
+> [Raft replication](./40-raft-replication.md)). The legacy static-ring
+> [cluster mode](./05-cluster-architecture.md) is mutually exclusive
+> with `numShards > 1` (see §10).
 
 ## 2. Hash function and atomic invariant
 
@@ -267,6 +269,29 @@ Each reaper runs two goroutines (lease sweep + TTL sweep), so with
 tickers (no shared phase), so their commit bursts naturally jitter
 across shards instead of stampeding all DBs at once.
 
+### Leader gate (raft mode)
+
+In raft mode, the reaper writes (Nack on expired lease, DLQ promotion)
+have to go through `raft.Apply`. Followers can't apply on their own
+without splitting the log, so each reaper takes a `LeaderGate func() bool`
+and skips its tick whenever the gate returns false. From
+`internal/repository/pebble/reaper.go`:
+
+```go
+case <-t.C:
+    if r.leaderGate != nil && !r.leaderGate() {
+        // Follower in raft mode: leader's reaper handles all sweeps.
+        continue
+    }
+```
+
+`pkg/app/application_pebble.go` wires each shard's `LeaderGate` to that
+shard's own `raft.DB.IsLeader`. M2 multi-shard: a node that leads
+shard 0 but follows shard 1 sweeps shard 0 only — the shard-1 reaper
+ticks but immediately returns. After a failover the new leader's
+reaper picks up on its next tick (default 2 s lease, 30 s TTL), so
+expiry latency rises by at most one interval.
+
 ## 7. Sequence number recovery
 
 Pending keys carry an 8-byte big-endian sequence number for FIFO
@@ -328,7 +353,91 @@ machine-dependent — re-run the bench when you change hardware.
 > count divided by 3 (round down, minimum 1). Above 16 cores, run the
 > sweep yourself — the optimum almost certainly is not 16.
 
-## 9. Cluster compatibility (not)
+## 9. Raft per shard (M2 mode)
+
+Raft is **compatible** with intra-process sharding. When
+`cfg.Raft.Enabled` and `numShards > 1`, each Pebble shard gets its own
+raft group: independent log, independent FSM, independent leader
+election. This is the M2 mode tracked in
+[Raft replication](./40-raft-replication.md).
+
+The wiring (from `pkg/app/application_pebble.go:195-296`):
+
+```go
+raftNodes := make([]*raftpkg.DB, len(dbs))
+for i, shardDB := range dbs {
+    raftCfg := raftpkg.Config{
+        Path:    fmt.Sprintf("%s/shard%d", pc.Path, i),
+        SelfID:  cfg.Raft.SelfID,
+        // per-shard bind addr or mux'd group ID
+        // ...
+    }
+    rdb, err := raftpkg.OpenWithPebble(bgCtx, raftCfg, shardDB.Raw())
+    // ...
+    shardDB.AttachReplicator(rdb)
+    raftNodes[i] = rdb
+}
+```
+
+Two transport modes:
+
+- **Non-mux**: each shard binds `BindAddr + shardIdx` (shard 0 on
+  `:7000`, shard 1 on `:7001`, ...). One TCP listener per shard per
+  node, so `numShards × nodes` listeners cluster-wide.
+- **Mux** (`raft.MuxEnabled`): one TCP listener at `BindAddr`, frames
+  carry a 4-byte group ID, the `MuxAcceptor` demultiplexes. One
+  listener per node regardless of `numShards`.
+
+What stays intact across raft + multi-shard:
+
+- **Atomic invariant**: still per shard. A single task operation
+  commits as one Pebble batch on its owning shard, which means one
+  raft `Apply` on that shard's group. No 2PC across shards.
+- **Routing**: the `ShardedTaskRepository` wrapper is unchanged. It
+  hashes the task ID, finds the shard, calls the shard's
+  `TaskRepository`. The repo's `Commit` path delegates to
+  `raft.Apply` (via `shardDB.AttachReplicator`) when raft is on, then
+  to the local `commitPipeline` after the log entry is committed.
+- **Reaper leader-gating**: each shard's reaper consults its own
+  `raft.DB.IsLeader`. See §6.
+
+What raft + multi-shard does *not* give you:
+
+- **Cross-shard consistency**: each shard's raft log is independent.
+  Two writes targeting different shards have no shared linearisation
+  point. The application never needed cross-shard ordering (queues are
+  per `(cmd, tenant, priority)`, all of which collide onto one shard
+  via the task ID, see §3), so this is by construction, not a
+  regression.
+- **Fan-out atomicity**: `MoveDueDelayed` still iterates shards
+  sequentially. If shard 0 returns `ErrNotLeader` while shard 1
+  succeeds, the wrapper skips shard 0 and continues — the fan-out
+  contract is "do what you can on whatever shards we lead". The
+  Phase 0 `MoveDueDelayed` was already designed to be retried by the
+  next reaper tick, so no behavioural change.
+
+### Failover surface area
+
+With M1 single-shard raft, a node either leads the only group or
+follows it. With M2, leadership is per group, so cluster-wide
+distribution looks like:
+
+```text
+Node A:  shard 0 = LEADER     shard 1 = follower    shard 2 = follower
+Node B:  shard 0 = follower   shard 1 = LEADER      shard 2 = follower
+Node C:  shard 0 = follower   shard 1 = follower    shard 2 = LEADER
+```
+
+Writes for a given task ID always land on its owning shard's current
+leader. The cluster gRPC layer (when present) will need to route on
+`(shard, leader)` instead of `(node)` — that bridge isn't built yet,
+which is why **legacy cluster mode + multi-shard remains mutually
+exclusive even though raft + multi-shard is supported** (see §10).
+For now, M2 is per-node sharding with peer replication of each shard;
+horizontal scale comes from running more leaders on more nodes, not
+from cross-node fan-out.
+
+## 10. Cluster compatibility (not)
 
 Cluster mode (`cluster.enabled = true`) and intra-process sharding
 (`numShards > 1`) are **mutually exclusive**. The process refuses to
@@ -363,7 +472,7 @@ Practical takeaway:
   you cannot today combine intra-process sharding with cross-machine
   fan-out.
 
-## 10. Choosing `numShards`
+## 11. Choosing `numShards`
 
 Empirical rule on x86 Linux, full-cycle workload:
 
@@ -399,8 +508,8 @@ to change it on a production deployment.
 |---|---|
 | `internal/repository/pebble/sharded_task_repository.go` | Routing wrapper for task ops; round-robin Claim; fan-out scans |
 | `internal/repository/pebble/sharded_result_repository.go` | Routing wrapper for result ops; bucketed parallel batch writes |
-| `pkg/app/application_pebble.go` | `numShards` config; per-shard DB open; wiring of wrapper vs. cluster mode |
-| `internal/repository/pebble/reaper.go` | `StartReapersForShards`: one reaper per shard |
+| `pkg/app/application_pebble.go` | `numShards` config; per-shard DB open; per-shard raft group; per-shard reaper `LeaderGate` wiring |
+| `internal/repository/pebble/reaper.go` | `StartReapersForShards`: one reaper per shard; `LeaderGate` skips ticks on followers |
 | `internal/repository/pebble/db.go` | Per-shard `seq` recovery; per-shard commit coalescer |
 | `internal/bench/profile_full_cycle_test.go` | Sweep harness (`PHASE8_SHARDS=...`) |
 
@@ -410,8 +519,10 @@ to change it on a production deployment.
   on-disk format for one shard.
 - [Persistence plugin system](./27-persistence-plugin-system.md) — how
   Pebble is the supported persistence backend.
-- [Cluster architecture](./05-cluster-architecture.md) — the
-  cross-machine path that intra-process sharding is mutually exclusive
-  with.
+- [Cluster architecture](./05-cluster-architecture.md) — the legacy
+  static-ring cross-machine path that intra-process sharding is
+  mutually exclusive with.
+- [Raft replication](./40-raft-replication.md) — M2 multi-shard raft,
+  one consensus group per Pebble shard.
 - [Performance tuning](./17-performance-tuning.md) — operator-facing
   knob and benchmark how-to.
