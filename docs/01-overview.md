@@ -45,12 +45,17 @@ are opt-in for HA and multi-node deployments.
 - **Kafka-scale event streaming.** codeq is a task queue, not a
   partitioned log. If you want millions of messages/s with consumer
   groups, use Kafka.
-- **Distributed consensus by default.** No Raft, no Paxos. Cluster mode
-  uses a static consistent-hash ring; node membership is configured at
-  startup, not gossiped.
+- **Distributed consensus by default.** Single-node and consistent-hash
+  cluster modes ship without consensus — node membership is configured
+  at startup. **Raft replication is opt-in** (see
+  [40-raft-replication.md](./40-raft-replication.md)): when enabled,
+  every Pebble write goes through `raft.Apply` and lands on every
+  replica's local Pebble via the FSM. Mutually exclusive with the
+  static-ring cluster mode.
 - **HA without explicit setup.** A single Pebble process loses
-  availability while it restarts. HA requires either the Redis backend
-  (legacy, multi-node) or running a cluster of Pebble nodes — each is a
+  availability while it restarts. HA requires an opt-in configuration:
+  either raft replication (3+ nodes, automatic failover) or a static
+  consistent-hash cluster (no consensus, no replication). Each is a
   trade-off the operator picks consciously.
 - **Exactly-once delivery.** Delivery is at-least-once. A worker that
   crashes between completion and ACK will see the task re-delivered
