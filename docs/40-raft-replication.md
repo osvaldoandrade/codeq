@@ -96,6 +96,16 @@ on `bindAddr`, shard 1 on `bindAddr+1`, etc. The `peers` map contains
 each peer's BASE address; per-shard addresses derive automatically.
 Reserve 4 consecutive ports per node.
 
+**Mux transport (recommended for new clusters)**: set
+`raft.muxEnabled: true` (or `RAFT_MUX_ENABLED=true`) to share one TCP
+listener across every shard's raft group on a node. The wire shape
+gains a 4-byte BE group ID prefix on every connection; rest of the
+protocol is unchanged. With mux on, you DON'T reserve consecutive
+ports — every shard listens on `bindAddr` itself, demuxed by group
+ID. The `deploy/docker-compose/raft-cluster/` template defaults to
+mux. Flipping mux on a live cluster requires re-bootstrap (the wire
+format is not compatible with stock hashicorp/raft TCP transport).
+
 **Bootstrap**: `bootstrap: true` on exactly ONE node when forming a
 fresh cluster. After the first successful bootstrap raft writes its
 state to the local Pebble and ignores the flag on subsequent restarts
@@ -158,10 +168,13 @@ on the next tick after election — no manual intervention.
   returns an error and the client retries. The realistic deployment
   needs either smart-routing clients or server-side forwarding to
   realize the multi-shard throughput speedup.
-- **gRPC multiplexed transport** (M2.T3): today each shard binds its
-  own TCP port for raft RPCs. With 4 shards × 3 nodes that's 12
-  listeners across the cluster. A multiplexed gRPC transport would
-  reduce that to 3 (one per node) but doesn't change semantics.
+- **gRPC multiplexed transport** (M2.T3 — shipped): set
+  `raft.muxEnabled: true` to share a single TCP listener per node
+  across every shard's raft group. The deploy/docker-compose/raft-
+  cluster template defaults to mux. **Status**: in main. A future
+  follow-up could swap the underlying TCP transport for gRPC streams
+  to share more infrastructure with the codeq HTTP server; the
+  current implementation uses raw TCP with a 4-byte group ID prefix.
 - **Operational tooling**: no `codeq install --target docker` flag for
   raft clusters yet. Compose templates are single-node.
 

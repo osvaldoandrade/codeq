@@ -48,9 +48,21 @@ services:
       PERSISTENCE_PROVIDER: pebble
       PERSISTENCE_CONFIG: '{"path":"/var/lib/codeq/pebble"}'
       RAFT_ENABLED: "true"
+      # RAFT_MUX_ENABLED=true makes every Pebble shard's raft group
+      # share a single TCP listener per node (port 7000 inside the
+      # container, demuxed by group ID prefix). Without this, each
+      # shard binds its own port at bindAddr+shardIdx. Mux is the
+      # recommended deployment topology for new clusters; switching
+      # an existing cluster requires re-bootstrap because the wire
+      # shape changes.
+      RAFT_MUX_ENABLED: "true"
       # RAFT_PEERS is "id=host:port,..." resolved via docker DNS.
       # All three peers run raft on container-local port 7000.
       RAFT_PEERS: "node-a=node-a:7000,node-b=node-b:7000,node-c=node-c:7000"
+      # RAFT_PEER_HTTP_ADDRS surfaces leader HTTP URLs in
+      # /v1/codeq/raft/status and powers the server-side 307
+      # redirect when a follower receives a write.
+      RAFT_PEER_HTTP_ADDRS: "node-a=http://node-a:8080,node-b=http://node-b:8080,node-c=http://node-c:8080"
       PRODUCER_AUTH_PROVIDER: static
       PRODUCER_AUTH_CONFIG: |-
         {"token":"dev-token","subject":"producer-dev","email":"dev@codeq.local","raw":{"role":"ADMIN","tenantId":"dev-tenant"}}
