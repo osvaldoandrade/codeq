@@ -110,6 +110,10 @@ This guide covers common issues, their symptoms, and resolution steps. For metri
 
 ### 7. Cluster bloom gossip lag (cross-node ID lookups miss)
 
+> Note: bloom gossip is a cluster-mode (Phase 5) optimization. If you're
+> running RAFT ([40-raft-replication.md](40-raft-replication.md)), this
+> section doesn't apply.
+
 **Symptoms:** In cluster mode, `GetResult` or `GetTask` by ID intermittently returns `not found` for tasks that exist on another node; the request eventually succeeds on retry. Logs in `internal/cluster/` show bloom misses or stale routing decisions.
 
 **Possible causes:**

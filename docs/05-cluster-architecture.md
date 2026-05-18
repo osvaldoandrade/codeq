@@ -1,5 +1,14 @@
 # Cluster Architecture
 
+> **Status: Legacy (Phase 5).** This document describes the consistent-hash
+> cluster mode that predates RAFT replication. For high availability and
+> automatic failover in new deployments, use **RAFT** (see
+> [40-raft-replication.md](40-raft-replication.md) and
+> [41-deployment-modes.md](41-deployment-modes.md) for the decision guide).
+> Cluster mode is preserved for existing deployments and reference; the
+> mode is mutually exclusive with `raft.enabled`
+> (`pkg/config/config.go:662-683`).
+
 ## Overview
 
 codeQ supports horizontal scaling through a **consistent hash ring** cluster topology. Multiple nodes form a cluster where task ownership is determined by hashing the task ID to a node. This enables:
