@@ -434,15 +434,38 @@ Auth: producer token or worker token.
 
 ## Get result
 
-`GET /v1/codeq/tasks/:id/result`
+`GET /v1/codeq/tasks/:id/result[?waitSeconds=N]`
 
 Auth: producer token or worker token.
+
+Query params:
+
+- `waitSeconds` (int, optional, default `0`, max `60`): enables
+  long-poll. The server holds the request open until either the result
+  is available or the deadline elapses. `0` (or omitted) returns
+  immediately with whatever state is on disk.
 
 Response `200`:
 
 ```json
 {"task": {"id": "..."}, "result": {"taskId": "..."}}
 ```
+
+Response `404`:
+
+- `{"error":"task not found"}` — task ID does not exist. Long-poll
+  short-circuits in this case; no waiting.
+- `{"error":"result not found"}` — task exists but no result yet (still
+  pending, in-progress, or timed out before completion). With
+  `waitSeconds > 0` this response is only returned when the deadline
+  elapses without the result landing.
+
+Notes:
+
+- The implementation polls the store every 100 ms while waiting;
+  Pebble's in-process `Get` keeps the overhead negligible.
+- Client cancellation (`ctx.Done()`) aborts the wait immediately.
+- `waitSeconds` larger than 60 is silently capped to 60.
 
 ## Register webhook notifier (push)
 
