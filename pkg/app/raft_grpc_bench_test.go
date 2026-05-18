@@ -38,11 +38,14 @@ func TestRaftBench_GRPC(t *testing.T) {
 	}
 
 	const (
-		warmup            = 2 * time.Second
-		window            = 8 * time.Second
-		concurrent        = 128
-		numNodes          = 3
-		sessionsPerNode   = 4 // open multiple streams per node — each gRPC stream.Send serializes
+		warmup          = 2 * time.Second
+		window          = 8 * time.Second
+		concurrent      = 128
+		numNodes        = 3
+		sessionsPerNode = 4 // open multiple streams per node — each gRPC stream.Send serializes
+		produceBatch    = 1 // 1 = single Produce. >1 enables ProduceBatch but tends to outrun worker drainage.
+		workerBatch     = 0 // workerclient.Config.BatchSize — 0 = single-task (queue depth too shallow for >1)
+
 	)
 
 	measure := func(t *testing.T, numShards int) (createRate, completeRate float64) {
@@ -94,6 +97,7 @@ func TestRaftBench_GRPC(t *testing.T) {
 				Token:        "dev-token",
 				Commands:     []string{"GENERATE_MASTER"},
 				Concurrency:  128,
+				BatchSize:    workerBatch,
 				LeaseSeconds: 60,
 			})
 			if err != nil {
@@ -108,13 +112,13 @@ func TestRaftBench_GRPC(t *testing.T) {
 		_ = grpcWarmup(prodSess, 4*time.Second)
 
 		wctx, wcancel := context.WithTimeout(context.Background(), warmup)
-		runGRPCCycle(wctx, prodSess, workerClis, concurrent, nil, nil)
+		runGRPCCycle(wctx, prodSess, workerClis, concurrent, produceBatch, nil, nil)
 		wcancel()
 
 		var created, completed atomic.Int64
 		mctx, mcancel := context.WithTimeout(context.Background(), window)
 		start := time.Now()
-		runGRPCCycle(mctx, prodSess, workerClis, concurrent, &created, &completed)
+		runGRPCCycle(mctx, prodSess, workerClis, concurrent, produceBatch, &created, &completed)
 		mcancel()
 		elapsed := time.Since(start)
 		return float64(created.Load()) / elapsed.Seconds(),
@@ -314,16 +318,20 @@ func grpcWarmup(sessions []*producerclient.Session, timeout time.Duration) []str
 }
 
 // runGRPCCycle drives sustained load through both stream paths. Producer
-// goroutines round-robin across all node sessions to maximise the shot
-// at hitting a node that leads the hashed shard. Worker clients drain
-// in parallel via Run with high per-client concurrency. The "cycle"
-// notion is implicit: created counts ACKed creates, completed counts
-// handler callbacks.
+// goroutines pipeline ProduceBatch calls round-robin across all node
+// sessions. Worker clients drain in parallel via Run with BatchSize per
+// slot. Both batched paths amortise raft Apply cost across N tasks via
+// the per-shard apply coalescer.
+//
+// `produceBatch` controls how many creates each producer goroutine
+// sends per stream message; `workerBatch` is the worker's per-slot
+// claim/complete batch (passed via workerclient.Config.BatchSize).
 func runGRPCCycle(
 	ctx context.Context,
 	sessions []*producerclient.Session,
 	workers []*workerclient.Client,
 	concurrency int,
+	produceBatch int,
 	created, completed *atomic.Int64,
 ) {
 	var wg sync.WaitGroup
@@ -346,29 +354,59 @@ func runGRPCCycle(
 	// Producers: N goroutines pumping creates round-robin across sessions.
 	body := []byte(`{"bench":true}`)
 	var counter atomic.Uint64
-	for g := 0; g < concurrency; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for ctx.Err() == nil {
-				idx := int(counter.Add(1)) % len(sessions)
-				sess := sessions[idx]
-				id, err := sess.Produce(ctx, producerclient.CreateRequest{
-					Command: "GENERATE_MASTER",
-					Payload: body,
-				})
-				if err != nil {
-					// Most errors here are "pebble: not leader" — the
-					// hashed shard's leader is on a different node.
-					// Next iteration's round-robin rotates sessions
-					// naturally.
-					continue
+	if produceBatch <= 1 {
+		for g := 0; g < concurrency; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ctx.Err() == nil {
+					idx := int(counter.Add(1)) % len(sessions)
+					sess := sessions[idx]
+					id, err := sess.Produce(ctx, producerclient.CreateRequest{
+						Command: "GENERATE_MASTER",
+						Payload: body,
+					})
+					if err != nil {
+						continue
+					}
+					if id != "" && created != nil {
+						created.Add(1)
+					}
 				}
-				if id != "" && created != nil {
-					created.Add(1)
-				}
+			}()
+		}
+	} else {
+		// Build a static request template — N copies of the same
+		// CreateRequest. The server picks UUIDs internally so each
+		// element of the batch becomes a distinct task.
+		reqs := make([]producerclient.CreateRequest, produceBatch)
+		for i := range reqs {
+			reqs[i] = producerclient.CreateRequest{
+				Command: "GENERATE_MASTER",
+				Payload: body,
 			}
-		}()
+		}
+		for g := 0; g < concurrency; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ctx.Err() == nil {
+					idx := int(counter.Add(1)) % len(sessions)
+					sess := sessions[idx]
+					results, err := sess.ProduceBatch(ctx, reqs)
+					if err != nil {
+						continue
+					}
+					if created != nil {
+						for _, r := range results {
+							if r.Err == nil && r.TaskID != "" {
+								created.Add(1)
+							}
+						}
+					}
+				}
+			}()
+		}
 	}
 
 	wg.Wait()

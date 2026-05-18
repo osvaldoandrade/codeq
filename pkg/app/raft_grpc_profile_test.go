@@ -104,7 +104,7 @@ func TestRaftProfile_GRPC4Shard(t *testing.T) {
 
 	_ = grpcWarmup(prodSess, 4*time.Second)
 	wctx, wcancel := context.WithTimeout(context.Background(), warmup)
-	runGRPCCycle(wctx, prodSess, workerClis, concurrent, nil, nil)
+	runGRPCCycle(wctx, prodSess, workerClis, concurrent, 1, nil, nil)
 	wcancel()
 
 	runtime.SetBlockProfileRate(1)
@@ -124,7 +124,7 @@ func TestRaftProfile_GRPC4Shard(t *testing.T) {
 	var created, completed atomic.Int64
 	mctx, mcancel := context.WithTimeout(context.Background(), window)
 	start := time.Now()
-	runGRPCCycle(mctx, prodSess, workerClis, concurrent, &created, &completed)
+	runGRPCCycle(mctx, prodSess, workerClis, concurrent, 1, &created, &completed)
 	mcancel()
 	elapsed := time.Since(start)
 	pprof.StopCPUProfile()

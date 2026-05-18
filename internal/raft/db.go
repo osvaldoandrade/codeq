@@ -143,7 +143,9 @@ const (
 	// raftMergeBatch caps how many concurrent Replicate calls coalesce
 	// into a single raft.Apply. 128 keeps tail-latency bounded while
 	// amortising the per-Apply overhead (log append, AE round-trip,
-	// FSM Apply, Pebble commit) across many submitters.
+	// FSM Apply, Pebble commit) across many submitters. Empirical sweet
+	// spot — at 256 the merged batch exceeds raft's preferred entry
+	// size and throughput drops back to ~10k cycles/s.
 	raftMergeBatch = 128
 
 	// raftApplyChanBuf bounds the queue between Replicate callers and
