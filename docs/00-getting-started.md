@@ -1,410 +1,269 @@
-# Getting Started with codeQ
+# Getting started
 
-This tutorial will guide you through your first experience with codeQ, from installation to running a complete task workflow.
+Goal: a single codeQ server running on your laptop, with one task created,
+claimed, and completed end-to-end. 10 minutes if you have Go installed.
 
-## What You'll Learn
+Single-node, embedded [Pebble](https://github.com/cockroachdb/pebble), no
+external dependencies. Authentication is a static bearer token so
+everything below is `curl` or the `codeq` CLI.
 
-By the end of this tutorial, you'll understand how to:
+## 1. Install
 
-- Install the codeQ CLI
-- Configure a local development environment
-- Create and enqueue tasks
-- Claim and process tasks as a worker
-- Monitor queue status
+Three ways. Pick one.
 
-## Prerequisites
+### Option A: Go install (fastest if you have Go 1.25+)
 
-- Basic familiarity with command-line interfaces
-- Understanding of task queues and worker patterns
-- For local development: Docker (or Go installed if running from source)
+```bash
+go install github.com/osvaldoandrade/codeq/cmd/codeq@latest
+codeq --help
+```
 
-## Installation
+`go install` builds the `codeq` CLI binary. The server binary
+(`cmd/server`) is built separately from a clone — see Option C if you
+need to run a server locally without Docker.
 
-### Option 1: Install via npm (Recommended)
+### Option B: npm (CLI wrapper around the same binary)
 
-````bash
+```bash
 npm install -g @osvaldoandrade/codeq
 codeq --help
-````
+```
 
-### Option 2: Install from source
+The npm package downloads a pre-built binary from the matching GitHub
+Release (see `npm/scripts/postinstall.js`). Same `codeq` executable as
+Option A.
 
-````bash
+### Option C: install script (clone + build)
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/osvaldoandrade/codeq/main/install.sh | sh
-````
+```
 
-Requires `git` and `go` to be installed.
+Requires `git` and `go`. The script clones the repo, runs
+`go build -o codeq ./cmd/codeq`, and drops the binary in the first
+writable directory on `$PATH` (falls back to `~/.local/bin`). See
+[`install.sh`](../install.sh) for the exact rules.
 
-### Verify Installation
+Verify:
 
-````bash
-codeq version
-````
+```bash
+codeq --help
+```
 
-You should see the version information displayed.
+## 2. Start a server
 
-## Setting Up Your Environment
+The CLI binary (`codeq`) is the *client*. The server lives in
+`cmd/server`. The simplest way to run one is from a repo clone with Go
+installed:
 
-### Quick Start with Docker Compose (Recommended)
-
-The easiest way to get started is using Docker Compose, which sets up everything you need:
-
-````bash
-# Clone the repository
+```bash
 git clone https://github.com/osvaldoandrade/codeq
 cd codeq
 
-# Start codeq (Pebble store + API + example tasks)
+# Minimal Pebble + static-auth config.
+cat > /tmp/codeq.yml <<'EOF'
+port: 8080
+persistenceProvider: pebble
+persistenceConfig:
+  path: ./data
+  fsyncOnCommit: false
+producerAuthProvider: static
+producerAuthConfig:
+  token: dev-token
+  subject: producer-dev
+  raw:
+    role: ADMIN
+    tenantId: dev-tenant
+workerAuthProvider: static
+workerAuthConfig:
+  token: dev-token
+  subject: worker-dev
+  scopes:
+    - codeq:claim
+    - codeq:heartbeat
+    - codeq:abandon
+    - codeq:nack
+    - codeq:result
+    - codeq:subscribe
+  eventTypes: ["*"]
+  raw:
+    tenantId: dev-tenant
+EOF
+
+CODEQ_CONFIG_PATH=/tmp/codeq.yml go run ./cmd/server
+```
+
+What you should see in the log:
+
+- HTTP listener on `:8080`
+- Pebble store opened under `./data/` (created if missing)
+- No raft (`RAFT_ENABLED` unset → single-node)
+- One shard (`numShards` defaults to 1; see
+  [`docs/06-sharding.md`](./06-sharding.md))
+
+If you prefer Docker, the `local-dev` compose template wires the same
+config and adds a seed job:
+
+```bash
 docker compose \
   -f deploy/docker-compose/local-dev/compose.yaml \
   -f deploy/docker-compose/local-dev/compose.override.yaml \
   up -d
-
-# Verify the server is running
 curl -sSf http://localhost:8080/metrics | head
-````
+```
 
-This will start:
-- **codeq API**: HTTP server on port 8080 with hot reload, backed by an embedded Pebble store under `./data/pebble`
-- **Seed service**: Creates example tasks automatically
+> **Note**: the default `persistenceProvider` in `pkg/config/config.go`
+> falls back to `redis` for backward compatibility. The example config
+> above sets it explicitly to `pebble` — required for a zero-dependency
+> single-node run.
 
-To view logs:
+## 3. Create a task
 
-````bash
-docker compose \
-  -f deploy/docker-compose/local-dev/compose.yaml \
-  -f deploy/docker-compose/local-dev/compose.override.yaml \
-  logs -f codeq
-````
+Two equivalent ways.
 
-To stop all services:
+### curl
 
-````bash
-docker compose \
-  -f deploy/docker-compose/local-dev/compose.yaml \
-  -f deploy/docker-compose/local-dev/compose.override.yaml \
-  down
-````
+```bash
+curl -s -X POST http://localhost:8080/v1/codeq/tasks \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"PROCESS_ORDER","payload":{"orderId":"42"},"priority":5}'
+```
 
-For more details on local development with Docker Compose, including hot reload and observability stack, see [Local Development Guide](22-local-development.md).
+Response (truncated):
 
-### Alternative: Manual Setup with Pebble (Embedded)
-
-For the simplest possible setup with zero external dependencies, use the embedded Pebble storage backend:
-
-#### Step 1: Create a Configuration File
-
-````bash
-# Create config directory and file
-mkdir -p ~/.codeq
-cat > ~/.codeq/codeq.yml << EOF
-port: 8080
-persistenceProvider: pebble
-persistenceConfig:
-  path: /tmp/codeq-data
-  fsyncOnCommit: false
-EOF
-````
-
-#### Step 2: Start the codeQ Server
-
-````bash
-# From the repository root
-CODEQ_CONFIG_PATH=~/.codeq/codeq.yml go run ./cmd/server
-````
-
-The server will start on port 8080 and create the Pebble database in `/tmp/codeq-data`.
-
-**Advantages of Pebble for local development:**
-- ✅ Zero dependencies (no Docker required)
-- ✅ Instant startup (microseconds vs seconds)
-- ✅ Automatic cleanup (data cleared when process exits)
-- ✅ Isolated per-developer (data in home directory)
-
-**Limitations:**
-- Single-machine only (not suitable for distributed deployments)
-- Data lost on process exit (unless saved manually)
-
-See [Storage Layout: Pebble](07b-storage-pebble.md) for technical details and performance considerations.
-
-## Your First Task Workflow
-
-Now let's walk through a complete task lifecycle: create, claim, and complete.
-
-### Step 1: Create a Task
-
-First, let's create a simple task:
-
-````bash
-codeq task create \
-  --command EXAMPLE_TASK \
-  --payload '{"message": "Hello from codeQ"}' \
-  --priority 5
-````
-
-You should see output similar to:
-
-````json
+```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "command": "EXAMPLE_TASK",
-  "status": "READY",
+  "command": "PROCESS_ORDER",
+  "status": "PENDING",
   "priority": 5,
-  "createdAt": "2026-02-14T20:30:00Z"
+  "createdAt": "2026-05-18T12:00:00Z"
 }
-````
+```
 
-**Understanding the response:**
-- `id`: Unique identifier for this task
-- `command`: The task type/routing key
-- `status`: Current state (READY, IN_PROGRESS, COMPLETED, FAILED)
-- `priority`: Higher numbers = higher priority (0-10)
+### codeq CLI
 
-### Step 2: Check Queue Stats
+```bash
+codeq task create \
+  --event PROCESS_ORDER \
+  --payload '{"orderId":"42"}' \
+  --priority 5 \
+  --producer-token dev-token \
+  --base-url http://localhost:8080
+```
 
-Before claiming a task, let's check the queue status:
+Same effect. The CLI flag is `--event`, but the HTTP wire field is
+`command` — both refer to the routing key. See
+[`cmd/codeq/main.go`](../cmd/codeq/main.go) and
+[`docs/04-http-api.md`](./04-http-api.md) for the full surface.
 
-````bash
-codeq queue stats --command EXAMPLE_TASK
-````
+## 4. Claim and complete
 
-Output:
+A worker claims the task with a lease, processes it, and submits the
+result.
 
-````json
+```bash
+# Claim (long-poll up to 5s for a task in PROCESS_ORDER).
+CLAIMED=$(curl -s -X POST http://localhost:8080/v1/codeq/tasks/claim \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"commands":["PROCESS_ORDER"],"leaseSeconds":60,"waitSeconds":5}')
+
+echo "$CLAIMED"
+TASK_ID=$(echo "$CLAIMED" | jq -r '.id')
+```
+
+Response (truncated):
+
+```json
 {
-  "command": "EXAMPLE_TASK",
-  "ready": 1,
-  "delayed": 0,
-  "inProgress": 0,
-  "dlq": 0
-}
-````
-
-This shows we have 1 task ready to be claimed.
-
-### Step 3: Claim the Task
-
-Now, let's act as a worker and claim the task:
-
-````bash
-codeq task claim \
-  --commands EXAMPLE_TASK \
-  --lease 120 \
-  --wait 5
-````
-
-**Parameters explained:**
-- `--commands`: Task types this worker can handle (comma-separated list)
-- `--lease`: How long (in seconds) to hold the task before it expires
-- `--wait`: How long to wait for a task if none are immediately available
-
-Output:
-
-````json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "command": "EXAMPLE_TASK",
-  "payload": "{\"message\": \"Hello from codeQ\"}",
+  "id": "550e8400-...",
+  "command": "PROCESS_ORDER",
+  "payload": {"orderId":"42"},
   "status": "IN_PROGRESS",
-  "leaseExpiresAt": "2026-02-14T20:32:00Z"
+  "leaseExpiresAt": "2026-05-18T12:01:00Z"
 }
-````
+```
 
-The task is now assigned to you and will expire in 120 seconds if not completed.
+The lease is 60 seconds: if the worker does not submit a result or
+heartbeat before it expires, the
+[reaper](./06b-lease-management.md) returns the task to the queue with
+an incremented attempt counter (at-least-once delivery).
 
-### Step 4: Complete the Task
+Submit the result:
 
-After processing the task, submit the result:
+```bash
+curl -s -X POST "http://localhost:8080/v1/codeq/tasks/${TASK_ID}/result" \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'Content-Type: application/json' \
+  -d '{"status":"COMPLETED","result":{"ok":true}}'
+```
 
-````bash
-codeq task complete <TASK_ID> \
-  --status COMPLETED \
-  --result '{"processed": true, "output": "Task completed successfully"}'
-````
+Verify it stuck:
 
-Replace `<TASK_ID>` with the actual task ID from the claim response.
+```bash
+curl -s "http://localhost:8080/v1/codeq/tasks/${TASK_ID}" \
+  -H 'Authorization: Bearer dev-token' | jq '.status'
+# "COMPLETED"
+```
 
-### Step 5: Verify Completion
+## What just happened
 
-Check the task status:
+```mermaid
+sequenceDiagram
+  participant You
+  participant Server as codeq server :8080
+  participant Pebble as Pebble (./data)
 
-````bash
-codeq task get <TASK_ID>
-````
+  You->>Server: POST /v1/codeq/tasks (command, payload)
+  Server->>Pebble: batch write (task + KeyReady)
+  Pebble-->>Server: ok
+  Server-->>You: 200 {id, status: PENDING}
 
-The status should show `COMPLETED`.
+  You->>Server: POST /v1/codeq/tasks/claim
+  Server->>Pebble: pop KeyReady, write KeyInprog + lease
+  Server-->>You: 200 {id, payload, leaseExpiresAt}
 
-## Understanding Task States
+  You->>Server: POST /v1/codeq/tasks/{id}/result
+  Server->>Pebble: write KeyResult, delete KeyInprog + lease
+  Server-->>You: 200
+```
 
-Tasks in codeQ move through these states:
+Everything lives in one process. The lease is in-memory (rebuilt from a
+`KeyInprog` scan on restart) and the task body, queues, and results live
+in Pebble under `./data/`. See
+[`docs/07b-storage-pebble.md`](./07b-storage-pebble.md) for the on-disk
+layout.
 
-````
-READY → IN_PROGRESS → COMPLETED
-                    ↓
-                  FAILED → DLQ (after max attempts)
-                    ↑
-                  NACK (retry)
-````
+## Where to go next
 
-**State descriptions:**
-
-- **READY**: Task is in the queue, waiting to be claimed
-- **IN_PROGRESS**: Task is claimed by a worker, lease is active
-- **COMPLETED**: Task finished successfully
-- **FAILED**: Task failed and will retry (if attempts remain)
-- **DLQ**: Dead Letter Queue - task exhausted retry attempts
-
-## Working with Delayed Tasks
-
-Schedule a task to run in the future:
-
-````bash
-codeq task create \
-  --command SCHEDULED_TASK \
-  --payload '{"scheduled": true}' \
-  --delay 60
-````
-
-Or specify an exact time:
-
-````bash
-codeq task create \
-  --command SCHEDULED_TASK \
-  --payload '{"scheduled": true}' \
-  --run-at "2026-02-15T10:00:00Z"
-````
-
-Check delayed tasks:
-
-````bash
-codeq queue stats --command SCHEDULED_TASK
-````
-
-You'll see the task count in the `delayed` field.
-
-## Handling Failures
-
-If a task fails and needs to be retried, use NACK:
-
-````bash
-codeq task nack <TASK_ID> \
-  --delay 30 \
-  --reason "Temporary service unavailable"
-````
-
-This returns the task to the queue with a 30-second delay before it becomes available again.
-
-## Monitoring Your Queues
-
-View all queues:
-
-````bash
-codeq queue list
-````
-
-Get detailed statistics for a specific queue:
-
-````bash
-codeq queue stats --command EXAMPLE_TASK
-````
-
-## Next Steps
-
-Now that you understand the basics, explore these topics:
-
-- **[HTTP API](04-http-api.md)**: Learn to integrate with codeQ programmatically
-- **[CLI Reference](15-cli-reference.md)**: Complete CLI command documentation
-- **[Webhooks](12-webhooks.md)**: Set up push notifications for workers
-- **[Configuration](14-configuration.md)**: Advanced configuration options
-- **[Examples](13-examples.md)**: More usage patterns and examples
-
-## Optional: Enable Distributed Tracing
-
-codeQ supports OpenTelemetry distributed tracing to help you trace tasks through their entire lifecycle.
-
-### Quick Setup (Local Development)
-
-1. Start codeQ with the observability stack (includes Jaeger):
-
-````bash
-docker compose \
-  -f deploy/docker-compose/local-dev/compose.yaml \
-  -f deploy/docker-compose/local-dev/compose.override.yaml \
-  --profile obs up -d
-````
-
-2. Enable tracing in your `.env` file:
-
-````bash
-TRACING_ENABLED=true
-TRACING_SERVICE_NAME=codeq
-TRACING_OTLP_ENDPOINT=jaeger:4317
-TRACING_OTLP_INSECURE=true
-TRACING_SAMPLE_RATIO=1.0
-````
-
-3. Restart codeQ:
-
-````bash
-docker compose \
-  -f deploy/docker-compose/local-dev/compose.yaml \
-  -f deploy/docker-compose/local-dev/compose.override.yaml \
-  restart codeq
-````
-
-4. Create and process a task, then view traces in Jaeger UI:
-
-````bash
-# Open Jaeger UI
-open http://localhost:16686
-
-# Create a task
-curl -X POST http://localhost:8080/v1/codeq/tasks \
-  -H "Authorization: Bearer dev-token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "command": "PROCESS_ORDER",
-    "payload": {"orderId": "12345"}
-  }'
-````
-
-### What Gets Traced
-
-- HTTP requests (inbound and outbound)
-- Task lifecycle (create → claim → process → complete)
-- Webhook deliveries (worker notifications and result callbacks)
-- W3C trace context propagation across service boundaries
-
-See `docs/10-operations.md` for production tracing configuration and `docs/14-configuration.md` for all tracing options.
+- **HA + failover**: [3-node raft cluster tutorial](./43-tutorial-raft-cluster.md) —
+  consensus-replicated writes, automatic leader election.
+- **Deployment decision matrix**: [Deployment modes](./41-deployment-modes.md) —
+  when to pick single-node, raft cluster, or sharded.
+- **Go SDK**: [Go SDK tutorial](./44-tutorial-go-sdk.md) — typed
+  producer + worker client.
+- **HTTP API reference**: [HTTP API](./04-http-api.md) — every endpoint,
+  every field.
+- **CLI reference**: [CLI](./15-cli-reference.md) — all `codeq`
+  subcommands.
+- **Configuration**: [Configuration](./14-configuration.md) — every
+  config key and env var.
 
 ## Troubleshooting
 
-### Task not being claimed
+| Symptom | Likely cause |
+|---|---|
+| `401 unauthorized` | Token mismatch — config says `dev-token`, your `Authorization` header doesn't |
+| `404` on claim | Worker `eventTypes` allowlist doesn't include the task's command |
+| Server exits at startup with a Redis connection error | `persistenceProvider` defaulted to `redis` (see `pkg/config/config.go:511-514`) — set `persistenceProvider: pebble` in your config |
+| `task lease expired` on result submit | Took longer than `leaseSeconds` — increase it, or call heartbeat |
 
-- Verify the command name matches exactly (case-sensitive)
-- Check queue stats to confirm tasks are in READY state
-- Ensure your worker lease duration is reasonable (60-300 seconds)
+## See also
 
-### Connection refused
-
-- Verify the codeQ server is running
-- Check your profile configuration: `codeq config show`
-- Ensure the Pebble data directory exists and is writable (`persistenceConfig.path`)
-
-### Authentication errors
-
-- codeQ uses JWT tokens for authentication in production
-- See [Security](09-security.md) for authentication setup
-- Local development may use mock tokens or no authentication depending on configuration
-
-## Summary
-
-You've successfully:
-
-✓ Installed the codeQ CLI  
-✓ Configured a local environment  
-✓ Created and enqueued tasks  
-✓ Claimed tasks as a worker  
-✓ Completed tasks and monitored queues
-
-Continue exploring the documentation to learn about advanced features like webhooks, priority queuing, and production deployment patterns.
+- [Overview](./01-overview.md)
+- [Architecture](./03-architecture.md)
+- [Storage layout (Pebble)](./07b-storage-pebble.md)
+- [Local development](./22-local-development.md)
+- [Style guide](./_STYLE.md)
