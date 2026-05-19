@@ -2,7 +2,7 @@ name: codeq
 
 services:
   codeq:
-    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:0.1.0}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     ports:
       - "${CODEQ_PORT:-8080}:8080"
     environment:

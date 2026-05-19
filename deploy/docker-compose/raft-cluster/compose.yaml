@@ -24,7 +24,7 @@ name: codeq-raft
 
 services:
   node-a:
-    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     container_name: codeq-raft-node-a
     hostname: node-a
     restart: unless-stopped
@@ -80,7 +80,7 @@ services:
       - raft
 
   node-b:
-    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     container_name: codeq-raft-node-b
     hostname: node-b
     restart: unless-stopped
@@ -103,7 +103,7 @@ services:
         condition: service_started
 
   node-c:
-    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     container_name: codeq-raft-node-c
     hostname: node-c
     restart: unless-stopped

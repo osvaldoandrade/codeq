@@ -17,7 +17,7 @@ name: codeq-cluster
 
 services:
   node-a:
-    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     container_name: codeq-cluster-node-a
     hostname: node-a
     restart: unless-stopped
@@ -58,7 +58,7 @@ services:
       - cluster
 
   node-b:
-    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     container_name: codeq-cluster-node-b
     hostname: node-b
     restart: unless-stopped
@@ -99,7 +99,7 @@ services:
       - cluster
 
   node-c:
-    image: ${CODEQ_IMAGE:-codeq-service:cluster}
+    image: ${CODEQ_IMAGE:-ghcr.io/osvaldoandrade/codeq-service:latest}
     container_name: codeq-cluster-node-c
     hostname: node-c
     restart: unless-stopped
