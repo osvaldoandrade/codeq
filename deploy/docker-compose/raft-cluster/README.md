@@ -21,12 +21,15 @@ limitations.
 ## Quick start
 
 ```bash
-# Build the image once (any image with codeq compiled in works).
-docker build -f deploy/docker-compose/cluster/Dockerfile -t codeq-service:cluster .
-
-# Bring the cluster up. node-a bootstraps; node-b and node-c join via
-# raft replication of the initial configuration.
+# Bring the cluster up. The compose file defaults to
+# ghcr.io/osvaldoandrade/codeq-service:latest, pulled automatically.
+# node-a bootstraps; node-b and node-c join via raft replication of
+# the initial configuration.
 docker compose -f deploy/docker-compose/raft-cluster/compose.yaml up -d
+
+# To run against a locally-built image instead:
+#   docker build -f deploy/docker-compose/cluster/Dockerfile -t codeq-service:local .
+#   CODEQ_IMAGE=codeq-service:local docker compose -f ... up -d
 
 # All three nodes are reachable:
 curl -s http://localhost:8080/v1/codeq/raft/status | jq .   # node-a
