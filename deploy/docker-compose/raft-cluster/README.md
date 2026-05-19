@@ -31,6 +31,13 @@ docker compose -f deploy/docker-compose/raft-cluster/compose.yaml up -d
 #   docker build -f deploy/docker-compose/cluster/Dockerfile -t codeq-service:local .
 #   CODEQ_IMAGE=codeq-service:local docker compose -f ... up -d
 
+# If the pull fails with "denied" or "manifest unknown", the GHCR
+# package is still private. Either authenticate first:
+#   echo "$GHCR_TOKEN" | docker login ghcr.io -u <user> --password-stdin
+# Or flip the package to public (one-time, persists across releases):
+#   https://github.com/users/osvaldoandrade/packages/container/codeq-service/settings
+#   → "Danger Zone" → "Change package visibility" → Public.
+
 # All three nodes are reachable:
 curl -s http://localhost:8080/v1/codeq/raft/status | jq .   # node-a
 curl -s http://localhost:8081/v1/codeq/raft/status | jq .   # node-b

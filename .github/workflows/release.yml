@@ -172,18 +172,8 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.vars.outputs.version }}
 
-      - name: Ensure package is public (best-effort)
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GHCR_ADMIN_TOKEN }}
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN:-}" ]; then
-            echo "Skipping: secret GHCR_ADMIN_TOKEN is not set."
-            echo "To auto-publish ghcr.io/${IMAGE_NAME,,} as public, create a PAT with admin:packages and store it as GHCR_ADMIN_TOKEN."
-            exit 0
-          fi
-          gh api -X PATCH \
-            "/user/packages/container/codeq-service" \
-            -f visibility=public
+      # Package visibility is a one-time setting per package, not per release.
+      # After the first push, set it via:
+      #   https://github.com/users/<owner>/packages/container/codeq-service/settings
+      # → "Danger Zone" → "Change package visibility" → Public.
+      # The setting persists across all subsequent pushes.
