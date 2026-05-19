@@ -169,7 +169,9 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
 
 For high-throughput producers and workers, prefer the gRPC streaming
 API (long-lived bidirectional stream, amortized auth, pipelined acks):
-see [docs/34-streaming-api-guide.md](docs/34-streaming-api-guide.md).
+see the [Producer Stream](https://github.com/osvaldoandrade/codeq/wiki/IO-Producer-Stream)
+and [Worker Stream](https://github.com/osvaldoandrade/codeq/wiki/IO-Worker-Stream)
+wiki pages.
 
 ## Go SDK
 
@@ -208,7 +210,7 @@ taskID, _ := sess.Produce(ctx, producerclient.CreateRequest{
 ```
 
 Callers outside Go talk to the HTTP API on `:8080`
-([docs/04-http-api.md](docs/04-http-api.md)).
+([REST API reference](https://github.com/osvaldoandrade/codeq/wiki/IO-REST-API)).
 
 ## Comparison
 
@@ -248,7 +250,6 @@ pkg/                  public packages
   producerclient/     Go producer SDK
   workerclient/       Go worker SDK
 deploy/               docker-compose and Kubernetes config
-docs/                 specifications, runbooks, performance baselines
 examples/             example applications and integration patterns
 helm/codeq/           Helm chart and size profiles
 npm/                  npm distribution wrapper for codeq-cli
@@ -256,7 +257,8 @@ npm/                  npm distribution wrapper for codeq-cli
 
 Cluster mode (consistent-hash ring + gRPC routing) is preserved for
 reference. For new HA deployments, use Raft replication —
-see [docs/40-raft-replication.md](docs/40-raft-replication.md).
+see [Raft Replication](https://github.com/osvaldoandrade/codeq/wiki/IO-Raft-Replication)
+and [Cluster-Level Failover](https://github.com/osvaldoandrade/codeq/wiki/Concepts-Cluster-Level-Failover).
 
 ## Install the CLI
 
@@ -280,26 +282,39 @@ external broker):
 codeq install
 ```
 
-See [docs/15-cli-reference.md](docs/15-cli-reference.md) for the full
-CLI surface.
+See the
+[Get Started](https://github.com/osvaldoandrade/codeq/wiki/Get-Started-Run-Locally)
+wiki page for the full CLI surface.
 
-## Where next
+## Documentation
 
-- [Getting started](docs/00-getting-started.md) — first task end to end.
-- [Overview](docs/01-overview.md) — goals, non-goals, fit.
-- [Architecture](docs/03-architecture.md) — package layout, request flows.
-- [HTTP API reference](docs/04-http-api.md).
-- [Streaming API guide](docs/34-streaming-api-guide.md) — gRPC producer and worker streams.
-- [Performance baselines](docs/30-performance-baselines.md) — raw bench output and per-release history.
-- [Performance tuning](docs/17-performance-tuning.md) — shard counts, batch sizes, fsync trade-offs.
-- [Raft replication](docs/40-raft-replication.md) — leader lease, snapshots, quorum behavior.
-- [Operational runbooks](docs/29-operational-runbooks.md) — on-call procedures.
-- [Style guide](docs/_STYLE.md) — voice, numbers, diagrams, links.
+The full documentation lives in the
+[**codeQ wiki**](https://github.com/osvaldoandrade/codeq/wiki) —
+45 pages organised in the same six sections that Apache Pulsar uses:
+
+- [Get Started](https://github.com/osvaldoandrade/codeq/wiki/Get-Started-Overview) —
+  install, run locally, run in Docker, Docker Compose, Kubernetes.
+- [Concepts and Architecture](https://github.com/osvaldoandrade/codeq/wiki/Concepts-Overview) —
+  tasks, queue model, sharding, leases, multi-tenancy, persistence
+  engine, consensus, failover, deployment modes.
+- [Sous Functions](https://github.com/osvaldoandrade/codeq/wiki/Sous-Functions-Overview) —
+  the FaaS layer ([github.com/osvaldoandrade/sous](https://github.com/osvaldoandrade/sous))
+  built on top of codeQ.
+- [CodeQ IO](https://github.com/osvaldoandrade/codeq/wiki/IO-Overview) —
+  gRPC producer/worker streams, REST API, persistence engine, group
+  commit, raft replication, mux transport.
+- [Observability](https://github.com/osvaldoandrade/codeq/wiki/Observability-Overview) —
+  distributed tracing (OpenTelemetry), Prometheus metrics, pprof
+  profiling, structured logging.
+- [Performance](https://github.com/osvaldoandrade/codeq/wiki/Performance-Overview) —
+  measured throughput, the cost of HA, multi-shard scaling, tuning
+  knobs, bench harness.
 
 ## Contributing
 
 Issues and PRs are welcome. Before opening a PR, read
-[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/_STYLE.md](docs/_STYLE.md).
+[CONTRIBUTING.md](CONTRIBUTING.md). The full documentation lives at
+[github.com/osvaldoandrade/codeq/wiki](https://github.com/osvaldoandrade/codeq/wiki).
 
 ## License
 
