@@ -13,16 +13,18 @@ streams, and writes to one disk directory. There is no external broker.
 
 ## What is codeq?
 
-codeq is a durable, multi-tenant task-queue server with at-least-once delivery
-over HTTP and gRPC. One binary runs it as a single high-throughput process or a
-Raft-replicated cluster — modes are mutually exclusive and set at config time
-(`pkg/config/config.go:662-683`):
+codeq is a durable, multitenant task queue server that delivers tasks at least
+once over HTTP and gRPC. The same binary runs as one fast local process or a
+replicated Raft cluster, with no external broker or database to operate.
 
 | Mode          | Topology                          | Durability                       | Failure model                               |
 |---------------|-----------------------------------|----------------------------------|---------------------------------------------|
 | Single node   | 1 process, 1 Pebble DB            | Pebble WAL + group commit        | Process death loses the unflushed batch     |
 | Multi-shard   | 1 process, N Pebble DBs           | Per-shard WAL, FNV-1a routing    | Same as single node, N× write parallelism   |
 | Raft cluster  | 3 (or 5) processes, replicated FSM| WAL + replicated log + snapshots | Tolerates `f = (N-1)/2` node failures       |
+
+The three modes are mutually exclusive; the config layer enforces it at
+`pkg/config/config.go:662-683`.
 
 ## Architecture
 
