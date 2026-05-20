@@ -13,10 +13,10 @@ streams, and writes to one disk directory. There is no external broker.
 
 ## What is codeq?
 
-codeq exposes task-queue semantics — create, claim, lease, heartbeat, complete,
-retry, dead-letter — on top of Pebble. The same binary runs in three shapes,
-chosen at config time and mutually exclusive (the check lives at
-`pkg/config/config.go:662-683`):
+codeq is a durable, multi-tenant task-queue server with at-least-once delivery
+over HTTP and gRPC. One binary runs it as a single high-throughput process or a
+Raft-replicated cluster — modes are mutually exclusive and set at config time
+(`pkg/config/config.go:662-683`):
 
 | Mode          | Topology                          | Durability                       | Failure model                               |
 |---------------|-----------------------------------|----------------------------------|---------------------------------------------|
