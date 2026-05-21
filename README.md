@@ -1,11 +1,6 @@
 # codeq
 
-codeq is a task queue server written in Go. It accepts tasks over an HTTP API
-or a pair of bidirectional gRPC streams, persists them on an embedded LSM tree
-([Pebble](https://github.com/cockroachdb/pebble), the engine CockroachDB runs
-on), and hands them out to workers under a lease-based at-least-once contract.
-One binary holds the storage, lease table, scheduler, HTTP API, and gRPC
-streams, and writes to one disk directory. There is no external broker.
+codeq is a task queue server written in Go. It persists tasks and hands them out to workers under a lease-based at-least-once contract, with Raft consensus for high availability.
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/osvaldoandrade/codeq.svg)](https://pkg.go.dev/github.com/osvaldoandrade/codeq)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
