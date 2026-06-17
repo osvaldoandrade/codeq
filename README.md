@@ -108,20 +108,6 @@ mutex on the client, not the cluster.
   both at once.
 - You speak Go, or are happy talking HTTP from any language.
 
-## When not to use codeq
-
-| If you need…                              | Pick…                                  |
-|-------------------------------------------|----------------------------------------|
-| Pub/sub at Kafka scale, retained log      | Kafka                                  |
-| At-least-once delivery with cloud queueing| SQS                                    |
-| A Python-native task framework            | Celery                                 |
-| A Redis-backed Go task queue              | Asynq (needs Redis)                    |
-| Cross-DC replication, geo-aware routing   | Build on Kafka or a managed system     |
-
-codeq matches Asynq's API surface but stores tasks in an embedded LSM instead
-of Redis. The storage is local to the process, so durability and HA come from
-Pebble and Raft rather than a separately managed data store.
-
 ## Quick start
 
 Install the CLI, then generate and launch a Pebble-backed stack:
