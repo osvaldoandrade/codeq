@@ -1,0 +1,154 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - copyloopvar
+    - cyclop
+    - depguard
+    - dupl
+    - errcheck
+    - errorlint
+    - exhaustive
+    - funlen
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - nestif
+    - nilerr
+    - nolintlint
+    - prealloc
+    - revive
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+
+  settings:
+    cyclop:
+      max-complexity: 10
+      package-average: 6.0
+    gocyclo:
+      min-complexity: 10
+    gocognit:
+      min-complexity: 15
+    funlen:
+      lines: 80
+      statements: 60
+      ignore-comments: true
+    nestif:
+      min-complexity: 5
+    dupl:
+      threshold: 120
+    misspell:
+      locale: US
+    revive:
+      severity: warning
+      rules:
+        - name: var-naming
+        - name: package-comments
+        - name: exported
+          arguments:
+            - "checkPrivateReceivers"
+            - "disableStutteringCheck"
+    depguard:
+      rules:
+        # Domain layer (internal/core) must remain pure: no infrastructure imports.
+        # Enforced once internal/core exists (epic #646).
+        domain:
+          files:
+            - "**/internal/core/**/*.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/osvaldoandrade/codeq/pkg/types
+            - github.com/osvaldoandrade/codeq/pkg/plugin
+            - github.com/osvaldoandrade/codeq/internal/core
+          deny:
+            - pkg: database/sql
+              desc: "domain must not depend on persistence"
+            - pkg: net/http
+              desc: "domain must not depend on transport"
+            - pkg: google.golang.org/grpc
+              desc: "domain must not depend on transport"
+            - pkg: github.com/gin-gonic/gin
+              desc: "domain must not depend on web framework"
+            - pkg: github.com/go-redis/redis/v8
+              desc: "domain must not depend on Redis client"
+            - pkg: github.com/cockroachdb/pebble
+              desc: "domain must not depend on Pebble"
+            - pkg: github.com/hashicorp/raft
+              desc: "domain must not depend on Raft"
+        # pkg/ must contain only stable contracts and DTOs; no internal imports.
+        # Enforced incrementally as pkg/ is reshaped (epic #647).
+        pkg-public:
+          files:
+            - "**/pkg/types/**/*.go"
+            - "**/pkg/plugin/**/*.go"
+            - "**/pkg/auth/**/*.go"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/osvaldoandrade/codeq/pkg
+          deny:
+            - pkg: github.com/osvaldoandrade/codeq/internal
+              desc: "pkg/ must not depend on internal/"
+
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test files can be longer and have higher complexity.
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocognit
+          - gocyclo
+          - cyclop
+          - dupl
+          - gosec
+      # Benchmarks frequently allocate intentionally.
+      - path: _bench_test\.go
+        linters:
+          - gosec
+          - prealloc
+      # Generated protobuf code is exempt.
+      - path: \.pb\.go$
+        linters:
+          - all
+      - path: \.pb\.gw\.go$
+        linters:
+          - all
+
+formatters:
+  enable:
+    - gci
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/osvaldoandrade/codeq)
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
