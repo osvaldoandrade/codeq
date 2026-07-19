@@ -327,6 +327,7 @@ func newPebbleApplication(
 		// cluster bridge. Single-node sharded is fine; multi-node
 		// sharded is a follow-up.
 		if cfg.Cluster.Enabled {
+			bgCancel()
 			for _, d := range dbs {
 				_ = d.Close()
 			}
