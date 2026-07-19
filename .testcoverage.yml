@@ -1,0 +1,43 @@
+# Coverage thresholds enforced by go-test-coverage in CI.
+# See https://github.com/vladopajic/go-test-coverage
+#
+# Thresholds are tightened after the refactor epics complete; they start
+# permissive and become binding as test gaps are filled (epic #654).
+
+profile: coverage.out
+local-prefix: github.com/osvaldoandrade/codeq
+
+# Files and packages excluded from coverage computation entirely.
+exclude:
+  paths:
+    - \.pb\.go$
+    - \.pb\.gw\.go$
+    - cmd/.*/main\.go$
+    - ^internal/bench/
+
+# Overall + per-package thresholds. Promoted to required in CI once
+# epic #654 (test infrastructure) fills the existing gaps.
+threshold:
+  file: 0
+  package: 0
+  total: 70
+
+override:
+  # Domain layer: stricter once internal/core exists (epic #646).
+  - threshold: 95
+    path: ^internal/core
+  # Application / use-case layer.
+  - threshold: 85
+    path: ^internal/application
+  # Storage adapters.
+  - threshold: 80
+    path: ^internal/storage
+  # HTTP and gRPC handlers.
+  - threshold: 85
+    path: ^internal/server
+  # Public SDK clients.
+  - threshold: 80
+    path: ^pkg/(producerclient|workerclient)
+  # Public types/contracts are trivially covered by consumer tests.
+  - threshold: 0
+    path: ^pkg/(types|plugin|auth)$
