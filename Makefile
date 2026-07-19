@@ -13,11 +13,11 @@ BIN_DIR        := bin
 LDFLAGS        ?= -s -w
 BUILD_TAGS     ?=
 
-GOLANGCI_LINT_VERSION    := v1.61.0
+GOLANGCI_LINT_VERSION    := v2.12.2
 GOFUMPT_VERSION          := v0.7.0
 GCI_VERSION              := v0.13.5
 GOVULNCHECK_VERSION      := latest
-GOSEC_VERSION            := v2.21.4
+GOSEC_VERSION            := v2.28.0
 GO_TEST_COVERAGE_VERSION := v2.11.4
 
 TOOL_BIN := $(CURDIR)/$(BIN_DIR)/tools
