@@ -25,7 +25,9 @@ func extractTenantID(claims *auth.Claims) string {
 
 	// Try multiple common claim names for tenant ID
 	tenantID := ""
-	if v, ok := claims.Raw["tenantId"].(string); ok {
+	if v, ok := claims.Raw["tid"].(string); ok {
+		tenantID = strings.TrimSpace(v)
+	} else if v, ok := claims.Raw["tenantId"].(string); ok {
 		tenantID = strings.TrimSpace(v)
 	} else if v, ok := claims.Raw["tenant_id"].(string); ok {
 		tenantID = strings.TrimSpace(v)
