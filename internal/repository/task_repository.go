@@ -120,8 +120,9 @@ func NewTaskRepository(rdb *redis.Client, tz *time.Location, backoffPolicy strin
 		backoffPolicy:      backoffPolicy,
 		backoffBaseSeconds: backoffBaseSeconds,
 		backoffMaxSeconds:  backoffMaxSeconds,
-		rng:                rand.New(rand.NewSource(time.Now().UnixNano())),
-		shardSupplier:      shardSupplier,
+		// #nosec G404 -- retry scheduling jitter is not security-sensitive randomness.
+		rng:           rand.New(rand.NewSource(time.Now().UnixNano())),
+		shardSupplier: shardSupplier,
 		// Best-effort local filter to avoid negative idempotency GETs.
 		// Defaults target a small memory footprint (~a few MB) and a short rolling window.
 		idempoBloom: newIdempotencyBloom(1_000_000, 0.01, 30*time.Minute),

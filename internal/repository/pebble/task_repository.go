@@ -250,14 +250,14 @@ func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domai
 		return nil, false, err
 	}
 	// TTL index (used by CleanupExpired reaper).
-	ttlScore := uint64(now.Add(taskRetention).Unix())
+	ttlScore := unixSeconds(now.Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return nil, false, err
 	}
 	// Pending vs delayed bucket.
 	var pendingSeq uint64
 	if delayed {
-		score := uint64(visibleAt.Unix())
+		score := unixSeconds(visibleAt)
 		if err := b.Set(KeyDelayed(cmd, tenantID, score, id), nil, nil); err != nil {
 			return nil, false, err
 		}
@@ -598,7 +598,7 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	}
 	// Phase 6 / M2: lease lives in memory; task body's LeaseUntil
 	// stays as the durable source of truth for recovery.
-	ttlScore := uint64(now.Add(taskRetention).Unix())
+	ttlScore := unixSeconds(now.Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return nil, false, err
 	}
@@ -683,7 +683,7 @@ collect:
 	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
 	leaseUntilStr := leaseUntil.Format(time.RFC3339)
 	leaseUntilU := leaseUntil.Unix()
-	ttlScore := uint64(now.Add(taskRetention).Unix())
+	ttlScore := unixSeconds(now.Add(taskRetention))
 
 	out := make([]*domain.Task, 0, len(hints))
 	b := r.db.Batch()
@@ -857,7 +857,7 @@ func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID 
 		return err
 	}
 	// Phase 6 / M2: KeyLease eliminated; lease lives in memory.
-	ttlScore := uint64(now.Add(taskRetention).Unix())
+	ttlScore := unixSeconds(now.Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, taskID), nil, nil); err != nil {
 		return err
 	}
@@ -1005,7 +1005,7 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 		return 0, false, err
 	}
 	// Phase 6 / M2: KeyLease eliminated.
-	score := uint64(visibleAt.Unix())
+	score := unixSeconds(visibleAt)
 	if err := b.Set(KeyDelayed(t.Command, t.TenantID, score, taskID), nil, nil); err != nil {
 		return 0, false, err
 	}
@@ -1055,7 +1055,7 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 	}
 	defer flag.Store(0)
 	now := r.now()
-	lower, upper := PrefixDelayedUpTo(cmd, tenantID, uint64(now.Unix()))
+	lower, upper := PrefixDelayedUpTo(cmd, tenantID, unixSeconds(now))
 	it, err := r.db.Iter(lower, upper)
 	if err != nil {
 		return 0, err
@@ -1335,7 +1335,7 @@ func (r *TaskRepository) CleanupExpired(ctx context.Context, limit int, before t
 	// Restrict upper bound to keys with expire <= before.
 	upper := make([]byte, 0, len(pTTL)+8)
 	upper = append(upper, pTTL...)
-	upper = append(upper, be8(uint64(before.Unix())+1)...)
+	upper = append(upper, be8(unixSeconds(before)+1)...)
 	if string(upper) > string(upperFull) {
 		upper = upperFull
 	}

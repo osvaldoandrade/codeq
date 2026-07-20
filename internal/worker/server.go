@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osvaldoandrade/codeq/internal/authclaims"
+	"github.com/osvaldoandrade/codeq/internal/safeint"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/internal/worker/workerpb"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
@@ -484,7 +485,7 @@ func (s *Server) handleNack(ctx context.Context, sess *streamSession, req *worke
 		return
 	}
 	_ = sess.send(&workerpb.ServerEvent{Event: &workerpb.ServerEvent_NackAck{
-		NackAck: &workerpb.NackAck{TaskId: req.TaskId, Ok: true, AppliedDelaySeconds: int32(applied), Dlq: dlq},
+		NackAck: &workerpb.NackAck{TaskId: req.TaskId, Ok: true, AppliedDelaySeconds: safeint.Int32(applied), Dlq: dlq},
 	}})
 }
 
@@ -635,13 +636,13 @@ func taskToProto(t *domain.Task) *workerpb.Task {
 		Id:          t.ID,
 		Command:     string(t.Command),
 		Payload:     []byte(t.Payload),
-		Priority:    int32(t.Priority),
+		Priority:    safeint.Int32(t.Priority),
 		Webhook:     t.Webhook,
-		MaxAttempts: int32(t.MaxAttempts),
+		MaxAttempts: safeint.Int32(t.MaxAttempts),
 		Status:      string(t.Status),
 		WorkerId:    t.WorkerID,
 		LeaseUntil:  t.LeaseUntil,
-		Attempts:    int32(t.Attempts),
+		Attempts:    safeint.Int32(t.Attempts),
 		TenantId:    t.TenantID,
 	}
 	if !t.CreatedAt.IsZero() {

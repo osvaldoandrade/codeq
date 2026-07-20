@@ -11,8 +11,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
-	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
+	"github.com/osvaldoandrade/codeq/internal/safeint"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
@@ -117,9 +118,9 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		Id:             id,
 		Command:        string(cmd),
 		Payload:        []byte(payload),
-		Priority:       int32(priority),
+		Priority:       safeint.Int32(priority),
 		Webhook:        webhook,
-		MaxAttempts:    int32(maxAttempts),
+		MaxAttempts:    safeint.Int32(maxAttempts),
 		IdempotencyKey: idempotencyKey,
 		VisibleAtUnix:  visible,
 		TenantId:       tenantID,
@@ -167,7 +168,7 @@ func (r *TaskRouter) Heartbeat(ctx context.Context, taskID string, workerID stri
 	if err != nil {
 		return err
 	}
-	resp, err := c.Heartbeat(ctx, &clusterpb.HeartbeatRequest{TaskId: taskID, WorkerId: workerID, ExtendSeconds: int32(extendSeconds)})
+	resp, err := c.Heartbeat(ctx, &clusterpb.HeartbeatRequest{TaskId: taskID, WorkerId: workerID, ExtendSeconds: safeint.Int32(extendSeconds)})
 	if err != nil {
 		return err
 	}
@@ -222,8 +223,8 @@ func (r *TaskRouter) Nack(ctx context.Context, taskID string, workerID string, d
 	resp, err := c.Nack(ctx, &clusterpb.NackRequest{
 		TaskId:             taskID,
 		WorkerId:           workerID,
-		DelaySeconds:       int32(delaySeconds),
-		MaxAttemptsDefault: int32(maxAttemptsDefault),
+		DelaySeconds:       safeint.Int32(delaySeconds),
+		MaxAttemptsDefault: safeint.Int32(maxAttemptsDefault),
 		Reason:             reason,
 	})
 	if err != nil {
@@ -269,9 +270,9 @@ func (r *TaskRouter) Claim(ctx context.Context, workerID string, commands []doma
 		return c.LocalClaim(ctx, &clusterpb.LocalClaimRequest{
 			WorkerId:           workerID,
 			Commands:           commandsStr,
-			LeaseSeconds:       int32(leaseSeconds),
-			InspectLimit:       int32(inspectLimit),
-			MaxAttemptsDefault: int32(maxAttemptsDefault),
+			LeaseSeconds:       safeint.Int32(leaseSeconds),
+			InspectLimit:       safeint.Int32(inspectLimit),
+			MaxAttemptsDefault: safeint.Int32(maxAttemptsDefault),
 			TenantId:           tenantID,
 		})
 	})

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/osvaldoandrade/codeq/internal/safeint"
 	"github.com/osvaldoandrade/codeq/internal/worker/workerpb"
 )
 
@@ -326,8 +327,8 @@ func (s *session) slotLoop(ctx context.Context, h Handler) {
 		if err := s.send(&workerpb.WorkerEvent{Event: &workerpb.WorkerEvent_Ready{
 			Ready: &workerpb.Ready{
 				Commands:     s.cfg.Commands,
-				LeaseSeconds: int32(s.cfg.LeaseSeconds),
-				Count:        int32(batchSize),
+				LeaseSeconds: safeint.Int32(s.cfg.LeaseSeconds),
+				Count:        safeint.Int32(batchSize),
 			},
 		}}); err != nil {
 			s.log.Warn("workerclient: send ready", "err", err)
@@ -430,7 +431,7 @@ func (s *session) applyResult(taskID string, r Result) error {
 		return s.send(&workerpb.WorkerEvent{Event: &workerpb.WorkerEvent_Nack{
 			Nack: &workerpb.Nack{
 				TaskId:       taskID,
-				DelaySeconds: int32(r.delaySeconds),
+				DelaySeconds: safeint.Int32(r.delaySeconds),
 				Reason:       r.reason,
 			},
 		}})

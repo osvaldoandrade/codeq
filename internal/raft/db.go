@@ -172,7 +172,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 		pOpts.Levels[i].FilterType = pebbledb.TableFilter
 	}
 	statePath := cfg.Path + "/state"
-	if err := os.MkdirAll(statePath, 0o755); err != nil {
+	if err := os.MkdirAll(statePath, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir state: %w", err)
 	}
 	pdb, err := pebbledb.Open(statePath, pOpts)

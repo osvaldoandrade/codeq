@@ -18,6 +18,7 @@ func Compute(policy string, baseSeconds int, maxSeconds int, attempts int, rng *
 		maxSeconds = baseSeconds
 	}
 	if rng == nil {
+		// #nosec G404 -- deterministic retry jitter is not used for key, token, or identity material.
 		rng = rand.New(rand.NewSource(1))
 	}
 	switch policy {

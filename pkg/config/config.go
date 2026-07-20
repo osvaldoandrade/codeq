@@ -164,6 +164,7 @@ type RateLimitBucketConfig struct {
 }
 
 func LoadConfig(filePath string) (*Config, error) {
+	// #nosec G304 -- filePath is explicitly selected by the operator at startup.
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
@@ -181,6 +182,7 @@ func LoadConfig(filePath string) (*Config, error) {
 func LoadConfigOptional(filePath string) (*Config, error) {
 	var c Config
 	if strings.TrimSpace(filePath) != "" {
+		// #nosec G304 -- filePath is explicitly selected by the operator at startup.
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			if !os.IsNotExist(err) {

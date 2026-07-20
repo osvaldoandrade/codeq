@@ -71,7 +71,7 @@ func (r *ResultRepository) SaveResult(ctx context.Context, rec domain.ResultReco
 	if err := b.Set(KeyTask(rec.TaskID), taskUpdated, nil); err != nil {
 		return err
 	}
-	ttlScore := uint64(r.now().Add(taskRetention).Unix())
+	ttlScore := unixSeconds(r.now().Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, rec.TaskID), nil, nil); err != nil {
 		return err
 	}
@@ -140,7 +140,7 @@ func (r *ResultRepository) UpdateTaskOnComplete(ctx context.Context, id string, 
 	}
 	// Phase 6 / M2: KeyLease eliminated; the in-memory lease is
 	// cleared below after the durable commit.
-	ttlScore := uint64(r.now().Add(taskRetention).Unix())
+	ttlScore := unixSeconds(r.now().Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return err
 	}
@@ -209,7 +209,7 @@ func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updat
 	}
 
 	now := r.now()
-	ttlScore := uint64(now.Add(taskRetention).Unix())
+	ttlScore := unixSeconds(now.Add(taskRetention))
 	b := r.db.Batch()
 	defer b.Close()
 	for _, u := range updates {

@@ -56,6 +56,31 @@ func TestLocalUploaderCreatesDirectories(t *testing.T) {
 	}
 }
 
+func TestLocalUploaderRejectsEscapingPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	uploader := NewLocalUploader(tmpDir)
+
+	if _, err := uploader.UploadBytes(context.Background(), "../escaped.txt", "text/plain", []byte("no")); err == nil {
+		t.Fatal("expected parent traversal to be rejected")
+	}
+	if _, err := uploader.UploadBytes(context.Background(), filepath.Join(tmpDir, "absolute.txt"), "text/plain", []byte("no")); err == nil {
+		t.Fatal("expected absolute path to be rejected")
+	}
+}
+
+func TestLocalUploaderRejectsSymlinkParent(t *testing.T) {
+	tmpDir := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(tmpDir, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	uploader := NewLocalUploader(tmpDir)
+	if _, err := uploader.UploadBytes(context.Background(), "link/file.txt", "text/plain", []byte("no")); err == nil {
+		t.Fatal("expected symlink parent to be rejected")
+	}
+}
+
 func TestNewRedisProvider(t *testing.T) {
 	client := NewRedisProvider("localhost:6379", "password")
 

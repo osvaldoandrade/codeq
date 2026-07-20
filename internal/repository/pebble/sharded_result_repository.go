@@ -37,7 +37,7 @@ func NewShardedResultRepository(shards []*ResultRepository) *ShardedResultReposi
 func (s *ShardedResultRepository) shardOf(key string) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(key))
-	return int(h.Sum64() % uint64(len(s.shards)))
+	return int(h.Sum64() % uint64(len(s.shards))) // #nosec G115 -- modulo bounds the shard index.
 }
 
 func (s *ShardedResultRepository) GetTask(ctx context.Context, id string) (*domain.Task, error) {

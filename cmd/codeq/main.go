@@ -547,6 +547,7 @@ func authCmd(profileName *string, iamBaseURL *string, iamAPIKey *string, ui *ui)
 				loginCfg.BodyTemplate = loginPayload
 			}
 			if strings.TrimSpace(loginPayloadFile) != "" {
+				// #nosec G304 -- the operator explicitly selects this same-user CLI input file.
 				data, err := os.ReadFile(loginPayloadFile)
 				if err != nil {
 					return err
@@ -1276,7 +1277,7 @@ func writeInstallBundle(opts installOptions, profile installProfile) (installBun
 	if outDir == "." || outDir == "" {
 		outDir = "codeq-install"
 	}
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
 		return installBundle{}, err
 	}
 	if opts.Target == "kubernetes" {
@@ -1288,7 +1289,7 @@ func writeInstallBundle(opts installOptions, profile installProfile) (installBun
 func writeDockerInstallBundle(opts installOptions, profile installProfile, outDir string) (installBundle, error) {
 	composePath := filepath.Join(outDir, "compose.yaml")
 	envPath := filepath.Join(outDir, ".env")
-	if err := os.WriteFile(composePath, []byte(renderDockerInstallCompose()), 0o644); err != nil {
+	if err := os.WriteFile(composePath, []byte(renderDockerInstallCompose()), 0o600); err != nil {
 		return installBundle{}, err
 	}
 	if err := os.WriteFile(envPath, []byte(renderDockerInstallEnv(opts, profile)), 0o600); err != nil {
@@ -1603,6 +1604,7 @@ func runInstallCommand(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New("empty install command")
 	}
+	// #nosec G204 -- args is an internally generated docker/helm command vector, never a shell string.
 	proc := exec.CommandContext(ctx, args[0], args[1:]...)
 	proc.Stdout = os.Stdout
 	proc.Stderr = os.Stderr
@@ -2067,6 +2069,7 @@ func isTerminal(fd int) bool {
 func loadConfig() (cliConfig, string, error) {
 	path := configPath()
 	var cfg cliConfig
+	// #nosec G304 -- path is the operator's same-user CLI configuration path.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
