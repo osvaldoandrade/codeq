@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/osvaldoandrade/codeq/internal/core/queuetopic"
 	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks" // Register JWKS provider
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
@@ -122,6 +123,8 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 
 	workerToken := signWorkerJWT(t, privKey, kid, "codeq-test", "codeq-worker", "worker-1")
 	producerToken := signProducerJWT(t, privKey, kid, "codeq-test", "codeq-producer", "user-1")
+	adminToken := signAdminJWT(t, privKey, kid, "codeq-test", "codeq-producer", "admin-1")
+	assertTopicAdminLifecycle(t, ctx, server.URL, adminToken)
 
 	taskID := createTask(t, ctx, server.URL, producerToken, hookSrv.URL)
 	claimTask(t, ctx, server.URL, workerToken, taskID)
@@ -142,6 +145,56 @@ func TestHTTPIntegrationFlow(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("expected webhook callback")
+	}
+}
+
+func assertTopicAdminLifecycle(t *testing.T, ctx context.Context, baseURL, token string) {
+	t.Helper()
+	endpoint := baseURL + "/v1/codeq/admin/topics/payments-events"
+	policy := queuetopic.Policy{
+		PriorityTiers:      []int{5, 1, 3},
+		MaxAttempts:        5,
+		DeadLetterTopicRef: "payments-events-dlq",
+		RetentionSeconds:   3600,
+		MaxConsumers:       20,
+	}
+
+	var created queuetopic.Topic
+	status, body := doJSON(t, ctx, http.MethodPut, endpoint, token, policy, &created)
+	if status != http.StatusCreated || created.TopicID != "test-tenant.payments-events" || created.Version != 1 {
+		t.Fatalf("create topic status=%d topic=%#v body=%s", status, created, body)
+	}
+
+	var replayed queuetopic.Topic
+	status, body = doJSON(t, ctx, http.MethodPut, endpoint, token, policy, &replayed)
+	if status != http.StatusOK || replayed.Version != 1 || !replayed.CreatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("replay topic status=%d topic=%#v body=%s", status, replayed, body)
+	}
+
+	policy.MaxConsumers = 40
+	var updated queuetopic.Topic
+	status, body = doJSON(t, ctx, http.MethodPut, endpoint, token, policy, &updated)
+	if status != http.StatusOK || updated.Version != 2 || updated.Policy.MaxConsumers != 40 {
+		t.Fatalf("update topic status=%d topic=%#v body=%s", status, updated, body)
+	}
+
+	var fetched queuetopic.Topic
+	status, body = doJSON(t, ctx, http.MethodGet, endpoint, token, nil, &fetched)
+	if status != http.StatusOK || fetched.Version != 2 {
+		t.Fatalf("get topic status=%d topic=%#v body=%s", status, fetched, body)
+	}
+
+	status, body = doJSON(t, ctx, http.MethodDelete, endpoint, token, nil, nil)
+	if status != http.StatusBadRequest {
+		t.Fatalf("delete without policy status=%d body=%s", status, body)
+	}
+	status, body = doJSON(t, ctx, http.MethodDelete, endpoint+"?deletionPolicy=Delete", token, nil, nil)
+	if status != http.StatusNoContent {
+		t.Fatalf("delete topic status=%d body=%s", status, body)
+	}
+	status, body = doJSON(t, ctx, http.MethodGet, endpoint, token, nil, nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("get deleted topic status=%d body=%s", status, body)
 	}
 }
 

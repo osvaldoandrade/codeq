@@ -129,7 +129,7 @@ tools-sec: $(TOOL_BIN)/govulncheck $(TOOL_BIN)/gosec
 $(TOOL_BIN)/golangci-lint:
 	@mkdir -p $(TOOL_BIN)
 	GOBIN=$(TOOL_BIN) $(GO) install \
-		github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+		github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 $(TOOL_BIN)/gofumpt:
 	@mkdir -p $(TOOL_BIN)

@@ -16,6 +16,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	topicsapp "github.com/osvaldoandrade/codeq/internal/application/topics"
 	"github.com/osvaldoandrade/codeq/internal/cluster"
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
@@ -474,6 +475,9 @@ func newPebbleApplication(
 		Scheduler:   scheduler,
 		Results:     results,
 		Subs:        subs,
+		Topics: topicsapp.NewUnavailableService(
+			"persistenceProvider=pebble requires replicated topic catalog support",
+		),
 		Logger:      logger,
 		TZ:          loc,
 		RateLimiter: limiter,

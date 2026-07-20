@@ -1,8 +1,10 @@
 package app
 
 import (
+	topicsapp "github.com/osvaldoandrade/codeq/internal/application/topics"
 	"github.com/osvaldoandrade/codeq/internal/controllers"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
+	topicshttp "github.com/osvaldoandrade/codeq/internal/server/http/topics"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -39,6 +41,14 @@ func SetupMappings(app *Application) {
 		anyAuth.GET("/raft/status", controllers.NewRaftStatusController(adaptRaftGroups(app.RaftGroups)).Handle)
 
 		admin := producer.Group("/admin", middleware.RequireAdmin())
+		topicService := app.Topics
+		if topicService == nil {
+			topicService = topicsapp.NewUnavailableService("topic service not configured")
+		}
+		topicHandler := topicshttp.NewHandler(topicService)
+		admin.PUT("/topics/:topicName", topicHandler.Upsert)
+		admin.GET("/topics/:topicName", topicHandler.Get)
+		admin.DELETE("/topics/:topicName", topicHandler.Delete)
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
 		admin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
 

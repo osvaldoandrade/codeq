@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	topicsapp "github.com/osvaldoandrade/codeq/internal/application/topics"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
@@ -15,6 +16,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/internal/shard"
+	topicredis "github.com/osvaldoandrade/codeq/internal/storage/adapter/redis"
 	"github.com/osvaldoandrade/codeq/internal/tracing"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
@@ -42,6 +44,7 @@ type Application struct {
 	Scheduler         services.SchedulerService
 	Results           services.ResultsService
 	Subs              services.SubscriptionService
+	Topics            *topicsapp.Service
 	Logger            *slog.Logger
 	TZ                *time.Location
 	ProducerValidator auth.Validator
@@ -244,6 +247,7 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 	}
 	uploader := providers.NewLocalUploader(cfg.LocalArtifactsDir)
 	results := services.NewResultsService(resultRepo, uploader, resultCallback, logger, time.Now, loc)
+	topics := topicsapp.NewService(topicredis.NewTopicStore(redisClient), time.Now)
 
 	engine := gin.New()
 	engine.Use(gin.Recovery(), middleware.RequestIDMiddleware())
@@ -260,6 +264,7 @@ func NewApplication(cfg *config.Config, opts ...ApplicationOption) (*Application
 		Scheduler:   scheduler,
 		Results:     results,
 		Subs:        subs,
+		Topics:      topics,
 		Logger:      logger,
 		TZ:          loc,
 		RateLimiter: limiter,
