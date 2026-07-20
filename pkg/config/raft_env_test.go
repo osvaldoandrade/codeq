@@ -15,6 +15,7 @@ func TestLoadConfigOptional_RaftEnvOverrides(t *testing.T) {
 	t.Setenv("RAFT_LEADER_LEASE_MS", "200")
 	t.Setenv("RAFT_COMMIT_MS", "20")
 	t.Setenv("RAFT_APPLY_TIMEOUT_SECONDS", "8")
+	t.Setenv("RAFT_TOPIC_CATALOG_PROTOCOL", "v1")
 
 	cfg, err := LoadConfigOptional("")
 	if err != nil {
@@ -59,6 +60,9 @@ func TestLoadConfigOptional_RaftEnvOverrides(t *testing.T) {
 	}
 	if cfg.Raft.ApplyTimeoutSeconds != 8 {
 		t.Errorf("Raft.ApplyTimeoutSeconds: want 8, got %d", cfg.Raft.ApplyTimeoutSeconds)
+	}
+	if cfg.Raft.TopicCatalogProtocol != "v1" {
+		t.Errorf("Raft.TopicCatalogProtocol: want v1, got %q", cfg.Raft.TopicCatalogProtocol)
 	}
 }
 

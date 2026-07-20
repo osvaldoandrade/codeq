@@ -56,6 +56,9 @@ services:
       # an existing cluster requires re-bootstrap because the wire
       # shape changes.
       RAFT_MUX_ENABLED: "true"
+      # Enable only after every peer runs a build that supports the v1
+      # replicated topic catalog. Empty keeps topic administration fail closed.
+      RAFT_TOPIC_CATALOG_PROTOCOL: "v1"
       # RAFT_PEERS is "id=host:port,..." resolved via docker DNS.
       # All three peers run raft on container-local port 7000.
       RAFT_PEERS: "node-a=node-a:7000,node-b=node-b:7000,node-c=node-c:7000"

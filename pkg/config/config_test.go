@@ -434,3 +434,29 @@ func TestValidate_ShardingBackendsValidConfig(t *testing.T) {
 		t.Fatalf("Expected no validation error, got: %v", err)
 	}
 }
+
+func TestValidate_RaftTopicCatalogProtocol(t *testing.T) {
+	const nodeID = "node-1"
+	base := func(protocol string) *Config {
+		return &Config{
+			Env:                 "dev",
+			WorkerAudience:      "codeq-worker",
+			PersistenceProvider: "pebble",
+			Raft: RaftConfig{
+				Enabled:              true,
+				SelfID:               nodeID,
+				BindAddr:             "127.0.0.1:7000",
+				Peers:                map[string]string{nodeID: "127.0.0.1:7000"},
+				TopicCatalogProtocol: protocol,
+			},
+		}
+	}
+	for _, protocol := range []string{"", "v1", " v1 "} {
+		if err := base(protocol).Validate(); err != nil {
+			t.Fatalf("protocol %q rejected: %v", protocol, err)
+		}
+	}
+	if err := base("v2").Validate(); err == nil || !strings.Contains(err.Error(), "topicCatalogProtocol") {
+		t.Fatalf("unsupported protocol error = %v", err)
+	}
+}

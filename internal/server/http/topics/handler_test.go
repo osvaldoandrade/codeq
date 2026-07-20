@@ -106,6 +106,27 @@ func TestHandlerDeleteRequiresExplicitPolicy(t *testing.T) {
 	}
 }
 
+func TestHandlerRedirectsFollowerWrites(t *testing.T) {
+	service := &fakeService{err: &leaderError{url: "http://leader:8080/"}}
+	response := request(t, service, http.MethodPut, "/v1/codeq/admin/topics/events?trace=1", validBody)
+	if response.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status = %d body=%s", response.Code, response.Body.String())
+	}
+	if got, want := response.Header().Get("Location"), "http://leader:8080/v1/codeq/admin/topics/events?trace=1"; got != want {
+		t.Fatalf("Location = %q, want %q", got, want)
+	}
+
+	response = request(t, &fakeService{err: &leaderError{}}, http.MethodDelete, "/v1/codeq/admin/topics/events?deletionPolicy=Delete", "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unknown leader status = %d body=%s", response.Code, response.Body.String())
+	}
+}
+
+type leaderError struct{ url string }
+
+func (e *leaderError) Error() string          { return "not leader" }
+func (e *leaderError) LeaderHTTPAddr() string { return e.url }
+
 const validBody = `{"priorityTiers":[0,3,5],"maxAttempts":5,"deadLetterTopicRef":"events-dlq","retentionSeconds":3600,"maxConsumers":20}`
 
 func request(t *testing.T, service Service, method, target, body string) *httptest.ResponseRecorder {

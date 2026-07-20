@@ -29,6 +29,12 @@ persistenceConfig:
   # true: Slower, but guaranteed durability (fsync after every commit)
   fsyncOnCommit: false
 
+# Standalone Pebble persists QueueTopic policies directly. When enabling Raft,
+# leave this empty during the binary rollout, then set v1 on every peer only
+# after all peers support the replicated catalog.
+# raft:
+#   topicCatalogProtocol: v1
+
 # Scheduling
 defaultLeaseSeconds: 300          # 5 minutes (worker task claim duration)
 maxAttemptsDefault: 5             # retry up to 5 times before DLQ
