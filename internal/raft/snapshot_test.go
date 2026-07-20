@@ -25,6 +25,7 @@ func TestSnapshot_RoundTrip(t *testing.T) {
 		{"codeq/tasks/abc", `{"id":"abc","status":"PENDING"}`},
 		{"codeq/q/GENERATE_MASTER/t1/pending/0/0000/abc", ""},
 		{"codeq/r/abc", `{"taskId":"abc","status":"COMPLETED"}`},
+		{"codeq/admin/topics/payments.events", `{"topicId":"payments.events","version":2}`},
 	} {
 		if err := src.Set([]byte(kv[0]), []byte(kv[1]), pebbledb.NoSync); err != nil {
 			t.Fatalf("seed %s: %v", kv[0], err)
@@ -52,6 +53,7 @@ func TestSnapshot_RoundTrip(t *testing.T) {
 		{"codeq/tasks/abc", `{"id":"abc","status":"PENDING"}`},
 		{"codeq/q/GENERATE_MASTER/t1/pending/0/0000/abc", ""},
 		{"codeq/r/abc", `{"taskId":"abc","status":"COMPLETED"}`},
+		{"codeq/admin/topics/payments.events", `{"topicId":"payments.events","version":2}`},
 	} {
 		v, closer, err := dst.Get([]byte(kv[0]))
 		if err != nil {

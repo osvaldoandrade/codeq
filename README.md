@@ -168,9 +168,13 @@ curl -X PUT http://localhost:8080/v1/codeq/admin/topics/payments-events \
 removal requires `DELETE ...?deletionPolicy=Delete`; omitting the explicit
 policy returns `400`.
 
-This first administration path is durable with the Redis persistence mode.
-Pebble and Pebble/Raft return `503` until topic catalog writes participate in
-the replicated log; codeq does not accept an unreplicated control-plane state.
+The catalog is durable in Redis and standalone Pebble. In Raft mode, topic
+writes flow through the shard-0 replicated FSM, followers redirect writes to a
+known leader with `307`, and snapshots include the catalog. Keep
+`raft.topicCatalogProtocol` empty while upgrading every peer; topic operations
+then fail closed with `503`. After every peer runs a compatible build, set the
+value to `v1` consistently across the cluster (or use
+`RAFT_TOPIC_CATALOG_PROTOCOL=v1`) to enable replicated topic administration.
 
 For high-throughput producers and workers, use the gRPC streaming API — a
 long-lived bidirectional stream amortizes auth and pipelines acks. See the

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,7 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/internal/services"
+	topicpebble "github.com/osvaldoandrade/codeq/internal/storage/adapter/pebble"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
@@ -469,15 +471,20 @@ func newPebbleApplication(
 	// Subscription cleanup goroutine — same cadence as the redis path.
 	go cleanup.Start(bgCtx)
 
+	topicService := topicsapp.NewService(topicpebble.NewTopicStore(db), time.Now)
+	if cfg.Raft.Enabled && strings.TrimSpace(cfg.Raft.TopicCatalogProtocol) != "v1" {
+		topicService = topicsapp.NewUnavailableService(
+			"raft.topicCatalogProtocol=v1 is required for replicated topic catalog writes",
+		)
+	}
+
 	app := &Application{
 		Config:      cfg,
 		Engine:      engine,
 		Scheduler:   scheduler,
 		Results:     results,
 		Subs:        subs,
-		Topics: topicsapp.NewUnavailableService(
-			"persistenceProvider=pebble requires replicated topic catalog support",
-		),
+		Topics:      topicService,
 		Logger:      logger,
 		TZ:          loc,
 		RateLimiter: limiter,

@@ -126,29 +126,32 @@ type ShardBackendConfig struct {
 // numShards > 1 is also disallowed for M1 (M2 swaps in multi-raft per
 // shard).
 type RaftConfig struct {
-	Enabled       bool              `yaml:"enabled"`
-	SelfID        string            `yaml:"selfId"`
-	BindAddr      string            `yaml:"bindAddr"` // e.g. ":7000"
-	Bootstrap     bool              `yaml:"bootstrap"`
-	Peers         map[string]string `yaml:"peers"` // id → bindAddr (including self)
+	Enabled   bool              `yaml:"enabled"`
+	SelfID    string            `yaml:"selfId"`
+	BindAddr  string            `yaml:"bindAddr"` // e.g. ":7000"
+	Bootstrap bool              `yaml:"bootstrap"`
+	Peers     map[string]string `yaml:"peers"` // id → bindAddr (including self)
 	// MuxEnabled puts every Pebble shard's raft group on a single TCP
 	// listener at BindAddr, demuxed by a uint32 group ID prefix. With
 	// MuxEnabled=false (default), each shard gets its own TCP port
 	// (BindAddr + shardIdx) — the M1/M2 behavior. Opt-in for new
 	// deployments; cluster topology changes so it's NOT a rolling
 	// upgrade for live clusters.
-	MuxEnabled    bool              `yaml:"muxEnabled"`
+	MuxEnabled bool `yaml:"muxEnabled"`
 	// PeerHTTPAddrs maps each raft peer ID to its HTTP base URL (e.g.
 	// "http://node-1:8080"). Surfaced in /v1/codeq/raft/status so ops
 	// tooling and smart clients can route writes directly at the
 	// leader's HTTP listener. Optional; status reports an empty URL
 	// when a peer's HTTP addr isn't configured.
-	PeerHTTPAddrs map[string]string `yaml:"peerHTTPAddrs"`
-	HeartbeatMS   int               `yaml:"heartbeatMS"`
-	ElectionMS    int               `yaml:"electionMS"`
-	LeaderLeaseMS int               `yaml:"leaderLeaseMS"`
-	CommitMS      int               `yaml:"commitMS"`
-	ApplyTimeoutSeconds int          `yaml:"applyTimeoutSeconds"`
+	PeerHTTPAddrs       map[string]string `yaml:"peerHTTPAddrs"`
+	HeartbeatMS         int               `yaml:"heartbeatMS"`
+	ElectionMS          int               `yaml:"electionMS"`
+	LeaderLeaseMS       int               `yaml:"leaderLeaseMS"`
+	CommitMS            int               `yaml:"commitMS"`
+	ApplyTimeoutSeconds int               `yaml:"applyTimeoutSeconds"`
+	// TopicCatalogProtocol gates replicated QueueTopic writes during rolling
+	// upgrades. Empty keeps the Raft catalog fail closed; "v1" enables it.
+	TopicCatalogProtocol string `yaml:"topicCatalogProtocol"`
 }
 
 type RateLimitConfig struct {
@@ -331,6 +334,9 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if v := os.Getenv("RAFT_MUX_ENABLED"); v != "" {
 		c.Raft.MuxEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	}
+	if v := os.Getenv("RAFT_TOPIC_CATALOG_PROTOCOL"); v != "" {
+		c.Raft.TopicCatalogProtocol = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
 		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
@@ -681,6 +687,9 @@ func (c *Config) Validate() error {
 		}
 		if c.PersistenceProvider != "" && c.PersistenceProvider != "pebble" {
 			errs = append(errs, fmt.Sprintf("raft.enabled requires persistenceProvider=pebble, got %q", c.PersistenceProvider))
+		}
+		if protocol := strings.TrimSpace(c.Raft.TopicCatalogProtocol); protocol != "" && protocol != "v1" {
+			errs = append(errs, fmt.Sprintf("raft.topicCatalogProtocol %q is unsupported (expected v1 or empty)", protocol))
 		}
 	}
 

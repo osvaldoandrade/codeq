@@ -107,6 +107,17 @@ type DB struct {
 // repositories start writing — concurrent attach + write is not safe.
 func (d *DB) AttachReplicator(r Replicator) { d.repl = r }
 
+// RequireWriteLeader rejects a write before any read-modify-write work starts
+// when this DB is attached to a raft follower. Standalone Pebble always passes.
+// Callers still use Set/Delete/CommitBatch for the actual write, which performs
+// the same check again in case leadership changes between the gate and commit.
+func (d *DB) RequireWriteLeader() error {
+	if d.repl != nil && !d.repl.IsLeader() {
+		return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
+	}
+	return nil
+}
+
 // commitReq carries a single submitter's batch through the coalescer.
 // done is buffered so the coalescer never blocks on fan-out.
 type commitReq struct {
@@ -274,8 +285,8 @@ func (d *DB) Has(key []byte) (bool, error) {
 // directly with no-sync.
 func (d *DB) Set(key, value []byte) error {
 	if d.repl != nil {
-		if !d.repl.IsLeader() {
-			return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
+		if err := d.RequireWriteLeader(); err != nil {
+			return err
 		}
 		b := d.db.NewBatch()
 		defer b.Close()
@@ -290,8 +301,8 @@ func (d *DB) Set(key, value []byte) error {
 // Delete removes a key. Same semantics as Set re: replication.
 func (d *DB) Delete(key []byte) error {
 	if d.repl != nil {
-		if !d.repl.IsLeader() {
-			return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
+		if err := d.RequireWriteLeader(); err != nil {
+			return err
 		}
 		b := d.db.NewBatch()
 		defer b.Close()
@@ -321,8 +332,8 @@ func (d *DB) Batch() *pebbledb.Batch {
 // closing the caller's batch does not affect the merged commit.
 func (d *DB) CommitBatch(b *pebbledb.Batch) error {
 	if d.repl != nil {
-		if !d.repl.IsLeader() {
-			return &NotLeaderError{LeaderURL: d.repl.LeaderHTTPAddr()}
+		if err := d.RequireWriteLeader(); err != nil {
+			return err
 		}
 		// Replicator owns serialization; the local pebble write happens
 		// on every node via the FSM. The caller still owns b and must
