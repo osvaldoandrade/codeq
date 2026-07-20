@@ -149,6 +149,29 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
   -d '{"status":"COMPLETED","result":{"ok":true}}'
 ```
 
+### Queue topic administration
+
+An authenticated admin can reconcile the provider policy for a tenant-scoped
+topic. The tenant comes only from the validated token; codeq stores the physical
+identifier as `<tenant>.<topicName>`.
+
+```bash
+curl -X PUT http://localhost:8080/v1/codeq/admin/topics/payments-events \
+  -H 'Authorization: Bearer <admin-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"priorityTiers":[1,3,5],"maxAttempts":5,"deadLetterTopicRef":"payments-events-dlq","retentionSeconds":604800,"maxConsumers":20}'
+```
+
+`PUT` is idempotent: the first write returns `201`, an identical replay returns
+`200` without changing the version, and a policy update increments the version.
+`GET /v1/codeq/admin/topics/{topicName}` reads the stored policy. Destructive
+removal requires `DELETE ...?deletionPolicy=Delete`; omitting the explicit
+policy returns `400`.
+
+This first administration path is durable with the Redis persistence mode.
+Pebble and Pebble/Raft return `503` until topic catalog writes participate in
+the replicated log; codeq does not accept an unreplicated control-plane state.
+
 For high-throughput producers and workers, use the gRPC streaming API — a
 long-lived bidirectional stream amortizes auth and pipelines acks. See the
 [Producer Stream](https://github.com/osvaldoandrade/codeq/wiki/IO-Producer-Stream)
