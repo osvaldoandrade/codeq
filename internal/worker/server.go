@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osvaldoandrade/codeq/internal/authclaims"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/internal/worker/workerpb"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
@@ -253,7 +254,10 @@ func (s *Server) handleHello(stream workerpb.WorkerStream_StreamServer) (*stream
 	if workerID == "" {
 		workerID = claims.Subject
 	}
-	tenantID := tenantIDFromClaims(claims)
+	tenantID, err := authclaims.ResolveTenantID(claims)
+	if err != nil {
+		return nil, status.Error(codes.PermissionDenied, "invalid tenant claims")
+	}
 
 	sess := newStreamSession(stream.Context(), stream)
 	sess.workerID = workerID
@@ -558,22 +562,6 @@ func validateWorkerClaims(claims *auth.Claims) error {
 		return errors.New("missing scope")
 	}
 	return nil
-}
-
-func tenantIDFromClaims(claims *auth.Claims) string {
-	if claims == nil {
-		return ""
-	}
-	if claims.Raw != nil {
-		for _, key := range []string{"tenantId", "tenant_id", "organizationId", "organization_id"} {
-			if v, ok := claims.Raw[key].(string); ok {
-				if tenantID := strings.TrimSpace(v); tenantID != "" {
-					return tenantID
-				}
-			}
-		}
-	}
-	return strings.TrimSpace(claims.Subject)
 }
 
 // resolveCommands intersects the worker's requested commands with the

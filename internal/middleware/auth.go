@@ -26,7 +26,12 @@ func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFun
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			return
 		}
-		setProducerContext(c, cfg, claims)
+		tenantID, err := extractTenantID(claims)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid tenant claims"})
+			return
+		}
+		setProducerContext(c, cfg, claims, tenantID)
 		c.Next()
 	}
 }
@@ -42,7 +47,7 @@ func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, 
 	return validator.Validate(parts[1])
 }
 
-func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims) {
+func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims, tenantID string) {
 	c.Set("userClaims", claims)
 	email := strings.TrimSpace(claims.Email)
 	if email == "" {
@@ -62,7 +67,5 @@ func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims)
 	}
 	c.Set("userRole", role)
 
-	// Extract tenant ID from JWT claims
-	tenantID := extractTenantID(claims)
 	c.Set("tenantID", tenantID)
 }
