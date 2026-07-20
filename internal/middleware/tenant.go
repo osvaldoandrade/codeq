@@ -6,6 +6,11 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 )
 
+const (
+	tenantClaimsErrorKey     = "error"
+	tenantClaimsErrorMessage = "invalid tenant claims"
+)
+
 // GetTenantID extracts tenant ID from the request context
 func GetTenantID(c *gin.Context) string {
 	if v, ok := c.Get("tenantID"); ok {

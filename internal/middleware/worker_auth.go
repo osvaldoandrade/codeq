@@ -55,7 +55,7 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 
 		tenantID, err := extractTenantID(claims)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid tenant claims"})
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
 			return
 		}
 		c.Set("tenantID", tenantID)

@@ -17,7 +17,7 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 			if err == nil && len(claims.EventTypes) > 0 {
 				tenantID, tenantErr := extractTenantID(claims)
 				if tenantErr != nil {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid tenant claims"})
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
 					return
 				}
 				c.Set("workerClaims", claims)
@@ -33,7 +33,7 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 			if err == nil {
 				tenantID, tenantErr := extractTenantID(claims)
 				if tenantErr != nil {
-					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid tenant claims"})
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
 					return
 				}
 				setProducerContext(c, cfg, claims, tenantID)

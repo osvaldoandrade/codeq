@@ -28,7 +28,7 @@ func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFun
 		}
 		tenantID, err := extractTenantID(claims)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "invalid tenant claims"})
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
 			return
 		}
 		setProducerContext(c, cfg, claims, tenantID)

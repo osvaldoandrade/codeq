@@ -9,6 +9,16 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 )
 
+const (
+	testPayments              = "payments"
+	testIdentity              = "identity"
+	testAnalytics             = "analytics"
+	testPlatform              = "platform"
+	testClaimTenantID         = "tenantId"
+	testClaimOrganizationID   = "organizationId"
+	testClaimOrganizationPath = "organization_id"
+)
+
 func TestResolveTenantIDCompatibilityMatrix(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -18,18 +28,18 @@ func TestResolveTenantIDCompatibilityMatrix(t *testing.T) {
 		wantErr error
 	}{
 		{name: "nil claims", wantErr: ErrTenantMissing},
-		{name: "canonical tid", claims: claims(map[string]any{"tid": " payments "}, "ignored"), want: "payments"},
-		{name: "firebase camel case", claims: claims(map[string]any{"tenantId": "identity"}, ""), want: "identity"},
-		{name: "snake case tenant", claims: claims(map[string]any{"tenant_id": "analytics"}, ""), want: "analytics"},
-		{name: "organization camel case", claims: claims(map[string]any{"organizationId": "platform"}, ""), want: "platform"},
-		{name: "organization snake case", claims: claims(map[string]any{"organization_id": "platform"}, ""), want: "platform"},
-		{name: "matching aliases", claims: claims(map[string]any{"tid": "payments", "tenantId": "payments", "organization_id": "payments"}, "other"), want: "payments"},
+		{name: "canonical tid", claims: claims(map[string]any{claimTID: " payments "}, "ignored"), want: testPayments},
+		{name: "firebase camel case", claims: claims(map[string]any{testClaimTenantID: testIdentity}, ""), want: testIdentity},
+		{name: "snake case tenant", claims: claims(map[string]any{claimTenantIDSnake: testAnalytics}, ""), want: testAnalytics},
+		{name: "organization camel case", claims: claims(map[string]any{testClaimOrganizationID: testPlatform}, ""), want: testPlatform},
+		{name: "organization snake case", claims: claims(map[string]any{testClaimOrganizationPath: testPlatform}, ""), want: testPlatform},
+		{name: "matching aliases", claims: claims(map[string]any{claimTID: testPayments, testClaimTenantID: testPayments, testClaimOrganizationPath: testPayments}, "other"), want: testPayments},
 		{name: "subject fallback", claims: claims(map[string]any{}, "single-tenant"), want: "single-tenant"},
-		{name: "canonical conflict", claims: claims(map[string]any{"tid": "payments", "tenantId": "analytics"}, "payments"), wantErr: ErrTenantConflict},
-		{name: "legacy conflict", claims: claims(map[string]any{"tenant_id": "payments", "organizationId": "analytics"}, "payments"), wantErr: ErrTenantConflict},
-		{name: "blank claim does not fall back", claims: claims(map[string]any{"tid": " "}, "payments"), wantErr: ErrTenantMalformed},
-		{name: "non-string claim", claims: claims(map[string]any{"tid": 7}, "payments"), wantErr: ErrTenantMalformed},
-		{name: "unsafe tenant", claims: claims(map[string]any{"tid": "../payments"}, "payments"), wantErr: ErrTenantMalformed},
+		{name: "canonical conflict", claims: claims(map[string]any{claimTID: testPayments, testClaimTenantID: testAnalytics}, testPayments), wantErr: ErrTenantConflict},
+		{name: "legacy conflict", claims: claims(map[string]any{claimTenantIDSnake: testPayments, testClaimOrganizationID: testAnalytics}, testPayments), wantErr: ErrTenantConflict},
+		{name: "blank claim does not fall back", claims: claims(map[string]any{claimTID: " "}, testPayments), wantErr: ErrTenantMalformed},
+		{name: "non-string claim", claims: claims(map[string]any{claimTID: 7}, testPayments), wantErr: ErrTenantMalformed},
+		{name: "unsafe tenant", claims: claims(map[string]any{claimTID: "../payments"}, testPayments), wantErr: ErrTenantMalformed},
 		{name: "missing subject and claims", claims: claims(nil, ""), wantErr: ErrTenantMissing},
 		{name: "unsafe subject fallback", claims: claims(nil, "user@example.com"), wantErr: ErrTenantMalformed},
 	}
@@ -49,17 +59,17 @@ func TestResolveTenantIDCompatibilityMatrix(t *testing.T) {
 
 func TestResolveTenantIDAliasOrderDoesNotChangeResult(t *testing.T) {
 	t.Parallel()
-	aliases := []string{"tid", "tenantId", "tenant_id", "organizationId", "organization_id"}
+	aliases := []string{claimTID, testClaimTenantID, claimTenantIDSnake, testClaimOrganizationID, testClaimOrganizationPath}
 	for seed := int64(0); seed < 100; seed++ {
 		rand.New(rand.NewSource(seed)).Shuffle(len(aliases), func(left, right int) {
 			aliases[left], aliases[right] = aliases[right], aliases[left]
 		})
 		raw := make(map[string]any, len(aliases))
 		for _, alias := range aliases {
-			raw[alias] = "payments"
+			raw[alias] = testPayments
 		}
 		got, err := ResolveTenantID(claims(raw, "fallback"))
-		if err != nil || got != "payments" {
+		if err != nil || got != testPayments {
 			t.Fatalf("seed %d: got tenant=%q err=%v", seed, got, err)
 		}
 	}
@@ -72,7 +82,7 @@ func FuzzResolveTenantID(f *testing.F) {
 	f.Fuzz(func(t *testing.T, canonical, legacy, subject string) {
 		raw := map[string]any{}
 		if canonical != "" {
-			raw["tid"] = canonical
+			raw[claimTID] = canonical
 		}
 		if legacy != "" {
 			raw["tenantId"] = legacy

@@ -10,13 +10,24 @@ import (
 )
 
 var (
-	ErrTenantMissing   = errors.New("tenant claim is missing")
+	// ErrTenantMissing means neither a tenant claim nor a fallback subject exists.
+	ErrTenantMissing = errors.New("tenant claim is missing")
+	// ErrTenantMalformed means a supplied tenant value is not a safe tenant label.
 	ErrTenantMalformed = errors.New("tenant claim is malformed")
-	ErrTenantConflict  = errors.New("tenant claims conflict")
-	tenantPattern      = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
+	// ErrTenantConflict means two supported claim aliases identify different tenants.
+	ErrTenantConflict = errors.New("tenant claims conflict")
+	tenantPattern     = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
 )
 
-var tenantClaimNames = [...]string{"tid", "tenantId", "tenant_id", "organizationId", "organization_id"}
+const (
+	claimTID                 = "tid"
+	claimTenantID            = "tenantId"
+	claimTenantIDSnake       = "tenant_id"
+	claimOrganizationID      = "organizationId"
+	claimOrganizationIDSnake = "organization_id"
+)
+
+var tenantClaimNames = [...]string{claimTID, claimTenantID, claimTenantIDSnake, claimOrganizationID, claimOrganizationIDSnake}
 
 // ResolveTenantID returns the one tenant asserted by a validated token.
 // tid is canonical. Legacy aliases remain compatible only when every supplied
@@ -26,34 +37,43 @@ func ResolveTenantID(claims *auth.Claims) (string, error) {
 	if claims == nil {
 		return "", ErrTenantMissing
 	}
+	if selected, found, err := resolveAliases(claims.Raw); found || err != nil {
+		return selected, err
+	}
+	return validateFallbackSubject(claims.Subject)
+}
 
+func resolveAliases(raw map[string]interface{}) (string, bool, error) {
 	selected := ""
 	for _, name := range tenantClaimNames {
-		raw, present := claims.Raw[name]
+		value, present := raw[name]
 		if !present {
 			continue
 		}
-		value, ok := raw.(string)
+		text, ok := value.(string)
 		if !ok {
-			return "", ErrTenantMalformed
+			return "", true, ErrTenantMalformed
 		}
-		value = strings.TrimSpace(value)
-		if !tenantPattern.MatchString(value) {
-			return "", ErrTenantMalformed
+		text = strings.TrimSpace(text)
+		if !tenantPattern.MatchString(text) {
+			return "", true, ErrTenantMalformed
 		}
 		if selected == "" {
-			selected = value
+			selected = text
 			continue
 		}
-		if selected != value {
-			return "", ErrTenantConflict
+		if selected != text {
+			return "", true, ErrTenantConflict
 		}
 	}
 	if selected != "" {
-		return selected, nil
+		return selected, true, nil
 	}
+	return "", false, nil
+}
 
-	subject := strings.TrimSpace(claims.Subject)
+func validateFallbackSubject(value string) (string, error) {
+	subject := strings.TrimSpace(value)
 	if subject == "" {
 		return "", ErrTenantMissing
 	}
