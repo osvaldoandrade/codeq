@@ -15,7 +15,13 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 		if workerValidator != nil {
 			claims, err := validateBearer(workerValidator, c.GetHeader("Authorization"))
 			if err == nil && len(claims.EventTypes) > 0 {
+				tenantID, tenantErr := extractTenantID(claims)
+				if tenantErr != nil {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
+					return
+				}
 				c.Set("workerClaims", claims)
+				c.Set("tenantID", tenantID)
 				c.Set("authType", "worker")
 				c.Next()
 				return
@@ -25,7 +31,12 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 		if producerValidator != nil {
 			claims, err := validateBearer(producerValidator, c.GetHeader("Authorization"))
 			if err == nil {
-				setProducerContext(c, cfg, claims)
+				tenantID, tenantErr := extractTenantID(claims)
+				if tenantErr != nil {
+					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
+					return
+				}
+				setProducerContext(c, cfg, claims, tenantID)
 				c.Set("authType", "producer")
 				c.Next()
 				return

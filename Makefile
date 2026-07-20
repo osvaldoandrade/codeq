@@ -76,9 +76,15 @@ test: ## Run unit tests with race detector.
 	$(GO) test -race -shuffle=on -count=1 -timeout=10m \
 		-coverprofile=$(COVER_PROFILE) -covermode=atomic $(PKGS)
 
-.PHONY: test-short
+.PHONY: test-short tenant-fuzz tenant-mutation
 test-short: ## Run short unit tests (no race, faster local loop).
 	$(GO) test -short -count=1 -timeout=5m $(PKGS)
+
+tenant-fuzz: ## Fuzz canonical and legacy tenant claim resolution.
+	$(GO) test ./internal/authclaims -run '^$$' -fuzz '^FuzzResolveTenantID$$' -fuzztime=10s
+
+tenant-mutation: ## Mutation-test the tenant claim security boundary.
+	$(GO) run github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0 unleash ./internal/authclaims --workers=2 --threshold-efficacy=80 --threshold-mcover=80
 
 .PHONY: test-integration
 test-integration: ## Run integration tests (-tags=integration).

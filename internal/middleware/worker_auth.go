@@ -53,8 +53,11 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 		}
 		c.Set("workerClaims", claims)
 
-		// Extract tenant ID from worker JWT claims
-		tenantID := extractTenantID(claims)
+		tenantID, err := extractTenantID(claims)
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{tenantClaimsErrorKey: tenantClaimsErrorMessage})
+			return
+		}
 		c.Set("tenantID", tenantID)
 
 		c.Next()

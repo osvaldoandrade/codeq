@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/osvaldoandrade/codeq/internal/authclaims"
 	"github.com/osvaldoandrade/codeq/internal/producer/producerpb"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
@@ -110,7 +111,6 @@ func (s *streamSession) send(ev *producerpb.ServerEvent) error {
 	}
 }
 
-
 // Stream is the bidirectional rpc. First message MUST be Hello; the
 // server validates the token and replies with HelloAck. Subsequent
 // CreateTask events fan out to per-event goroutines so a slow Pebble
@@ -191,8 +191,12 @@ func (s *Server) handleHello(stream producerpb.ProducerStream_StreamServer) (*st
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "auth failed: %v", err)
 	}
+	tenantID, err := authclaims.ResolveTenantID(claims)
+	if err != nil {
+		return nil, status.Error(codes.PermissionDenied, "invalid tenant claims")
+	}
 	sess := newStreamSession(stream.Context(), stream)
-	sess.tenantID = tenantIDFromClaims(claims)
+	sess.tenantID = tenantID
 	sess.subject = claims.Subject
 	if err := sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_HelloAck{
 		HelloAck: &producerpb.HelloAck{TenantId: sess.tenantID, Subject: sess.subject},
@@ -273,25 +277,6 @@ func (s *Server) handleCreateBatch(ctx context.Context, sess *streamSession, req
 	_ = sess.send(&producerpb.ServerEvent{Event: &producerpb.ServerEvent_CreateAckBatch{
 		CreateAckBatch: &producerpb.CreateAckBatch{Acks: acks},
 	}})
-}
-
-// tenantIDFromClaims mirrors middleware/tenant.go's extractTenantID but
-// is duplicated here to avoid pulling the middleware (and its Gin deps)
-// into the gRPC server. Falls back to JWT subject for single-tenant.
-func tenantIDFromClaims(claims *auth.Claims) string {
-	if claims == nil {
-		return ""
-	}
-	if claims.Raw != nil {
-		for _, key := range []string{"tenantId", "tenant_id", "organizationId", "organization_id"} {
-			if v, ok := claims.Raw[key].(string); ok {
-				if t := strings.TrimSpace(v); t != "" {
-					return t
-				}
-			}
-		}
-	}
-	return strings.TrimSpace(claims.Subject)
 }
 
 // pre-flight check that the gRPC server interface is satisfied.
