@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osvaldoandrade/codeq/internal/producer/producerpb"
+	"github.com/osvaldoandrade/codeq/internal/safeint"
 )
 
 // Config controls Client behavior. Addr and Token are required.
@@ -315,12 +316,12 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 			Seq:            seq,
 			Command:        req.Command,
 			Payload:        req.Payload,
-			Priority:       int32(req.Priority),
+			Priority:       safeint.Int32(req.Priority),
 			Webhook:        req.Webhook,
-			MaxAttempts:    int32(req.MaxAttempts),
+			MaxAttempts:    safeint.Int32(req.MaxAttempts),
 			IdempotencyKey: req.IdempotencyKey,
 			RunAt:          runAt,
-			DelaySeconds:   int32(req.DelaySeconds),
+			DelaySeconds:   safeint.Int32(req.DelaySeconds),
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
 		},
@@ -381,12 +382,12 @@ func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]Bat
 			Seq:            seq,
 			Command:        req.Command,
 			Payload:        req.Payload,
-			Priority:       int32(req.Priority),
+			Priority:       safeint.Int32(req.Priority),
 			Webhook:        req.Webhook,
-			MaxAttempts:    int32(req.MaxAttempts),
+			MaxAttempts:    safeint.Int32(req.MaxAttempts),
 			IdempotencyKey: req.IdempotencyKey,
 			RunAt:          runAt,
-			DelaySeconds:   int32(req.DelaySeconds),
+			DelaySeconds:   safeint.Int32(req.DelaySeconds),
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
 		}

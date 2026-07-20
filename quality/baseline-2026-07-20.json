@@ -1,0 +1,68 @@
+{
+  "commit": "3d91502cfa69a9909e315ce1bb73fc22007e7408",
+  "go": "1.26.5",
+  "golangciLint": {
+    "version": "v2.12.2",
+    "total": 1264,
+    "byLinter": {
+      "bodyclose": 2,
+      "copyloopvar": 15,
+      "cyclop": 5,
+      "depguard": 1,
+      "dupl": 10,
+      "errcheck": 5,
+      "errorlint": 62,
+      "exhaustive": 3,
+      "funlen": 1,
+      "gci": 72,
+      "gocognit": 66,
+      "goconst": 503,
+      "gocritic": 5,
+      "gocyclo": 21,
+      "gofumpt": 12,
+      "gosec": 60,
+      "ineffassign": 2,
+      "misspell": 30,
+      "nestif": 17,
+      "nilerr": 3,
+      "prealloc": 1,
+      "revive": 305,
+      "staticcheck": 23,
+      "unconvert": 1,
+      "unparam": 28,
+      "unused": 11
+    }
+  },
+  "coverage": {
+    "statements": 7991,
+    "covered": 3897,
+    "percent": 48.8
+  },
+  "gosec": {
+    "version": "v2.28.0",
+    "total": 71,
+    "high": 58,
+    "medium": 13,
+    "byRule": {
+      "G108": 1,
+      "G115": 54,
+      "G204": 1,
+      "G301": 6,
+      "G304": 5,
+      "G306": 1,
+      "G404": 3
+    }
+  },
+  "promotedGate": {
+    "lintNewFromBase": 0,
+    "coverageThresholdPercent": 48,
+    "coverageObservedPercent": 50.0,
+    "gosecMinimumSeverity": "medium",
+    "gosecUnsuppressed": 0,
+    "gosecSuppressionPolicy": {
+      "ruleIdRequired": true,
+      "justificationRequired": true
+    },
+    "raceSuite": "go test -short -race -shuffle=on -count=1 ./..."
+  }
+}

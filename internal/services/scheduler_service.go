@@ -87,7 +87,8 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 		backoffPolicy:       backoffPolicy,
 		backoffBaseSeconds:  backoffBaseSeconds,
 		backoffMaxSeconds:   backoffMaxSeconds,
-		rng:                 rand.New(rand.NewSource(time.Now().UnixNano())),
+		// #nosec G404 -- retry scheduling jitter is not security-sensitive randomness.
+		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 

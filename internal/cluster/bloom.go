@@ -29,7 +29,7 @@ type Bloom struct {
 
 	count atomic.Uint64 // number of Add calls; advisory
 	seq   atomic.Uint64 // bumped every Add; gossip freshness marker
-	mu    sync.RWMutex   // guards Reset / Restore; Add/MaybeHas are lockless
+	mu    sync.RWMutex  // guards Reset / Restore; Add/MaybeHas are lockless
 }
 
 // NewBloom returns a Bloom sized for n expected items at false-positive
@@ -109,9 +109,8 @@ func (b *Bloom) Snapshot() (bits []byte, k uint32, count uint64, seq uint64) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	out := make([]byte, len(b.bits)*8)
-	for i, w := range b.bits {
+	for i := range b.bits {
 		binary.LittleEndian.PutUint64(out[i*8:(i+1)*8], atomic.LoadUint64(&b.bits[i]))
-		_ = w
 	}
 	return out, b.k, b.count.Load(), b.seq.Load()
 }
@@ -126,7 +125,7 @@ func (b *Bloom) Restore(bits []byte, k uint32, count, seq uint64) {
 	if uint64(len(bits))*8 != b.m || k != b.k {
 		return
 	}
-	for i := 0; i < int(b.words); i++ {
+	for i := range b.bits {
 		w := binary.LittleEndian.Uint64(bits[i*8 : (i+1)*8])
 		atomic.StoreUint64(&b.bits[i], w)
 	}

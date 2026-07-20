@@ -106,7 +106,7 @@ func KeyPending(cmd domain.Command, tenantID string, prio int, seq uint64, id st
 	base := queueBase(cmd, tenantID) + segPending
 	k := make([]byte, 0, len(base)+1+1+8+1+len(id))
 	k = append(k, base...)
-	k = append(k, byte(prio))
+	k = append(k, byte(prio)) // #nosec G115 -- callers validate the priority domain [0, 9].
 	k = append(k, '/')
 	k = append(k, be8(seq)...)
 	k = append(k, '/')
@@ -120,7 +120,7 @@ func PrefixPendingPrio(cmd domain.Command, tenantID string, prio int) (lower, up
 	base := queueBase(cmd, tenantID) + segPending
 	p := make([]byte, 0, len(base)+1+1)
 	p = append(p, base...)
-	p = append(p, byte(prio))
+	p = append(p, byte(prio)) // #nosec G115 -- callers validate the priority domain [0, 9].
 	p = append(p, '/')
 	return p, prefixUpper(p)
 }

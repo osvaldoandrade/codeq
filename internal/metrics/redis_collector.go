@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -15,7 +16,7 @@ import (
 )
 
 type redisCollector struct {
-	rdb    *redis.Client
+	rdb    atomic.Pointer[redis.Client]
 	logger *slog.Logger
 
 	queueDepthDesc *prometheus.Desc
@@ -27,8 +28,7 @@ func newRedisCollector(rdb *redis.Client, logger *slog.Logger) *redisCollector {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &redisCollector{
-		rdb:    rdb,
+	collector := &redisCollector{
 		logger: logger,
 		queueDepthDesc: prometheus.NewDesc(
 			"codeq_queue_depth",
@@ -49,6 +49,8 @@ func newRedisCollector(rdb *redis.Client, logger *slog.Logger) *redisCollector {
 			nil,
 		),
 	}
+	collector.rdb.Store(rdb)
+	return collector
 }
 
 func (c *redisCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -58,7 +60,8 @@ func (c *redisCollector) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (c *redisCollector) Collect(ch chan<- prometheus.Metric) {
-	if c.rdb == nil {
+	rdb := c.rdb.Load()
+	if rdb == nil {
 		return
 	}
 
@@ -70,7 +73,7 @@ func (c *redisCollector) Collect(ch chan<- prometheus.Metric) {
 	nowUnix := time.Now().UTC().Unix()
 	minScore := strconv.FormatInt(nowUnix, 10)
 
-	pipe := c.rdb.Pipeline()
+	pipe := rdb.Pipeline()
 	readyCmds := make(map[domain.Command][]*redis.IntCmd, len(commands))
 	inprogCmds := make(map[domain.Command]*redis.IntCmd, len(commands))
 	delayedCmds := make(map[domain.Command]*redis.IntCmd, len(commands))
@@ -141,10 +144,17 @@ func keySubsEvent(cmd domain.Command) string {
 	return fmt.Sprintf("codeq:subs:%s", strings.ToLower(string(cmd)))
 }
 
-var registerRedisCollectorOnce sync.Once
+var (
+	registerRedisCollectorOnce sync.Once
+	registeredRedisCollector   = newRedisCollector(nil, nil)
+)
 
 func RegisterRedisCollector(rdb *redis.Client, logger *slog.Logger) {
+	registeredRedisCollector.rdb.Store(rdb)
 	registerRedisCollectorOnce.Do(func() {
-		prometheus.MustRegister(newRedisCollector(rdb, logger))
+		if logger != nil {
+			registeredRedisCollector.logger = logger
+		}
+		prometheus.MustRegister(registeredRedisCollector)
 	})
 }

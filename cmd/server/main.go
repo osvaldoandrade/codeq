@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof" // Registers /debug/pprof/* on http.DefaultServeMux when CODEQ_PPROF=1.
+	_ "net/http/pprof" // #nosec G108 -- opt-in pprof uses a separate loopback listener by default.
 	"os"
 	"os/signal"
 	"runtime"
@@ -64,12 +64,12 @@ func main() {
 
 	// Optional pprof endpoint on a separate listener so it never competes with
 	// the API server's request handlers. Set CODEQ_PPROF=1 to enable; bind addr
-	// configurable via CODEQ_PPROF_ADDR (default :6060). Mutex/block profiling
+	// configurable via CODEQ_PPROF_ADDR (default 127.0.0.1:6060). Mutex/block profiling
 	// rates are also enabled so contention shows up in samples.
 	if getenv("CODEQ_PPROF", "") == "1" {
 		runtime.SetMutexProfileFraction(1)
 		runtime.SetBlockProfileRate(1)
-		pprofAddr := getenv("CODEQ_PPROF_ADDR", ":6060")
+		pprofAddr := getenv("CODEQ_PPROF_ADDR", "127.0.0.1:6060")
 		go func() {
 			pprofSrv := &http.Server{Addr: pprofAddr, ReadHeaderTimeout: 5 * time.Second}
 			if err := pprofSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

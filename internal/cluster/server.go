@@ -11,6 +11,7 @@ import (
 
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
 	"github.com/osvaldoandrade/codeq/internal/repository"
+	"github.com/osvaldoandrade/codeq/internal/safeint"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
@@ -141,7 +142,7 @@ func (s *Server) Nack(ctx context.Context, req *clusterpb.NackRequest) (*cluster
 			return nil, err
 		}
 	}
-	return &clusterpb.NackResponse{AppliedDelaySeconds: int32(delay), Dlq: dlq}, nil
+	return &clusterpb.NackResponse{AppliedDelaySeconds: safeint.Int32(delay), Dlq: dlq}, nil
 }
 
 func (s *Server) SaveResult(ctx context.Context, req *clusterpb.SaveResultRequest) (*clusterpb.SaveResultResponse, error) {
@@ -257,9 +258,9 @@ func (s *Server) BloomSnapshot(ctx context.Context, _ *clusterpb.BloomSnapshotRe
 
 // ---------------- helpers ----------------
 
-func isNotFound(err error) bool       { return errMessageHas(err, "not-found") }
-func isNotOwner(err error) bool       { return errMessageHas(err, "not-owner") }
-func isNotInProgress(err error) bool  { return errMessageHas(err, "not-in-progress") }
+func isNotFound(err error) bool      { return errMessageHas(err, "not-found") }
+func isNotOwner(err error) bool      { return errMessageHas(err, "not-owner") }
+func isNotInProgress(err error) bool { return errMessageHas(err, "not-in-progress") }
 
 func errMessageHas(err error, substr string) bool {
 	if err == nil {
@@ -282,14 +283,14 @@ func domainTaskToProto(t *domain.Task) *clusterpb.Task {
 		Id:                t.ID,
 		Command:           string(t.Command),
 		Payload:           []byte(t.Payload),
-		Priority:          int32(t.Priority),
+		Priority:          safeint.Int32(t.Priority),
 		Webhook:           t.Webhook,
-		MaxAttempts:       int32(t.MaxAttempts),
+		MaxAttempts:       safeint.Int32(t.MaxAttempts),
 		Status:            string(t.Status),
 		LastKnownLocation: string(t.LastKnownLocation),
 		WorkerId:          t.WorkerID,
 		LeaseUntil:        t.LeaseUntil,
-		Attempts:          int32(t.Attempts),
+		Attempts:          safeint.Int32(t.Attempts),
 		TenantId:          t.TenantID,
 		Error:             t.Error,
 		ResultKey:         t.ResultKey,

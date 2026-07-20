@@ -135,7 +135,7 @@ func newPebbleApplication(
 	if pc.Path == "" {
 		pc.Path = "./codeq-pebble"
 	}
-	if err := os.MkdirAll(pc.Path, 0o755); err != nil {
+	if err := os.MkdirAll(pc.Path, 0o700); err != nil {
 		return nil, fmt.Errorf("ensure pebble dir %s: %w", pc.Path, err)
 	}
 
@@ -152,7 +152,7 @@ func newPebbleApplication(
 		shardPath := pc.Path
 		if numShards > 1 {
 			shardPath = fmt.Sprintf("%s/shard%d", pc.Path, idx)
-			if err := os.MkdirAll(shardPath, 0o755); err != nil {
+			if err := os.MkdirAll(shardPath, 0o700); err != nil {
 				return fmt.Errorf("ensure pebble shard dir %s: %w", shardPath, err)
 			}
 		}

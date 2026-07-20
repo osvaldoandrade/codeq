@@ -262,7 +262,7 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 	t.LeaseUntil = ""
 	t.UpdatedAt = now
 	updated, _ := sonic.Marshal(t)
-	if err := b.Set(KeyDelayed(t.Command, t.TenantID, uint64(visibleAt.Unix()), t.ID), nil, nil); err != nil {
+	if err := b.Set(KeyDelayed(t.Command, t.TenantID, unixSeconds(visibleAt), t.ID), nil, nil); err != nil {
 		return err
 	}
 	if err := b.Set(KeyTask(t.ID), updated, nil); err != nil {
@@ -283,7 +283,7 @@ func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
 	lower, _ := PrefixTTL()
 	upper := make([]byte, 0, len(pTTL)+8)
 	upper = append(upper, pTTL...)
-	upper = append(upper, be8(uint64(before.Unix())+1)...)
+	upper = append(upper, be8(unixSeconds(before)+1)...)
 	it, err := r.db.Iter(lower, upper)
 	if err != nil {
 		return 0, err

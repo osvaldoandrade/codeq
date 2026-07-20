@@ -19,7 +19,7 @@ import (
 // retain=3 keeps the last three snapshots on disk; older ones are
 // purged automatically. This is the hashicorp/raft default.
 func newSnapshotStore(dir string) (hraft.SnapshotStore, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("snapshot dir %s: %w", dir, err)
 	}
 	return hraft.NewFileSnapshotStore(dir, 3, os.Stderr)
@@ -27,15 +27,15 @@ func newSnapshotStore(dir string) (hraft.SnapshotStore, error) {
 
 // Snapshot format (streamed into the raft SnapshotSink):
 //
-//   [4]  magic       "CDQS"
-//   [4]  version     uint32 BE (currently 1)
-//   loop:
-//     [1] tag         0x01=entry, 0x00=eof
-//     if entry:
-//       [4] klen     uint32 BE
-//       [klen] key   raw bytes
-//       [4] vlen     uint32 BE
-//       [vlen] val   raw bytes
+//	[4]  magic       "CDQS"
+//	[4]  version     uint32 BE (currently 1)
+//	loop:
+//	  [1] tag         0x01=entry, 0x00=eof
+//	  if entry:
+//	    [4] klen     uint32 BE
+//	    [klen] key   raw bytes
+//	    [4] vlen     uint32 BE
+//	    [vlen] val   raw bytes
 //
 // Compact, streamable, parse-able with stdlib only. The format is
 // internal to codeq — bumping the version field is enough to break
@@ -76,17 +76,23 @@ func writeSnapshot(w io.Writer, snap *pebbledb.Snapshot) error {
 	for ok := iter.First(); ok; ok = iter.Next() {
 		key := iter.Key()
 		val := iter.Value()
+		if uint64(len(key)) > uint64(^uint32(0)) { // #nosec G115 -- len is non-negative and widened.
+			return fmt.Errorf("snapshot key exceeds uint32 length: %d", len(key))
+		}
+		if uint64(len(val)) > uint64(^uint32(0)) { // #nosec G115 -- len is non-negative and widened.
+			return fmt.Errorf("snapshot value exceeds uint32 length: %d", len(val))
+		}
 		if err := bw.WriteByte(snapshotTagEntry); err != nil {
 			return err
 		}
-		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(key)))
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(key))) // #nosec G115 -- bounded above.
 		if _, err := bw.Write(lenBuf[:]); err != nil {
 			return err
 		}
 		if _, err := bw.Write(key); err != nil {
 			return err
 		}
-		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(val)))
+		binary.BigEndian.PutUint32(lenBuf[:], uint32(len(val))) // #nosec G115 -- bounded above.
 		if _, err := bw.Write(lenBuf[:]); err != nil {
 			return err
 		}

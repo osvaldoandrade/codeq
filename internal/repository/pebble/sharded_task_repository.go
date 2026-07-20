@@ -61,13 +61,13 @@ func NewShardedTaskRepository(shards []*TaskRepository) *ShardedTaskRepository {
 func (s *ShardedTaskRepository) shardOf(key string) int {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(key))
-	return int(h.Sum64() % uint64(len(s.shards)))
+	return int(h.Sum64() % uint64(len(s.shards))) // #nosec G115 -- modulo bounds the shard index.
 }
 
 // nextStart returns the round-robin starting shard for fan-out scans.
 // Wrapping uint64 atomic — no need to worry about overflow.
 func (s *ShardedTaskRepository) nextStart() int {
-	return int(s.rrCounter.Add(1) % uint64(len(s.shards)))
+	return int(s.rrCounter.Add(1) % uint64(len(s.shards))) // #nosec G115 -- modulo bounds the shard index.
 }
 
 // ---------------- TaskRepository interface ----------------

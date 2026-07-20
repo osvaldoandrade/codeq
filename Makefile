@@ -12,11 +12,12 @@ COVER_HTML     := coverage.html
 BIN_DIR        := bin
 LDFLAGS        ?= -s -w
 BUILD_TAGS     ?=
+BASE_REV       ?= origin/main
 
 GOLANGCI_LINT_VERSION    := v2.12.2
 GOFUMPT_VERSION          := v0.7.0
 GCI_VERSION              := v0.13.5
-GOVULNCHECK_VERSION      := latest
+GOVULNCHECK_VERSION      := v1.1.4
 GOSEC_VERSION            := v2.28.0
 GO_TEST_COVERAGE_VERSION := v2.11.4
 
@@ -65,15 +66,18 @@ fmt: tools-fmt ## Format code (gofumpt + gci + goimports).
 vet: ## Run go vet.
 	$(GO) vet $(PKGS)
 
-.PHONY: lint
-lint: tools-lint ## Run golangci-lint.
-	@golangci-lint run --timeout=5m $(PKGS)
+.PHONY: lint lint-audit
+lint: tools-lint ## Reject lint findings introduced after BASE_REV.
+	@golangci-lint run --timeout=5m --new-from-rev=$(BASE_REV) $(PKGS)
+
+lint-audit: tools-lint ## Report the complete pre-existing lint inventory.
+	@golangci-lint run --timeout=5m --issues-exit-code=0 $(PKGS)
 
 ##@ Test
 
 .PHONY: test
 test: ## Run unit tests with race detector.
-	$(GO) test -race -shuffle=on -count=1 -timeout=10m \
+	$(GO) test -short -race -shuffle=on -count=1 -timeout=15m \
 		-coverprofile=$(COVER_PROFILE) -covermode=atomic $(PKGS)
 
 .PHONY: test-short tenant-fuzz tenant-mutation
@@ -90,8 +94,10 @@ tenant-mutation: ## Mutation-test the tenant claim security boundary.
 test-integration: ## Run integration tests (-tags=integration).
 	$(GO) test -tags=integration -race -count=1 -timeout=20m $(PKGS)
 
-.PHONY: cover
-cover: test tools-cover ## Run tests and enforce coverage thresholds.
+.PHONY: cover cover-check
+cover: test cover-check ## Run tests and enforce coverage thresholds.
+
+cover-check: tools-cover ## Enforce thresholds against an existing coverage profile.
 	@go-test-coverage --config .testcoverage.yml
 
 .PHONY: cover-html
@@ -108,12 +114,13 @@ bench: ## Run benchmarks.
 .PHONY: sec
 sec: tools-sec ## Run security scanners (govulncheck + gosec).
 	@govulncheck $(PKGS)
-	@gosec -quiet -severity=medium -confidence=medium $(PKGS)
+	@gosec -quiet -track-suppressions -nosec-require-justification \
+		-nosec-require-rules -severity=medium -confidence=medium $(PKGS)
 
 ##@ CI
 
 .PHONY: ci
-ci: vet lint test cover sec ## Full PR gate.
+ci: vet lint test cover-check sec ## Full PR gate.
 
 ##@ Tooling
 

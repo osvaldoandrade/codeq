@@ -151,7 +151,7 @@ func (r *subscriptionRepo) recoverActiveCounts() error {
 		return err
 	}
 	defer it.Close()
-	now := uint64(time.Now().Unix())
+	now := unixSeconds(time.Now())
 	for valid := it.First(); valid; valid = it.Next() {
 		k := it.Key()
 		cmd, expires, ok := parseSubEventKeyAny(k)
@@ -187,7 +187,7 @@ func (r *subscriptionRepo) Create(ctx context.Context, sub domain.Subscription, 
 		return nil, err
 	}
 	for _, evt := range sub.EventTypes {
-		if err := b.Set(keySubEvent(evt, uint64(sub.ExpiresAt.Unix()), sub.ID), nil, nil); err != nil {
+		if err := b.Set(keySubEvent(evt, unixSeconds(sub.ExpiresAt), sub.ID), nil, nil); err != nil {
 			return nil, err
 		}
 	}
@@ -211,10 +211,10 @@ func (r *subscriptionRepo) Heartbeat(ctx context.Context, id string, ttlSeconds 
 		return nil, err
 	}
 	now := r.now()
-	oldExpires := uint64(sub.ExpiresAt.Unix())
+	oldExpires := unixSeconds(sub.ExpiresAt)
 	_ = now // Subscription has no UpdatedAt field
 	sub.ExpiresAt = now.Add(time.Duration(ttlSeconds) * time.Second)
-	newExpires := uint64(sub.ExpiresAt.Unix())
+	newExpires := unixSeconds(sub.ExpiresAt)
 	subJSON, _ := sonic.Marshal(sub)
 
 	b := r.db.Batch()
@@ -276,7 +276,7 @@ func (r *subscriptionRepo) ListActive(ctx context.Context, cmd domain.Command, n
 		return nil, err
 	}
 	defer it.Close()
-	nowUnix := uint64(now.Unix())
+	nowUnix := unixSeconds(now)
 	out := make([]domain.Subscription, 0, 16)
 	for valid := it.First(); valid; valid = it.Next() {
 		expires, id, ok := parseSubEventKey(cmd, it.Key())
@@ -314,13 +314,16 @@ func (r *subscriptionRepo) AllowNotify(ctx context.Context, id string, minInterv
 		return false, err
 	}
 	if err == nil && len(v) >= 8 {
-		last := int64(beUint64(v))
+		last, valid := storedInt64(beUint64(v))
+		if !valid {
+			return false, fmt.Errorf("invalid throttle timestamp for subscription %q", id)
+		}
 		if now-last < minIntervalNanos {
 			return false, nil
 		}
 	}
 	var buf [8]byte
-	binary.BigEndian.PutUint64(buf[:], uint64(now))
+	binary.BigEndian.PutUint64(buf[:], nonNegativeInt64(now))
 	if err := r.db.Set(key, buf[:]); err != nil {
 		return false, err
 	}
@@ -366,7 +369,7 @@ func (r *subscriptionRepo) NextGroupIndex(ctx context.Context, cmd domain.Comman
 	if err := r.db.Set(key, buf[:]); err != nil {
 		return 0, err
 	}
-	return int(current % uint64(mod)), nil
+	return int(current % uint64(mod)), nil // #nosec G115 -- modulo guarantees a value in [0, mod).
 }
 
 // CleanupExpired walks all command sub_event indexes and drops entries
@@ -383,7 +386,7 @@ func (r *subscriptionRepo) CleanupExpired(ctx context.Context, limit int, before
 	}
 	defer it.Close()
 
-	beforeUnix := uint64(before.Unix())
+	beforeUnix := unixSeconds(before)
 	cleaned := 0
 	type expired struct {
 		eventKey []byte
