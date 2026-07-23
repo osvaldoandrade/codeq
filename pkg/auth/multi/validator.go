@@ -49,6 +49,7 @@ func newValidatorFromJSON(raw json.RawMessage) (auth.Validator, error) {
 	return result, nil
 }
 
+// Validate accepts a token when any configured child validator accepts it.
 func (v *validator) Validate(token string) (*auth.Claims, error) {
 	var validationErrors []error
 	for _, provider := range v.providers {
