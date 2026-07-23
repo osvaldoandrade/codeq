@@ -13,6 +13,7 @@ import (
 	"time"
 
 	_ "github.com/osvaldoandrade/codeq/pkg/auth/jwks"   // Register default JWKS auth provider
+	_ "github.com/osvaldoandrade/codeq/pkg/auth/multi"  // Register bounded multi-provider auth
 	_ "github.com/osvaldoandrade/codeq/pkg/auth/static" // Register static token auth provider (dev/local)
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	_ "github.com/osvaldoandrade/codeq/pkg/persistence/memory" // Register memory persistence plugin (testing)
