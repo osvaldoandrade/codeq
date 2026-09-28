@@ -17,8 +17,8 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 
 	"github.com/bytedance/sonic"
-	"github.com/google/uuid"
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -493,10 +493,19 @@ return false
 //
 // Returns: false when every queue is empty; otherwise {id, json_or_false}. json is `false`
 // when the task hash entry was missing (ghost) — caller treats this as a cleanup case.
+// ARGV[2] = lease seconds, ARGV[3] = worker id, ARGV[4] = lease key prefix.
+// The lease is written INSIDE the script: between SADD(inprog) and a
+// post-script SETEX the task used to sit in in-progress with NO lease key,
+// and the lease-expiry repair (TTL -2 == "expired") would requeue an
+// in-flight task — the double-delivery behind "job lock held" +
+// "submit result 409 not-in-progress".
 var multiPriorityClaimScript = redis.NewScript(`
 local dst = KEYS[1]
 local tasks = KEYS[2]
 local maxIter = tonumber(ARGV[1]) or 1
+local leaseSecs = tonumber(ARGV[2]) or 0
+local workerId = ARGV[3] or ""
+local leasePrefix = ARGV[4] or ""
 for k=3, #KEYS do
   local src = KEYS[k]
   for i=1, maxIter do
@@ -505,6 +514,9 @@ for k=3, #KEYS do
       break
     end
     if redis.call("SADD", dst, id) == 1 then
+      if leaseSecs > 0 and leasePrefix ~= "" then
+        redis.call("SETEX", leasePrefix .. id, leaseSecs, workerId)
+      end
       local json = redis.call("HGET", tasks, id)
       return {id, json or false}
     end
@@ -544,7 +556,24 @@ func (r *taskRedisRepo) requeueExpired(ctx context.Context, cmd domain.Command, 
 		if err != nil && err != redis.Nil {
 			return 0, fmt.Errorf("TTL lease: %w", err)
 		}
-		if ttl <= 0 {
+		// TTL == -2s (go-redis maps missing keys to -2ns => negative) means the
+		// lease KEY IS ABSENT, which is ambiguous: an in-flight claim writing its
+		// lease, a crashed claim, or a Submit that already deleted it. Requeuing
+		// on first sight double-delivers in-flight tasks. Grace pass: mark the id
+		// as suspect and only requeue when it is STILL missing on a later pass.
+		if ttl < 0 {
+			suspectKey := "codeq:lease:suspect:" + id
+			set, err := r.rdb.SetNX(ctx, suspectKey, "1", 5*time.Minute).Result()
+			if err != nil {
+				return 0, fmt.Errorf("SETNX lease suspect: %w", err)
+			}
+			if set {
+				continue // first sighting — give the claim time to land its lease
+			}
+			expiredIDs = append(expiredIDs, id)
+			continue
+		}
+		if ttl == 0 {
 			expiredIDs = append(expiredIDs, id)
 		}
 	}
@@ -817,11 +846,11 @@ func (r *taskRedisRepo) Claim(ctx context.Context, workerID string, commands []d
 		}
 
 		for i := 0; i < inspectLimit; i++ {
-			res, err := multiPriorityClaimScript.Run(ctx, r.rdb, keys, 1).Result()
+			res, err := multiPriorityClaimScript.Run(ctx, r.rdb, keys, 1, leaseSeconds, workerID, "codeq:lease:").Result()
 			if err != nil && strings.Contains(err.Error(), "NOSCRIPT") {
 				// kvrocks returns "ERR NOSCRIPT ..." which go-redis v8 does not match
 				// against its HasPrefix("NOSCRIPT ") fallback. Force EVAL to load the script.
-				res, err = multiPriorityClaimScript.Eval(ctx, r.rdb, keys, 1).Result()
+				res, err = multiPriorityClaimScript.Eval(ctx, r.rdb, keys, 1, leaseSeconds, workerID, "codeq:lease:").Result()
 			}
 			if err == redis.Nil {
 				return nil, false, nil // all queues empty

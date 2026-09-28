@@ -245,10 +245,23 @@ func TestClaimRepairRequeuesExpiredLease(t *testing.T) {
 	// Expire the lease key in Redis without waiting on wall clock time.
 	mr.FastForward(2 * time.Second)
 
-	// Next claim triggers repair; task is requeued to delayed with backoff.
+	// GRACE CONTRACT: a missing lease key is ambiguous (in-flight claim vs
+	// crash vs true expiry), so the FIRST repair pass only marks the id as
+	// suspect; the SECOND pass (still missing) requeues. Each Claim below
+	// triggers one repair pass.
 	_, ok, err = repo.Claim(ctx, "worker-2", []domain.Command{cmd}, 60, 50, 5, "")
 	if err != nil {
-		t.Fatalf("claim 2: %v", err)
+		t.Fatalf("claim 2 (grace pass): %v", err)
+	}
+	if ok {
+		t.Fatalf("expected no claim on the grace pass")
+	}
+	if n, _ := rdb.SCard(ctx, inprogKey).Result(); n != 1 {
+		t.Fatalf("expected task still in inprog after the grace pass, got %d", n)
+	}
+	_, ok, err = repo.Claim(ctx, "worker-2", []domain.Command{cmd}, 60, 50, 5, "")
+	if err != nil {
+		t.Fatalf("claim 3 (repair pass): %v", err)
 	}
 	if ok {
 		t.Fatalf("expected no immediate claim; expired task should be requeued to delayed")

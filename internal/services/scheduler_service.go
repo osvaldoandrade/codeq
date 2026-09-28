@@ -207,6 +207,14 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 	deadline := time.Now().Add(time.Duration(waitSeconds) * time.Second)
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	// Empty-queue backoff: hold the tight 250ms cadence for the first four
+	// misses (throughput contract: bursty producers see sub-second pickup),
+	// then double up to 1s — the FLAT cadence multiplied across workers x
+	// commands x shards hammered the backing store with thousands of RPOPs
+	// per second on an idle system.
+	sleep := 250 * time.Millisecond
+	const maxSleep = time.Second
+	misses := 0
 	for {
 		task, ok, err := s.repo.Claim(ctx, workerID, commands, leaseSeconds, s.requeueInspectLimit, s.maxAttemptsDefault, tenantID)
 		if err != nil || ok {
@@ -219,11 +227,19 @@ func (s *schedulerService) ClaimTask(ctx context.Context, workerID string, comma
 		if remaining <= 0 {
 			return nil, false, nil
 		}
-		sleep := 250 * time.Millisecond
-		if remaining < sleep {
-			sleep = remaining
+		misses++
+		if misses > 4 && sleep < maxSleep {
+			next := sleep * 2
+			if next > maxSleep {
+				next = maxSleep
+			}
+			sleep = next
 		}
-		timer.Reset(sleep)
+		wait := sleep
+		if remaining < wait {
+			wait = remaining
+		}
+		timer.Reset(wait)
 		select {
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
