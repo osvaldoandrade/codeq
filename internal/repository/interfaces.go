@@ -11,10 +11,10 @@ import (
 // TaskRepository is the queue storage contract. The server implements it
 // with Pebble. Callers depend on this interface, not on a backend.
 type TaskRepository interface {
-	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
+	Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, error)
 	// EnqueueWithReady behaves like Enqueue but also reports whether this insert just
 	// transitioned the immediate pending queue from empty to non-empty.
-	EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
+	EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
 	Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error)
 	Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error
 	// Progress stores the progress value reported by the worker holding the
@@ -28,6 +28,9 @@ type TaskRepository interface {
 	Get(ctx context.Context, taskID string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
 	QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error)
+	// ListTasks returns up to limit tasks of one (cmd, tenant) queue state,
+	// resuming after cursor (empty for the first page). See ADR 0005.
+	ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error)
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
 }
 

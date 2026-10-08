@@ -76,8 +76,7 @@ check that nack and abandon use:
   `ProgressResponse`, with the same `not_found`/`not_owner`/
   `not_in_progress` flags as `Abandon`).
 - `clusterpb.Task` carries `bytes progress = 21`, so a task read through a
-  peer keeps its progress. Field 20 is left to `deduplication_key` from the
-  open deduplication proposal (#731), so the two can land in either order.
+  peer keeps its progress. Field 20 is `deduplication_key`.
 
 **Service.** `SchedulerService.ReportProgress` passes the value through to
 the repository. The HTTP layer validates it.

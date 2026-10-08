@@ -100,6 +100,10 @@ type CreateRequest struct {
 	DelaySeconds   int
 	TraceParent    string
 	TraceState     string
+	// DeduplicationKey collapses the create into a task of the same tenant,
+	// command and key that still waits to be claimed; the server then acks
+	// with that task's ID. Exclusive with IdempotencyKey (ADR 0004).
+	DeduplicationKey string
 }
 
 // Session is one authenticated stream. Produce on it is safe to call
@@ -324,6 +328,8 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 			DelaySeconds:   safeint.Int32(req.DelaySeconds),
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
+
+			DeduplicationKey: req.DeduplicationKey,
 		},
 	}}
 	if err := s.send(ev); err != nil {
@@ -390,6 +396,8 @@ func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]Bat
 			DelaySeconds:   safeint.Int32(req.DelaySeconds),
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
+
+			DeduplicationKey: req.DeduplicationKey,
 		}
 	}
 

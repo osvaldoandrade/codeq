@@ -12,7 +12,7 @@ const progressNotOwner = "not-owner"
 
 func TestReportProgressPassesThroughToRepository(t *testing.T) {
 	ctx, svc := setupSchedulerTest(t)
-	if _, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", time.Time{}, 0, ""); err != nil {
+	if _, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", time.Time{}, 0, ""); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	task, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")

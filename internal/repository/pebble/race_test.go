@@ -37,7 +37,7 @@ func TestConcurrentClaimNeverDoubleAssigns(t *testing.T) {
 	const N = 200
 	ids := make([]string, 0, N)
 	for range N {
-		enq, err := repo.Enqueue(ctx, cmd, `{}`, 0, "", 3, "", time.Time{}, "")
+		enq, err := repo.Enqueue(ctx, cmd, `{}`, 0, "", 3, "", "", time.Time{}, "")
 		if err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}

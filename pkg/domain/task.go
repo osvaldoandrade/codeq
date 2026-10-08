@@ -52,8 +52,11 @@ type Task struct {
 	Error             string       `json:"error,omitempty"`
 	ResultKey         string       `json:"resultKey,omitempty"`
 	TenantID          string       `json:"tenantId,omitempty"` // Tenant isolation
-	CreatedAt         time.Time    `json:"createdAt"`
-	UpdatedAt         time.Time    `json:"updatedAt"`
+	// DeduplicationKey collapses creates of the same (tenant, command, key)
+	// into this task while it waits to be claimed; see ADR 0004.
+	DeduplicationKey string    `json:"deduplicationKey,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
 	// Progress is the last JSON value reported by the worker holding the
 	// lease. It is kept across nack, abandon and retries; absent until the
 	// first report.

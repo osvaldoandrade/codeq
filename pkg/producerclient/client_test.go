@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -366,5 +367,72 @@ func TestProduceBatch_RejectsInvalid(t *testing.T) {
 	}
 	if results[2].Err != nil || results[2].TaskID == "" {
 		t.Errorf("results[2] should succeed: %+v", results[2])
+	}
+}
+
+// TestProduce_DeduplicationKey proves the key works end to end over both
+// transports: gRPC creates and a REST create of the same tenant, command and
+// key all resolve to the one task that is still waiting.
+func TestProduce_DeduplicationKey(t *testing.T) {
+	f := newFixture(t)
+	defer f.stop()
+
+	c, err := producerclient.New(producerclient.Config{Addr: f.streamAddr, Token: "dev-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess, err := c.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer sess.Close()
+
+	req := producerclient.CreateRequest{Command: "GENERATE_MASTER", Payload: []byte(`{}`), DeduplicationKey: "sync-1"}
+	first, err := sess.Produce(ctx, req)
+	if err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	again, err := sess.Produce(ctx, req)
+	if err != nil || again != first {
+		t.Fatalf("second Produce = %q, %v; want the waiting task %q", again, err, first)
+	}
+
+	results, err := sess.ProduceBatch(ctx, []producerclient.CreateRequest{req, req})
+	if err != nil {
+		t.Fatalf("ProduceBatch: %v", err)
+	}
+	for i, r := range results {
+		if r.Err != nil || r.TaskID != first {
+			t.Fatalf("batch item %d = %q, %v; want %q", i, r.TaskID, r.Err, first)
+		}
+	}
+
+	body := `{"command":"GENERATE_MASTER","payload":{},"deduplicationKey":"sync-1"}`
+	httpReq, _ := http.NewRequest(http.MethodPost, f.httpURL+"/v1/codeq/tasks", strings.NewReader(body))
+	httpReq.Header.Set("Authorization", "Bearer dev-token")
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("POST task: %v", err)
+	}
+	defer resp.Body.Close()
+	var task struct {
+		ID               string `json:"id"`
+		DeduplicationKey string `json:"deduplicationKey"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.StatusCode != http.StatusAccepted || task.ID != first || task.DeduplicationKey != "sync-1" {
+		t.Fatalf("REST create = %d %+v; want 202 with task %q", resp.StatusCode, task, first)
+	}
+
+	both := req
+	both.IdempotencyKey = "order-1"
+	if _, err := sess.Produce(ctx, both); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("Produce with both keys: err %v, want the mutual-exclusion error", err)
 	}
 }

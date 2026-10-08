@@ -47,7 +47,7 @@ func claimedOn(t *testing.T, router *TaskRouter, node *testNode, prefix string, 
 	t.Helper()
 	ctx := context.Background()
 	id := idOwnedBy(t, router, node, prefix)
-	if _, _, err := node.repo.EnqueueWithID(ctx, id, domain.CmdGenerateMaster, `{}`, 0, "", 3, "", time.Time{}, ""); err != nil {
+	if _, _, err := node.repo.EnqueueWithID(ctx, id, domain.CmdGenerateMaster, `{}`, 0, "", 3, "", "", time.Time{}, ""); err != nil {
 		t.Fatalf("enqueue %s: %v", id, err)
 	}
 	if !claim {
