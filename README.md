@@ -149,6 +149,24 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/result \
   -d '{"status":"COMPLETED","result":{"ok":true}}'
 ```
 
+### Name the task yourself
+
+Pass `taskId` to create the task under your own identifier and read it back
+by it later. Creating an ID that already exists returns that task (to its own
+tenant), so a retried create is safe:
+
+```bash
+curl -X POST http://localhost:8080/v1/codeq/tasks \
+  -H 'Authorization: Bearer <producer-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"EXPORT","payload":{"exportId":"42"},"taskId":"ws-1.export-42"}'
+curl http://localhost:8080/v1/codeq/tasks/ws-1.export-42 -H 'Authorization: Bearer <producer-token>'
+```
+
+IDs have 1-200 characters from `[A-Za-z0-9._:@+-]`, start with a letter or
+digit, and cannot be combined with `idempotencyKey`. See
+[ADR 0008](docs/adr/0008-client-chosen-task-ids.md).
+
 ### Queue topic administration
 
 An authenticated admin can reconcile the provider policy for a tenant-scoped
