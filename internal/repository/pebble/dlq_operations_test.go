@@ -23,6 +23,7 @@ const (
 	dlqWorker      = "w-dlq"
 	dlqReason      = "boom"
 	dlqNotFound    = "not-found"
+	payloadN1      = `{"n":1}`
 )
 
 var dlqCmd = domain.CmdGenerateMaster
@@ -39,7 +40,7 @@ func newDLQRepo(t *testing.T) (*TaskRepository, *DB) {
 func deadLetter(t *testing.T, repo repository.TaskRepository, cmd domain.Command, tenant string, prio int) *domain.Task {
 	t.Helper()
 	ctx := context.Background()
-	task, err := repo.Enqueue(ctx, cmd, `{"n":1}`, prio, "", 1, "", "", "", time.Time{}, tenant)
+	task, err := repo.Enqueue(ctx, cmd, payloadN1, prio, "", 1, "", "", "", time.Time{}, tenant)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -165,20 +166,20 @@ func TestRequeueDLQTaskRestartsTheRun(t *testing.T) {
 func TestRequeueDLQTaskClearsProgress(t *testing.T) {
 	ctx := context.Background()
 	repo, _ := newDLQRepo(t)
-	task, err := repo.Enqueue(ctx, dlqCmd, `{"n":1}`, 5, "", 1, "", "", "", time.Time{}, dlqTenant)
+	task, err := repo.Enqueue(ctx, dlqCmd, payloadN1, 5, "", 1, "", "", "", time.Time{}, dlqTenant)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if _, ok, err := repo.Claim(ctx, dlqWorker, []domain.Command{dlqCmd}, 60, 50, 1, dlqTenant); err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
-	if err := repo.Progress(ctx, task.ID, dlqWorker, json.RawMessage(`{"n":1}`)); err != nil {
+	if err := repo.Progress(ctx, task.ID, dlqWorker, json.RawMessage(payloadN1)); err != nil {
 		t.Fatalf("progress: %v", err)
 	}
 	if _, dlq, err := repo.Nack(ctx, task.ID, dlqWorker, 0, 1, dlqReason); err != nil || !dlq {
 		t.Fatalf("nack: dlq=%v err=%v", dlq, err)
 	}
-	if got := mustGet(t, repo, task.ID); string(got.Progress) != `{"n":1}` {
+	if got := mustGet(t, repo, task.ID); string(got.Progress) != payloadN1 {
 		t.Fatalf("dead-lettered progress = %s", got.Progress)
 	}
 	requeued, err := repo.RequeueDLQTask(ctx, task.ID)

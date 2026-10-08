@@ -81,7 +81,7 @@ func TestRouterProgressOnPeerOwnedTask(t *testing.T) {
 	for name, tc := range map[string]struct{ id, worker, want string }{
 		"other worker": {id, "someone-else", "not-owner"},
 		"pending task": {pending, "", "not-in-progress"},
-		"unknown task": {idOwnedBy(t, router, b, "remote-missing"), progressWorker, "not-found"},
+		"unknown task": {idOwnedBy(t, router, b, "remote-missing"), progressWorker, errNotFoundMsg},
 	} {
 		if err := router.Progress(ctx, tc.id, tc.worker, json.RawMessage(`1`)); err == nil || err.Error() != tc.want {
 			t.Fatalf("%s: err %v, want %s", name, err, tc.want)

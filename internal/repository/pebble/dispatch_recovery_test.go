@@ -15,7 +15,7 @@ func TestRebuildDispatchRestoresPendingHints(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	first, err := repo.Enqueue(ctx, cmd, `{"n":1}`, 5, "", 3, "", "", "", time.Time{}, "")
+	first, err := repo.Enqueue(ctx, cmd, payloadN1, 5, "", 3, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

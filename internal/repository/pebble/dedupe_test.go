@@ -33,7 +33,7 @@ func newShardedDedupeRepo(t *testing.T) *ShardedTaskRepository {
 
 func enqueueDedupe(t *testing.T, repo repository.TaskRepository, cmd domain.Command, tenant, key string, visibleAt time.Time) *domain.Task {
 	t.Helper()
-	task, err := repo.Enqueue(context.Background(), cmd, `{"n":1}`, 5, "", 3, "", key, "", visibleAt, tenant)
+	task, err := repo.Enqueue(context.Background(), cmd, payloadN1, 5, "", 3, "", key, "", visibleAt, tenant)
 	if err != nil {
 		t.Fatalf("enqueue %s/%s/%s: %v", tenant, cmd, key, err)
 	}
@@ -374,7 +374,7 @@ func TestDedupeJoinIsSideEffectFree(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
-	first, ready, err := repo.EnqueueWithReady(context.Background(), cmd, `{"n":1}`, 5, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
+	first, ready, err := repo.EnqueueWithReady(context.Background(), cmd, payloadN1, 5, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
 	if err != nil || !ready {
 		t.Fatalf("first create: ready=%v err=%v", ready, err)
 	}

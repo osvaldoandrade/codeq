@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	dlqTestTenant = "tenant-a"
-	dlqTestWorker = "w-dlq"
+	dlqTestTenant  = "tenant-a"
+	dlqTestWorker  = "w-dlq"
+	errNotFoundMsg = "not-found"
 )
 
 // newDLQRouter starts two bufconn nodes and returns a router on node-a.
@@ -86,7 +87,7 @@ func TestRouterRequeueDLQTaskOnEveryOwner(t *testing.T) {
 			missing = id
 		}
 	}
-	if _, err := router.RequeueDLQTask(ctx, missing); err == nil || err.Error() != "not-found" {
+	if _, err := router.RequeueDLQTask(ctx, missing); err == nil || err.Error() != errNotFoundMsg {
 		t.Fatalf("missing remote task: err %v, want not-found", err)
 	}
 }
@@ -101,7 +102,7 @@ func TestRouterDeleteTaskOnPeer(t *testing.T) {
 	if _, err := b.repo.Get(ctx, dead); err == nil {
 		t.Fatal("deleted task still on the owner")
 	}
-	if err := router.DeleteTask(ctx, dead); err == nil || err.Error() != "not-found" {
+	if err := router.DeleteTask(ctx, dead); err == nil || err.Error() != errNotFoundMsg {
 		t.Fatalf("second delete err %v, want not-found", err)
 	}
 

@@ -20,7 +20,7 @@ func NewQueueStatsController(svc services.SchedulerService) *queueStatsControlle
 func (h *queueStatsController) Handle(c *gin.Context) {
 	cmd := strings.TrimSpace(c.Param("command"))
 	if cmd == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "command is required"})
+		c.JSON(http.StatusBadRequest, gin.H{errorField: errCommandRequired})
 		return
 	}
 	out, err := h.svc.QueueStats(c.Request.Context(), domain.Command(cmd), middleware.GetTenantID(c))

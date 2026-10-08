@@ -25,17 +25,17 @@ func createNamed(t *testing.T, repo repository.TaskRepository, id, tenant, paylo
 func assertNamedTaskLifecycle(t *testing.T, repo repository.TaskRepository) {
 	t.Helper()
 	ctx := context.Background()
-	created, err := createNamed(t, repo, namedID, namedTenant, `{"n":1}`)
+	created, err := createNamed(t, repo, namedID, namedTenant, payloadN1)
 	if err != nil || created.ID != namedID {
 		t.Fatalf("named create = %+v, %v; want id %s", created, err, namedID)
 	}
 	got, err := repo.Get(ctx, namedID)
-	if err != nil || got.ID != namedID || got.Payload != `{"n":1}` {
+	if err != nil || got.ID != namedID || got.Payload != payloadN1 {
 		t.Fatalf("get by the client's id = %+v, %v", got, err)
 	}
 
 	replay, err := createNamed(t, repo, namedID, namedTenant, `{"n":2}`)
-	if err != nil || replay.ID != namedID || replay.Payload != `{"n":1}` {
+	if err != nil || replay.ID != namedID || replay.Payload != payloadN1 {
 		t.Fatalf("same-tenant replay = %+v, %v; want the original task unchanged", replay, err)
 	}
 	if n := namedReadyCount(t, repo, domain.CmdGenerateMaster, namedTenant); n != 1 {

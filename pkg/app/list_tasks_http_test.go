@@ -36,7 +36,7 @@ func TestListTasksOverHTTP(t *testing.T) {
 	created := map[string]bool{}
 	for i := range 5 {
 		var task domain.Task
-		body := map[string]any{"command": listTasksCommand, "payload": map[string]int{"n": i}, "priority": i}
+		body := map[string]any{"command": listTasksCommand, keyPayload: map[string]int{"n": i}, "priority": i}
 		if status, raw := doJSON(t, ctx, http.MethodPost, srv.URL+"/v1/codeq/tasks", "dev-token", body, &task); status != http.StatusAccepted {
 			t.Fatalf("create %d: %d %s", i, status, raw)
 		}

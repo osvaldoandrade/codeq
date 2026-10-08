@@ -117,6 +117,11 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		}
 		return t, ready, err
 	}
+	return r.enqueueOnOwner(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
+}
+
+// enqueueOnOwner writes a pre-chosen task ID on the node that owns it.
+func (r *TaskRouter) enqueueOnOwner(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	owner := r.ring.Owner(id)
 	c, err := r.pool.Client(owner)
 	if err != nil {
@@ -127,30 +132,34 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		visible = visibleAt.Unix()
 	}
 	resp, err := c.Enqueue(ctx, &clusterpb.EnqueueRequest{
-		Id:             id,
-		Command:        string(cmd),
-		Payload:        []byte(payload),
-		Priority:       safeint.Int32(priority),
-		Webhook:        webhook,
-		MaxAttempts:    safeint.Int32(maxAttempts),
-		IdempotencyKey: idempotencyKey,
-		VisibleAtUnix:  visible,
-		TenantId:       tenantID,
-
+		Id:               id,
+		Command:          string(cmd),
+		Payload:          []byte(payload),
+		Priority:         safeint.Int32(priority),
+		Webhook:          webhook,
+		MaxAttempts:      safeint.Int32(maxAttempts),
+		IdempotencyKey:   idempotencyKey,
+		VisibleAtUnix:    visible,
+		TenantId:         tenantID,
 		DeduplicationKey: deduplicationKey,
 	})
 	if err != nil {
-		// The owner's ErrIdempotencyConflict crosses gRPC as a message;
-		// restore the sentinel so the HTTP layer answers 409 with no task.
-		if errMessageHas(err, domain.ErrIdempotencyConflict.Error()) {
-			return nil, false, domain.ErrIdempotencyConflict
-		}
-		if errMessageHas(err, domain.ErrTaskIDConflict.Error()) {
-			return nil, false, domain.ErrTaskIDConflict
-		}
-		return nil, false, err
+		return nil, false, restoreCreateSentinel(err)
 	}
 	return protoToDomainTask(resp.Task), resp.Ready, nil
+}
+
+// restoreCreateSentinel turns a gRPC status back into the domain error the
+// HTTP layer maps to 409. Any other error is returned unchanged.
+func restoreCreateSentinel(err error) error {
+	switch {
+	case errMessageHas(err, domain.ErrIdempotencyConflict.Error()):
+		return domain.ErrIdempotencyConflict
+	case errMessageHas(err, domain.ErrTaskIDConflict.Error()):
+		return domain.ErrTaskIDConflict
+	default:
+		return err
+	}
 }
 
 // enqueueNamed stores a task under an ID the client chose, on the node that
@@ -185,10 +194,7 @@ func (r *TaskRouter) enqueueNamed(ctx context.Context, taskID string, cmd domain
 		Named:         true,
 	})
 	if err != nil {
-		if errMessageHas(err, domain.ErrTaskIDConflict.Error()) {
-			return nil, false, domain.ErrTaskIDConflict
-		}
-		return nil, false, err
+		return nil, false, restoreCreateSentinel(err)
 	}
 	return protoToDomainTask(resp.Task), resp.Ready, nil
 }

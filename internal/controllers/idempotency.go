@@ -20,6 +20,7 @@ const (
 
 	codeIdempotencyConflict = "idempotency_conflict"
 	errorField              = "error"
+	errCommandRequired      = "command is required"
 	errInvalidIdempotency   = "invalid 'idempotencyKey'"
 	maxLoggedRequestID      = 128
 	unmatchedRoute          = "unmatched"

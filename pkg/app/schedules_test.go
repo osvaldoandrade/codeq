@@ -58,7 +58,7 @@ func TestSchedulesFireOverHTTP(t *testing.T) {
 		_ = a.TracingShutdown(context.Background())
 	})
 	ctx := context.Background()
-	spec := map[string]any{keyCron: "@every 1s", keyCommand: scheduleCommand, "payload": map[string]bool{"full": true}}
+	spec := map[string]any{keyCron: "@every 1s", keyCommand: scheduleCommand, keyPayload: map[string]bool{"full": true}}
 
 	var created scheduleView
 	if status, raw := doJSON(t, ctx, http.MethodPut, srv.URL+scheduleEndpoint, "dev-token", spec, &created); status != http.StatusCreated || created.Version != 1 {

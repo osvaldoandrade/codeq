@@ -314,7 +314,7 @@ func createTask(t *testing.T, ctx context.Context, baseURL, token, webhook strin
 	t.Helper()
 	body := map[string]any{
 		"command":  string(domain.CmdGenerateMaster),
-		"payload":  map[string]any{"foo": "bar"},
+		keyPayload: map[string]any{"foo": "bar"},
 		"priority": 5,
 		"webhook":  webhook,
 	}
