@@ -254,6 +254,7 @@ func (s *Server) processCreate(ctx context.Context, sess *streamSession, req *pr
 		req.Webhook,
 		int(req.MaxAttempts),
 		req.IdempotencyKey,
+		req.DeduplicationKey,
 		runAt,
 		int(req.DelaySeconds),
 		sess.tenantID,

@@ -21,8 +21,9 @@ import (
 // --- mock services ---
 
 type mockSchedulerService struct {
-	createFunc func(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
+	createFunc func(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
 	claimFunc  func(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error)
+	listFunc   func(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error)
 	// DLQ administration (ADR 0009).
 	getTaskFunc     func(ctx context.Context, id string) (*domain.Task, error)
 	requeueTaskFunc func(ctx context.Context, taskID string) (*domain.Task, error)
@@ -30,9 +31,9 @@ type mockSchedulerService struct {
 	deleteTaskFunc  func(ctx context.Context, taskID string) error
 }
 
-func (m *mockSchedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
+func (m *mockSchedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
 	if m.createFunc != nil {
-		return m.createFunc(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, runAt, delaySeconds, tenantID)
+		return m.createFunc(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, runAt, delaySeconds, tenantID)
 	}
 	return &domain.Task{ID: "task-1", Command: cmd, Status: domain.StatusPending}, nil
 }
@@ -78,6 +79,14 @@ func (m *mockSchedulerService) AdminQueues(context.Context) (map[string]any, err
 func (m *mockSchedulerService) QueueStats(context.Context, domain.Command, string) (*domain.QueueStats, error) {
 	return nil, nil
 }
+
+func (m *mockSchedulerService) ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error) {
+	if m.listFunc != nil {
+		return m.listFunc(ctx, cmd, tenantID, state, limit, cursor)
+	}
+	return &domain.TaskPage{Tasks: []*domain.Task{}}, nil
+}
+
 func (m *mockSchedulerService) RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error) {
 	if m.requeueTaskFunc != nil {
 		return m.requeueTaskFunc(ctx, taskID)
@@ -169,7 +178,7 @@ func setWorkerClaims(c *gin.Context, subject string, eventTypes []string) {
 func TestBatchCreateTask_Success(t *testing.T) {
 	callCount := 0
 	svc := &mockSchedulerService{
-		createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, _ string, _ time.Time, _ int, _ string) (*domain.Task, error) {
+		createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, _ string, _ string, _ time.Time, _ int, _ string) (*domain.Task, error) {
 			callCount++
 			return &domain.Task{ID: fmt.Sprintf("task-%d", callCount), Command: cmd, Status: domain.StatusPending}, nil
 		},
@@ -211,7 +220,7 @@ func TestBatchCreateTask_Success(t *testing.T) {
 func TestBatchCreateTask_PartialFailure(t *testing.T) {
 	callCount := 0
 	svc := &mockSchedulerService{
-		createFunc: func(_ context.Context, _ domain.Command, _ string, _ int, _ string, _ int, _ string, _ time.Time, _ int, _ string) (*domain.Task, error) {
+		createFunc: func(_ context.Context, _ domain.Command, _ string, _ int, _ string, _ int, _ string, _ string, _ time.Time, _ int, _ string) (*domain.Task, error) {
 			callCount++
 			if callCount == 2 {
 				return nil, fmt.Errorf("invalid command")

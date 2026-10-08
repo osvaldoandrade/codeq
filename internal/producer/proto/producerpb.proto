@@ -49,6 +49,10 @@ message CreateTask {
   int32 delay_seconds = 9;
   string trace_parent = 10;     // W3C trace context (optional)
   string trace_state = 11;
+  // deduplication_key collapses this create into a task of the same tenant,
+  // command and key that still waits to be claimed (ADR 0004). Exclusive
+  // with idempotency_key.
+  string deduplication_key = 12;
 }
 
 // CreateTaskBatch is a producer pipelining N CreateTasks into a single

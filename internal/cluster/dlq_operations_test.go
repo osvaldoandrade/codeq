@@ -48,7 +48,7 @@ func taskOn(t *testing.T, router *TaskRouter, node *testNode, prefix string, dea
 			id = candidate
 		}
 	}
-	if _, _, err := node.repo.EnqueueWithID(ctx, id, domain.CmdGenerateMaster, `{}`, 0, "", 1, "", time.Time{}, dlqTestTenant); err != nil {
+	if _, _, err := node.repo.EnqueueWithID(ctx, id, domain.CmdGenerateMaster, `{}`, 0, "", 1, "", "", time.Time{}, dlqTestTenant); err != nil {
 		t.Fatalf("enqueue %s: %v", id, err)
 	}
 	if !dead {

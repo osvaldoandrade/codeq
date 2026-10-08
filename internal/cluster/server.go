@@ -58,7 +58,7 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 	// Type-assert so we can use the cluster-aware EnqueueWithID — the
 	// router pre-picked the task ID at the hash boundary, we MUST honour it.
 	local, ok := s.Tasks.(interface {
-		EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
+		EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
 	})
 	if !ok {
 		return nil, errors.New("local TaskRepository does not support EnqueueWithID; cannot serve cluster Enqueue")
@@ -75,6 +75,7 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 		req.Webhook,
 		int(req.MaxAttempts),
 		req.IdempotencyKey,
+		req.DeduplicationKey,
 		visibleAt,
 		req.TenantId,
 	)
@@ -223,6 +224,19 @@ func (s *Server) QueueStats(ctx context.Context, req *clusterpb.QueueStatsReques
 	}, nil
 }
 
+// ListTasks serves one page of a queue state from this node's local tasks.
+func (s *Server) ListTasks(ctx context.Context, req *clusterpb.ListTasksRequest) (*clusterpb.ListTasksResponse, error) {
+	page, err := s.Tasks.ListTasks(ctx, domain.Command(req.Command), req.TenantId, domain.QueueState(req.State), int(req.Limit), req.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	out := &clusterpb.ListTasksResponse{Tasks: make([]*clusterpb.Task, len(page.Tasks)), NextCursor: page.NextCursor}
+	for i, t := range page.Tasks {
+		out.Tasks[i] = domainTaskToProto(t)
+	}
+	return out, nil
+}
+
 func (s *Server) AdminQueues(ctx context.Context, req *clusterpb.AdminQueuesRequest) (*clusterpb.AdminQueuesResponse, error) {
 	m, err := s.Tasks.AdminQueues(ctx)
 	if err != nil {
@@ -298,6 +312,7 @@ func domainTaskToProto(t *domain.Task) *clusterpb.Task {
 		UpdatedAt:         timestamppb.New(t.UpdatedAt),
 		TraceParent:       t.TraceParent,
 		TraceState:        t.TraceState,
+		DeduplicationKey:  t.DeduplicationKey,
 	}
 }
 
@@ -322,6 +337,7 @@ func protoToDomainTask(p *clusterpb.Task) *domain.Task {
 		ResultKey:         p.ResultKey,
 		TraceParent:       p.TraceParent,
 		TraceState:        p.TraceState,
+		DeduplicationKey:  p.DeduplicationKey,
 	}
 	if p.CreatedAt != nil {
 		t.CreatedAt = p.CreatedAt.AsTime()

@@ -27,7 +27,7 @@ func newDLQService(t *testing.T) (context.Context, SchedulerService, *readyRecor
 // deadLetterViaService creates a one-attempt task, claims it and nacks it.
 func deadLetterViaService(t *testing.T, ctx context.Context, svc SchedulerService) *domain.Task {
 	t.Helper()
-	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 1, "", time.Time{}, 0, dlqServiceTenant)
+	task, err := svc.CreateTask(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 1, "", "", time.Time{}, 0, dlqServiceTenant)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

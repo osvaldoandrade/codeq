@@ -30,6 +30,7 @@ import (
 //	codeq/tasks/<id>                            → JSON task
 //	codeq/results/<id>                          → JSON result record
 //	codeq/idempo/<key>                          → task id
+//	codeq/dedupe/<tenant,cmd,key length-prefixed> → task id while it waits
 //	codeq/lease/<id>                            → worker id | until-unix
 //	codeq/ttl/<expire_unix_be8>/<id>            → "" (range-scan reaper)
 //
@@ -46,6 +47,7 @@ const (
 	pTasks    = namespace + "tasks/"
 	pResults  = namespace + "results/"
 	pIdempo   = namespace + "idempo/"
+	pDedupe   = namespace + "dedupe/"
 	pLease    = namespace + "lease/"
 	pTTL      = namespace + "ttl/"
 	pQueue    = namespace + "q/"
@@ -81,6 +83,26 @@ func KeyTask(id string) []byte    { return []byte(pTasks + id) }
 func KeyResult(id string) []byte  { return []byte(pResults + id) }
 func KeyIdempo(key string) []byte { return []byte(pIdempo + key) }
 func KeyLease(id string) []byte   { return []byte(pLease + id) }
+
+// KeyDedupe maps a deduplication key to the task that holds it while that
+// task waits (pending or delayed). The scope is (tenant, command, key); the
+// command is lowercased like every queue key, so it names the same queue.
+// Each component is length-prefixed because commands and keys are free-form
+// strings: no tuple can encode to the key of another tuple, so one tenant can
+// never address a mapping of another.
+func KeyDedupe(cmd domain.Command, tenantID, key string) []byte {
+	c := cmdSeg(cmd)
+	k := make([]byte, 0, len(pDedupe)+3*binary.MaxVarintLen64+len(tenantID)+len(c)+len(key))
+	k = append(k, pDedupe...)
+	k = appendLengthPrefixed(k, tenantID)
+	k = appendLengthPrefixed(k, c)
+	return appendLengthPrefixed(k, key)
+}
+
+func appendLengthPrefixed(dst []byte, s string) []byte {
+	dst = binary.AppendUvarint(dst, uint64(len(s)))
+	return append(dst, s...)
+}
 
 // KeyTTLIndex encodes (expire_unix, id). Range-scanning over pTTL yields
 // entries ordered by expiry — a reaper pops the lowest score first.

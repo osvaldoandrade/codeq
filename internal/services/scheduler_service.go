@@ -18,7 +18,7 @@ import (
 )
 
 type SchedulerService interface {
-	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
+	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
 	ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error)
 	// ClaimManyTasks pops up to max tasks in one round-trip when the
 	// underlying repo supports batched claim (Pebble does via Phase 7's
@@ -33,6 +33,10 @@ type SchedulerService interface {
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
 	QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error)
+	// ListTasks pages the tasks of one (cmd, tenant) queue state. limit 0
+	// means DefaultTaskListLimit; a limit outside 1..MaxTaskListLimit fails
+	// with domain.ErrInvalidListLimit.
+	ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error)
 	// RequeueDLQTask moves one dead-lettered task back to the ready queue
 	// as a fresh run (ADR 0009).
 	RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error)
@@ -86,7 +90,45 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 	}
 }
 
-func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
+// validateCreate rejects a create the scheduler must not enqueue: an empty
+// command, a webhook that is not an absolute http(s) URL, or both an
+// idempotency and a deduplication key. It marks the span the same way the
+// inline checks it replaces did.
+func validateCreate(span trace.Span, cmd domain.Command, webhook, idempotencyKey, deduplicationKey string) error {
+	if strings.TrimSpace(string(cmd)) == "" {
+		span.SetStatus(codes.Error, "invalid command")
+		return errors.New("invalid command")
+	}
+	if webhook != "" {
+		u, err := url.Parse(webhook)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "invalid webhook url")
+			return errors.New("invalid webhook url")
+		}
+	}
+	if idempotencyKey != "" && deduplicationKey != "" {
+		span.SetStatus(codes.Error, domain.ErrDeduplicationWithIdempotency.Error())
+		return domain.ErrDeduplicationWithIdempotency
+	}
+	return nil
+}
+
+// visibleAt is when a new task becomes claimable: runAt wins over
+// delaySeconds, and the zero time means immediately.
+func (s *schedulerService) visibleAt(runAt time.Time, delaySeconds int) time.Time {
+	if !runAt.IsZero() {
+		return runAt
+	}
+	if delaySeconds > 0 {
+		return s.now().Add(time.Duration(delaySeconds) * time.Second)
+	}
+	return time.Time{}
+}
+
+// CreateTask validates and enqueues a task, or returns the task an
+// idempotency or deduplication key resolves to.
+func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
 	ctx, span := otel.Tracer("codeq/scheduler").Start(ctx, "codeq.task.create",
 		trace.WithAttributes(
 			attribute.String("codeq.command", string(cmd)),
@@ -97,31 +139,21 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 		),
 	)
 	defer span.End()
-
-	if strings.TrimSpace(string(cmd)) == "" {
-		span.SetStatus(codes.Error, "invalid command")
-		return nil, errors.New("invalid command")
+	if deduplicationKey != "" {
+		// Set only when present: an attribute in the start options costs an
+		// allocation on every create, including the ones without a key.
+		span.SetAttributes(attribute.Bool("codeq.has_deduplication_key", true))
 	}
-	if webhook != "" {
-		u, err := url.Parse(webhook)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, "invalid webhook url")
-			return nil, errors.New("invalid webhook url")
-		}
+
+	if err := validateCreate(span, cmd, webhook, idempotencyKey, deduplicationKey); err != nil {
+		return nil, err
 	}
 	if maxAttempts <= 0 {
 		maxAttempts = s.maxAttemptsDefault
 	}
+	visibleAt := s.visibleAt(runAt, delaySeconds)
 
-	visibleAt := time.Time{}
-	if !runAt.IsZero() {
-		visibleAt = runAt
-	} else if delaySeconds > 0 {
-		visibleAt = s.now().Add(time.Duration(delaySeconds) * time.Second)
-	}
-
-	task, ready, err := s.repo.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+	task, ready, err := s.repo.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -287,6 +319,30 @@ func (s *schedulerService) AdminQueues(ctx context.Context) (map[string]any, err
 
 func (s *schedulerService) QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error) {
 	return s.repo.QueueStats(ctx, cmd, tenantID)
+}
+
+const (
+	// DefaultTaskListLimit is the page size of a task listing that sets none.
+	DefaultTaskListLimit = 100
+	// MaxTaskListLimit bounds a page: every task carries its payload.
+	MaxTaskListLimit = 500
+)
+
+// ListTasks validates the listing request and pages the repository.
+func (s *schedulerService) ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error) {
+	if strings.TrimSpace(string(cmd)) == "" {
+		return nil, errors.New("invalid command")
+	}
+	if _, err := domain.ParseQueueState(string(state)); err != nil {
+		return nil, err
+	}
+	if limit == 0 {
+		limit = DefaultTaskListLimit
+	}
+	if limit < 1 || limit > MaxTaskListLimit {
+		return nil, domain.ErrInvalidListLimit
+	}
+	return s.repo.ListTasks(ctx, cmd, tenantID, state, limit, cursor)
 }
 
 func (s *schedulerService) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {

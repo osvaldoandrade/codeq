@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"hash/fnv"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -72,12 +73,16 @@ func (s *ShardedTaskRepository) nextStart() int {
 
 // ---------------- TaskRepository interface ----------------
 
-func (s *ShardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	task, _, err := s.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+// Enqueue creates a task on the shard its ID (or its idempotency or
+// deduplication key) routes to. See EnqueueWithReady.
+func (s *ShardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := s.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
 	return task, err
 }
 
-func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// EnqueueWithReady is Enqueue that also reports whether the new task is
+// immediately ready to claim.
+func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	// Idempotency check against its own shard first.
 	if idempotencyKey != "" {
 		idShard := s.shardOf(idempotencyKey)
@@ -94,13 +99,18 @@ func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain
 	}
 	// Pick an ID and dispatch to its owning shard. With an idempotency key
 	// the ID is chosen on the key's shard, so the task and its idempotency
-	// index are written by one batch on the shard the next replay reads.
+	// index are written by one batch on the shard the next replay reads. A
+	// deduplication key routes the same way, so every create of one key meets
+	// the same lookup and lock. The scheduler rejects a create carrying both.
 	id := uuid.NewString()
-	if idempotencyKey != "" {
+	switch {
+	case idempotencyKey != "":
 		id = s.idOnShard(s.shardOf(idempotencyKey))
+	case deduplicationKey != "":
+		id = s.idOnShard(s.shardOf(string(KeyDedupe(cmd, tenantID, deduplicationKey))))
 	}
 	tShard := s.shardOf(id)
-	return s.shards[tShard].EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+	return s.shards[tShard].EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
 }
 
 // maxShardIDAttempts bounds idOnShard. With N shards one attempt succeeds
@@ -236,6 +246,19 @@ func (s *ShardedTaskRepository) QueueStats(ctx context.Context, cmd domain.Comma
 		out.DLQ += st.DLQ
 	}
 	return out, nil
+}
+
+// ListTasks pages a queue state across the shards in shard order, resuming
+// each shard from its own cursor.
+func (s *ShardedTaskRepository) ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error) {
+	partitions := make([]string, len(s.shards))
+	for i := range s.shards {
+		partitions[i] = strconv.Itoa(i)
+	}
+	return repository.ListAcrossPartitions(ctx, partitions, limit, cursor, func(ctx context.Context, partition string, limit int, cursor string) (*domain.TaskPage, error) {
+		idx, _ := strconv.Atoi(partition) // partition names come from the slice above
+		return s.shards[idx].ListTasks(ctx, cmd, tenantID, state, limit, cursor)
+	})
 }
 
 func (s *ShardedTaskRepository) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {

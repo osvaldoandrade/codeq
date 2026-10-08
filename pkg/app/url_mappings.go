@@ -57,6 +57,7 @@ func SetupMappings(app *Application) {
 		topicAdmin.GET("/topics/:topicName", topicHandler.Get)
 		topicAdmin.DELETE("/topics/:topicName", fwd.Single(), topicHandler.Delete)
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
+		admin.GET("/queues/:command/tasks", controllers.NewListTasksController(app.Scheduler).Handle)
 		// Dead-letter administration (ADR 0009). By-ID writes forward like
 		// any single-task write; the bulk requeue is gated like a batch.
 		admin.POST("/tasks/:id/requeue", fwd.Single(), controllers.NewRequeueTaskController(app.Scheduler).Handle)

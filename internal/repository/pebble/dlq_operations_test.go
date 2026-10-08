@@ -38,7 +38,7 @@ func newDLQRepo(t *testing.T) (*TaskRepository, *DB) {
 func deadLetter(t *testing.T, repo repository.TaskRepository, cmd domain.Command, tenant string, prio int) *domain.Task {
 	t.Helper()
 	ctx := context.Background()
-	task, err := repo.Enqueue(ctx, cmd, `{"n":1}`, prio, "", 1, "", time.Time{}, tenant)
+	task, err := repo.Enqueue(ctx, cmd, `{"n":1}`, prio, "", 1, "", "", time.Time{}, tenant)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -54,7 +54,7 @@ func deadLetter(t *testing.T, repo repository.TaskRepository, cmd domain.Command
 
 func enqueueTask(t *testing.T, repo repository.TaskRepository, prio int, visibleAt time.Time, tenant string) *domain.Task {
 	t.Helper()
-	task, err := repo.Enqueue(context.Background(), dlqCmd, `{}`, prio, "", 3, "", visibleAt, tenant)
+	task, err := repo.Enqueue(context.Background(), dlqCmd, `{}`, prio, "", 3, "", "", visibleAt, tenant)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
