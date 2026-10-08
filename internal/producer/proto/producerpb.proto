@@ -49,9 +49,13 @@ message CreateTask {
   int32 delay_seconds = 9;
   string trace_parent = 10;     // W3C trace context (optional)
   string trace_state = 11;
+  // deduplication_key collapses this create into a task of the same tenant,
+  // command and key that still waits to be claimed (ADR 0004). Exclusive
+  // with idempotency_key and task_id.
+  string deduplication_key = 12;
   // task_id names the task instead of letting the server generate its ID
   // (ADR 0008). Creating a task_id that already exists returns that task to
-  // its own tenant. Exclusive with idempotency_key.
+  // its own tenant. Exclusive with idempotency_key and deduplication_key.
   string task_id = 13;
 }
 

@@ -57,6 +57,7 @@ func SetupMappings(app *Application) {
 		topicAdmin.GET("/topics/:topicName", topicHandler.Get)
 		topicAdmin.DELETE("/topics/:topicName", fwd.Single(), topicHandler.Delete)
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
+		admin.GET("/queues/:command/tasks", controllers.NewListTasksController(app.Scheduler).Handle)
 		topicAdmin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
 
 		// Novo: limpeza administrativa de tasks expiradas no índice Z

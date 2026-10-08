@@ -49,6 +49,7 @@ const (
 	TaskNode_PendingLength_FullMethodName    = "/clusterpb.TaskNode/PendingLength"
 	TaskNode_QueueStats_FullMethodName       = "/clusterpb.TaskNode/QueueStats"
 	TaskNode_AdminQueues_FullMethodName      = "/clusterpb.TaskNode/AdminQueues"
+	TaskNode_ListTasks_FullMethodName        = "/clusterpb.TaskNode/ListTasks"
 	TaskNode_BloomSnapshot_FullMethodName    = "/clusterpb.TaskNode/BloomSnapshot"
 )
 
@@ -70,6 +71,8 @@ type TaskNodeClient interface {
 	PendingLength(ctx context.Context, in *PendingLengthRequest, opts ...grpc.CallOption) (*PendingLengthResponse, error)
 	QueueStats(ctx context.Context, in *QueueStatsRequest, opts ...grpc.CallOption) (*QueueStatsResponse, error)
 	AdminQueues(ctx context.Context, in *AdminQueuesRequest, opts ...grpc.CallOption) (*AdminQueuesResponse, error)
+	// Partition-walked (caller pages node by node in ring order):
+	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
 	// Bloom gossip (poll-style; a streaming version can be added later):
 	BloomSnapshot(ctx context.Context, in *BloomSnapshotRequest, opts ...grpc.CallOption) (*BloomSnapshotResponse, error)
 }
@@ -202,6 +205,16 @@ func (c *taskNodeClient) AdminQueues(ctx context.Context, in *AdminQueuesRequest
 	return out, nil
 }
 
+func (c *taskNodeClient) ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTasksResponse)
+	err := c.cc.Invoke(ctx, TaskNode_ListTasks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskNodeClient) BloomSnapshot(ctx context.Context, in *BloomSnapshotRequest, opts ...grpc.CallOption) (*BloomSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BloomSnapshotResponse)
@@ -230,6 +243,8 @@ type TaskNodeServer interface {
 	PendingLength(context.Context, *PendingLengthRequest) (*PendingLengthResponse, error)
 	QueueStats(context.Context, *QueueStatsRequest) (*QueueStatsResponse, error)
 	AdminQueues(context.Context, *AdminQueuesRequest) (*AdminQueuesResponse, error)
+	// Partition-walked (caller pages node by node in ring order):
+	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
 	// Bloom gossip (poll-style; a streaming version can be added later):
 	BloomSnapshot(context.Context, *BloomSnapshotRequest) (*BloomSnapshotResponse, error)
 	mustEmbedUnimplementedTaskNodeServer()
@@ -277,6 +292,9 @@ func (UnimplementedTaskNodeServer) QueueStats(context.Context, *QueueStatsReques
 }
 func (UnimplementedTaskNodeServer) AdminQueues(context.Context, *AdminQueuesRequest) (*AdminQueuesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminQueues not implemented")
+}
+func (UnimplementedTaskNodeServer) ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTasks not implemented")
 }
 func (UnimplementedTaskNodeServer) BloomSnapshot(context.Context, *BloomSnapshotRequest) (*BloomSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BloomSnapshot not implemented")
@@ -518,6 +536,24 @@ func _TaskNode_AdminQueues_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskNode_ListTasks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTasksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskNodeServer).ListTasks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskNode_ListTasks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskNodeServer).ListTasks(ctx, req.(*ListTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskNode_BloomSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BloomSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -590,6 +626,10 @@ var TaskNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminQueues",
 			Handler:    _TaskNode_AdminQueues_Handler,
+		},
+		{
+			MethodName: "ListTasks",
+			Handler:    _TaskNode_ListTasks_Handler,
 		},
 		{
 			MethodName: "BloomSnapshot",

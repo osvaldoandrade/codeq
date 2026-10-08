@@ -100,9 +100,13 @@ type CreateRequest struct {
 	DelaySeconds   int
 	TraceParent    string
 	TraceState     string
+	// DeduplicationKey collapses the create into a task of the same tenant,
+	// command and key that still waits to be claimed; the server then acks
+	// with that task's ID. Exclusive with IdempotencyKey and TaskID (ADR 0004).
+	DeduplicationKey string
 	// TaskID names the task instead of letting the server generate its ID;
 	// creating an existing ID returns that task (ADR 0008). Exclusive with
-	// IdempotencyKey.
+	// IdempotencyKey and DeduplicationKey.
 	TaskID string
 }
 
@@ -329,6 +333,8 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
 			TaskId:         req.TaskID,
+
+			DeduplicationKey: req.DeduplicationKey,
 		},
 	}}
 	if err := s.send(ev); err != nil {
@@ -396,6 +402,8 @@ func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]Bat
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
 			TaskId:         req.TaskID,
+
+			DeduplicationKey: req.DeduplicationKey,
 		}
 	}
 

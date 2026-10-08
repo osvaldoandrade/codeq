@@ -61,7 +61,7 @@ func TestResultsServiceGetTaskNotFound(t *testing.T) {
 func TestResultsServiceGetResultNotFound(t *testing.T) {
 	stores := openPebbleStores(t)
 	taskRepo := stores.tasks
-	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", "", time.Time{}, "")
+	task, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data"}`, 0, "", 5, "", "", "", time.Time{}, "")
 
 	repo := stores.results
 	uploader := &mockResultsUploader{}
@@ -84,9 +84,9 @@ func TestResultsServiceBatchSubmit(t *testing.T) {
 	taskRepo := stores.tasks
 
 	// Create 3 tasks
-	task1, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data1"}`, 0, "", 5, "", "", time.Time{}, "")
-	task2, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data2"}`, 0, "", 5, "", "", time.Time{}, "")
-	task3, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data3"}`, 0, "", 5, "", "", time.Time{}, "")
+	task1, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data1"}`, 0, "", 5, "", "", "", time.Time{}, "")
+	task2, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data2"}`, 0, "", 5, "", "", "", time.Time{}, "")
+	task3, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"test":"data3"}`, 0, "", 5, "", "", "", time.Time{}, "")
 
 	// Claim tasks to move them to in-progress
 	cmds := []domain.Command{domain.CmdGenerateMaster}
@@ -160,7 +160,7 @@ func TestResultsServiceSubmit(t *testing.T) {
 	const workerID = "submit-worker"
 	stores := openPebbleStores(t)
 	ctx := context.Background()
-	_, err := stores.tasks.Enqueue(ctx, domain.CmdGenerateMaster, `{"k":"v"}`, 0, "https://example.com/hook", 5, "", "", time.Time{}, "tenant-a")
+	_, err := stores.tasks.Enqueue(ctx, domain.CmdGenerateMaster, `{"k":"v"}`, 0, "https://example.com/hook", 5, "", "", "", time.Time{}, "tenant-a")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestResultsServiceSubmit(t *testing.T) {
 		t.Fatalf("missing task: %v", err)
 	}
 
-	pending, err := stores.tasks.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 0, "", 5, "", "", time.Time{}, "tenant-a")
+	pending, err := stores.tasks.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 0, "", 5, "", "", "", time.Time{}, "tenant-a")
 	if err != nil {
 		t.Fatalf("enqueue pending: %v", err)
 	}

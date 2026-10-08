@@ -7,7 +7,7 @@ Collect feedback, questions, and suggestions on the queue sharding design before
 ## HLD Summary
 The design proposes:
 - **Explicit sharding** via pluggable ShardSupplier interface
-- **Near-term**: Independent KVRocks backends per shard
+- **Near-term**: route shards through the persistence provider, without naming a database product in the deploy contract
 - **Long-term**: Migration to RAFT-backed consensus storage (e.g., TiKV)
 - **Alternative path**: Plugin architecture for persistence decoupling
 
@@ -21,7 +21,7 @@ The design proposes:
 
 ### Technical Considerations
 - [ ] Lua script atomicity across shards
-- [ ] Redis Cluster hash slot constraints
+- [ ] How a task and its idempotency key stay on the same shard
 - [ ] Migration path from single-shard to multi-shard
 - [ ] Tenant isolation guarantees
 - [ ] Operational complexity vs. benefits
@@ -48,7 +48,7 @@ Please comment on this issue with:
 ```markdown
 **Section**: 5.3 Option 3: RAFT Consensus
 **Type**: Question
-**Details**: How does TiKV perform compared to KVRocks for our workload? Do we have benchmarks?
+**Details**: What write throughput and p99 does the persistence provider hold for our workload?
 **Priority**: Important
 ```
 

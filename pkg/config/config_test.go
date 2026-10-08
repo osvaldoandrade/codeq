@@ -265,12 +265,12 @@ sharding:
     GENERATE_MASTER: "compute"
   backends:
     primary:
-      address: "kvrocks-primary:6379"
+      address: "shard-primary:6379"
       password: "pass1"
       db: 0
       poolSize: 20
     compute:
-      address: "kvrocks-compute:6379"
+      address: "shard-compute:6379"
       password: "pass2"
       db: 1
       poolSize: 30
@@ -291,8 +291,8 @@ sharding:
 		t.Fatalf("Expected 2 backends, got %d", len(cfg.Sharding.Backends))
 	}
 	primary := cfg.Sharding.Backends["primary"]
-	if primary.Address != "kvrocks-primary:6379" {
-		t.Errorf("Expected primary address 'kvrocks-primary:6379', got %q", primary.Address)
+	if primary.Address != "shard-primary:6379" {
+		t.Errorf("Expected primary address 'shard-primary:6379', got %q", primary.Address)
 	}
 	if primary.Password != "pass1" {
 		t.Errorf("Expected primary password 'pass1', got %q", primary.Password)
@@ -304,8 +304,8 @@ sharding:
 		t.Errorf("Expected primary poolSize 20, got %d", primary.PoolSize)
 	}
 	compute := cfg.Sharding.Backends["compute"]
-	if compute.Address != "kvrocks-compute:6379" {
-		t.Errorf("Expected compute address 'kvrocks-compute:6379', got %q", compute.Address)
+	if compute.Address != "shard-compute:6379" {
+		t.Errorf("Expected compute address 'shard-compute:6379', got %q", compute.Address)
 	}
 	if compute.PoolSize != 30 {
 		t.Errorf("Expected compute poolSize 30, got %d", compute.PoolSize)
@@ -320,7 +320,7 @@ func TestValidate_ShardingBackendsMissingDefault(t *testing.T) {
 			Enabled:      true,
 			DefaultShard: "primary",
 			Backends: map[string]ShardBackendConfig{
-				"compute": {Address: "kvrocks-compute:6379"},
+				"compute": {Address: "shard-compute:6379"},
 			},
 		},
 	}
@@ -344,7 +344,7 @@ func TestValidate_ShardingBackendsMissingCommandShard(t *testing.T) {
 				"GENERATE_MASTER": "compute",
 			},
 			Backends: map[string]ShardBackendConfig{
-				"primary": {Address: "kvrocks-primary:6379"},
+				"primary": {Address: "shard-primary:6379"},
 			},
 		},
 	}
@@ -368,7 +368,7 @@ func TestValidate_ShardingBackendsMissingTenantShard(t *testing.T) {
 				"tenant-premium": "premium",
 			},
 			Backends: map[string]ShardBackendConfig{
-				"primary": {Address: "kvrocks-primary:6379"},
+				"primary": {Address: "shard-primary:6379"},
 			},
 		},
 	}
@@ -417,9 +417,9 @@ func TestValidate_ShardingBackendsValidConfig(t *testing.T) {
 				"tenant-premium": "premium",
 			},
 			Backends: map[string]ShardBackendConfig{
-				"primary": {Address: "kvrocks-primary:6379"},
-				"compute": {Address: "kvrocks-compute:6379"},
-				"premium": {Address: "kvrocks-premium:6379"},
+				"primary": {Address: "shard-primary:6379"},
+				"compute": {Address: "shard-compute:6379"},
+				"premium": {Address: "shard-premium:6379"},
 			},
 		},
 	}

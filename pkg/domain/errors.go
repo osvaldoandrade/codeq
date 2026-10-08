@@ -25,6 +25,12 @@ type LeaderHint interface {
 // code the HTTP layer answers with 409.
 var ErrIdempotencyConflict = errors.New("idempotency_conflict")
 
+// ErrDeduplicationWithIdempotency rejects a create that carries both an
+// idempotency key and a deduplication key. Each key alone decides whether a
+// create writes a new task, so together they would contradict each other
+// (ADR 0004). The HTTP layer answers it with 400.
+var ErrDeduplicationWithIdempotency = errors.New("'idempotencyKey' and 'deduplicationKey' are mutually exclusive")
+
 // ErrTaskIDConflict is returned when a create names a task ID that another
 // tenant's task already uses. Like ErrIdempotencyConflict, the caller gets
 // neither the task nor its data; the message is the wire code the HTTP layer
@@ -35,6 +41,12 @@ var ErrTaskIDConflict = errors.New("task_id_conflict")
 // an idempotency key: a named task is already idempotent by its ID. The HTTP
 // layer answers it with 400.
 var ErrTaskIDWithIdempotency = errors.New("'taskId' and 'idempotencyKey' are mutually exclusive")
+
+// ErrTaskIDWithDeduplication rejects a create that carries both a task ID and
+// a deduplication key: a named task is already deduplicated by its ID, and a
+// joined create could not honor the ID it asked for. The HTTP layer answers
+// it with 400.
+var ErrTaskIDWithDeduplication = errors.New("'taskId' and 'deduplicationKey' are mutually exclusive")
 
 // ErrInvalidTaskID rejects a client-chosen task ID outside the allowed shape
 // (see ValidTaskID). The HTTP layer answers it with 400.

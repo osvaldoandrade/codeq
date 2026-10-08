@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/bytedance/sonic"
+	pebbledb "github.com/cockroachdb/pebble"
 	"github.com/google/uuid"
 
 	"github.com/osvaldoandrade/codeq/internal/backoff"
@@ -77,9 +78,10 @@ type TaskRepository struct {
 	// NewTaskRepository.
 	leases *leaseTable
 
-	// idempoStripes serialize create-with-key on this process. The lookup
-	// and the batch that records the key are not one Pebble compare-and-swap,
-	// so two creates that both miss the key would both commit a task.
+	// idempoStripes serialize create-with-key on this process, for both the
+	// idempotency and the deduplication key (lockCreateKey). The lookup and
+	// the batch that records the key are not one Pebble compare-and-swap, so
+	// two creates that both miss the key would both commit a task.
 	idempoStripes [32]sync.Mutex
 
 	// dispatchMu guards the hint channel, queued/inflight sets, and the
@@ -211,21 +213,24 @@ func normalizePriority(p int) int {
 
 // ---------- Enqueue ----------
 
-// Enqueue creates a task, or returns the task an idempotency key or a
-// client-chosen task ID already names. See EnqueueWithReady.
-func (r *TaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	task, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, taskID, visibleAt, tenantID)
+// Enqueue creates a task and returns it, or returns the task an idempotency
+// key, a deduplication key or a client-chosen task ID resolves to. See
+// EnqueueWithReady.
+func (r *TaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
 	return task, err
 }
 
 // EnqueueWithReady is Enqueue that also reports whether the new task is
 // immediately ready to claim. An empty taskID gets a generated one; a
-// non-empty taskID is the client's name for the task (see EnqueueNamed).
-func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// non-empty taskID is the client's name for the task (see EnqueueNamed) and
+// never comes with an idempotency or deduplication key (the service rejects
+// both combinations).
+func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	if taskID != "" {
 		return r.EnqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
 	}
-	return r.EnqueueWithID(ctx, uuid.NewString(), cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+	return r.EnqueueWithID(ctx, uuid.NewString(), cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
 }
 
 // EnqueueNamed creates a task under an ID the client chose. If a task with
@@ -251,117 +256,193 @@ func (r *TaskRepository) EnqueueNamed(ctx context.Context, id string, cmd domain
 	case !errors.Is(err, ErrNotFound):
 		return nil, false, fmt.Errorf("task id lookup: %w", err)
 	}
-	return r.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, "", visibleAt, tenantID)
+	return r.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, "", "", visibleAt, tenantID)
 }
 
 // EnqueueWithID is the cluster-aware variant: callers (cluster.Router) pre-pick
 // the task ID at the routing boundary so the (id → owner shard) mapping
 // resolved by the consistent-hash ring is honoured. Local callers can pass
 // uuid.NewString() and get the original semantics.
-func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
-	if idempotencyKey != "" {
-		mu := r.idempoStripe(idempotencyKey)
-		mu.Lock()
-		defer mu.Unlock()
+func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	var dedupeKey []byte
+	if deduplicationKey != "" {
+		dedupeKey = KeyDedupe(cmd, tenantID, deduplicationKey)
 	}
-	if idempotencyKey != "" {
-		// Look up existing task for this idempotency key. If present, return
-		// the original task to a caller of the same tenant only (mirrors the
-		// Redis behavior so SDKs see the same idempotent contract regardless
-		// of backend). A caller of another tenant gets
-		// domain.ErrIdempotencyConflict and never the task.
-		if existing, err := r.db.Get(KeyIdempo(idempotencyKey)); err == nil {
-			existingID := string(existing)
-			task, ferr := r.Get(ctx, existingID)
-			if ferr == nil {
-				replay, rerr := repository.ReplayIdempotent(task, tenantID)
-				return replay, false, rerr
-			}
-			// Idempo points to a deleted task: fall through and recreate.
-		} else if !errors.Is(err, ErrNotFound) {
-			return nil, false, fmt.Errorf("idempo lookup: %w", err)
-		}
-	}
-	if err := r.ensureLeaderDispatch(ctx); err != nil {
+	unlock, err := r.lockCreateKey(idempotencyKey, dedupeKey)
+	if err != nil {
 		return nil, false, err
 	}
+	defer unlock()
+	if existing, found, err := r.precheckCreate(ctx, cmd, tenantID, idempotencyKey, deduplicationKey, dedupeKey); found || err != nil {
+		return existing, false, err
+	}
 
-	priority = normalizePriority(priority)
 	now := r.now()
 	task := &domain.Task{
 		ID:          id,
 		Command:     cmd,
 		Payload:     payload,
-		Priority:    priority,
+		Priority:    normalizePriority(priority),
 		Webhook:     webhook,
 		MaxAttempts: maxAttempts,
 		Status:      domain.StatusPending,
 		TenantID:    tenantID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
-	}
 
-	ready := false
+		DeduplicationKey: deduplicationKey,
+	}
 	delayed := !visibleAt.IsZero() && visibleAt.After(now)
-	if delayed {
-		task.LastKnownLocation = domain.LocationDelayed
-	} else {
-		task.LastKnownLocation = domain.LocationPending
-		ready = true
-	}
+	task.LastKnownLocation = enqueueLocation(delayed)
 
+	pendingSeq, err := r.commitEnqueue(task, visibleAt, delayed, idempotencyKey, dedupeKey)
+	if err != nil {
+		return nil, false, err
+	}
+	r.announceEnqueue(task, delayed, pendingSeq)
+	return task, !delayed, nil
+}
+
+func enqueueLocation(delayed bool) domain.TaskLocation {
+	if delayed {
+		return domain.LocationDelayed
+	}
+	return domain.LocationPending
+}
+
+// announceEnqueue runs after the enqueue batch commits. It publishes the ID
+// on the fast-path channel (or counts the delayed entry) and updates the
+// metrics. If the channel happens to be full (cap reached) the hint is
+// dropped — the pending key is durable in Pebble, and any reaper or restart
+// will rediscover it. A drop here is a perf regression (claim falls back to
+// a scan), not a correctness one.
+func (r *TaskRepository) announceEnqueue(task *domain.Task, delayed bool, pendingSeq uint64) {
+	metrics.TaskCreatedTotal.WithLabelValues(string(task.Command)).Inc()
+	if delayed {
+		r.NoteDelayed(task.Command, task.TenantID)
+		return
+	}
+	r.publishPending(task.Command, task.TenantID, task.Priority, pendingSeq, task.ID)
+	metrics.QueueDepth.WithLabelValues(string(task.Command), "ready").Inc()
+}
+
+// precheckCreate runs, under the create key's stripe, the checks a create
+// makes before writing: an idempotent replay, the leader gate, then a task
+// already waiting with the deduplication key. found reports that the create
+// must return existing instead of writing a task.
+func (r *TaskRepository) precheckCreate(ctx context.Context, cmd domain.Command, tenantID, idempotencyKey, deduplicationKey string, dedupeKey []byte) (*domain.Task, bool, error) {
+	if idempotencyKey != "" {
+		if replay, found, err := r.replayIdempotencyKey(ctx, idempotencyKey, tenantID); found || err != nil {
+			return replay, found, err
+		}
+	}
+	if err := r.ensureLeaderDispatch(ctx); err != nil {
+		return nil, false, err
+	}
+	if dedupeKey == nil {
+		return nil, false, nil
+	}
+	existing, err := r.waitingDuplicate(dedupeKey, cmd, tenantID, deduplicationKey)
+	return existing, existing != nil, err
+}
+
+// replayIdempotencyKey looks up the task an idempotency key maps to. If it
+// exists, found is true and the original task is returned to a caller of the
+// same tenant only (mirrors the Redis behavior so SDKs see the same
+// idempotent contract regardless of backend); a caller of another tenant gets
+// domain.ErrIdempotencyConflict and never the task. A key that maps to a
+// deleted task is not found, and the caller recreates it.
+func (r *TaskRepository) replayIdempotencyKey(ctx context.Context, idempotencyKey, tenantID string) (*domain.Task, bool, error) {
+	existing, err := r.db.Get(KeyIdempo(idempotencyKey))
+	if errors.Is(err, ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("idempo lookup: %w", err)
+	}
+	if task, ferr := r.Get(ctx, string(existing)); ferr == nil {
+		replay, rerr := repository.ReplayIdempotent(task, tenantID)
+		return replay, true, rerr
+	}
+	// Idempo points to a deleted task: fall through and recreate.
+	return nil, false, nil
+}
+
+// setEnqueueMappings adds the deduplication and idempotency mappings of a new
+// task to its enqueue batch. The idempotency mapping goes last so a
+// successful commit makes the whole tuple visible.
+func setEnqueueMappings(b *pebbledb.Batch, id, idempotencyKey string, dedupeKey []byte) error {
+	if dedupeKey != nil {
+		if err := b.Set(dedupeKey, []byte(id), nil); err != nil {
+			return err
+		}
+	}
+	if idempotencyKey != "" {
+		return b.Set(KeyIdempo(idempotencyKey), []byte(id), nil)
+	}
+	return nil
+}
+
+// commitEnqueue writes a new task in one batch: its body, TTL entry, pending
+// or delayed bucket, and the deduplication and idempotency mappings when
+// present. It returns the pending sequence number (zero for a delayed task).
+func (r *TaskRepository) commitEnqueue(task *domain.Task, visibleAt time.Time, delayed bool, idempotencyKey string, dedupeKey []byte) (uint64, error) {
 	taskJSON, _ := sonic.Marshal(task)
 
 	b := r.db.Batch()
 	defer b.Close()
 
 	// Persist task body.
-	if err := b.Set(KeyTask(id), taskJSON, nil); err != nil {
-		return nil, false, err
+	if err := b.Set(KeyTask(task.ID), taskJSON, nil); err != nil {
+		return 0, err
 	}
 	// TTL index (used by CleanupExpired reaper).
-	ttlScore := unixSeconds(now.Add(taskRetention))
-	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
-		return nil, false, err
+	ttlScore := unixSeconds(task.CreatedAt.Add(taskRetention))
+	if err := b.Set(KeyTTLIndex(ttlScore, task.ID), nil, nil); err != nil {
+		return 0, err
 	}
 	// Pending vs delayed bucket.
 	var pendingSeq uint64
 	if delayed {
 		score := unixSeconds(visibleAt)
-		if err := b.Set(KeyDelayed(cmd, tenantID, score, id), nil, nil); err != nil {
-			return nil, false, err
+		if err := b.Set(KeyDelayed(task.Command, task.TenantID, score, task.ID), nil, nil); err != nil {
+			return 0, err
 		}
 	} else {
 		pendingSeq = r.db.NextSeq()
-		if err := b.Set(KeyPending(cmd, tenantID, priority, pendingSeq, id), nil, nil); err != nil {
-			return nil, false, err
+		if err := b.Set(KeyPending(task.Command, task.TenantID, task.Priority, pendingSeq, task.ID), nil, nil); err != nil {
+			return 0, err
 		}
 	}
-	// Idempotency mapping last so a successful commit makes the whole tuple visible.
-	if idempotencyKey != "" {
-		if err := b.Set(KeyIdempo(idempotencyKey), []byte(id), nil); err != nil {
-			return nil, false, err
-		}
+	if err := setEnqueueMappings(b, task.ID, idempotencyKey, dedupeKey); err != nil {
+		return 0, err
 	}
 
 	if err := r.db.CommitBatch(b); err != nil {
-		return nil, false, fmt.Errorf("commit enqueue: %w", err)
+		return 0, fmt.Errorf("commit enqueue: %w", err)
 	}
-	// Publish the ID on the fast-path channel only after the durable
-	// batch is committed. If the channel happens to be full (cap reached)
-	// we drop the hint — the pending key is durable in Pebble, and any
-	// reaper or restart will rediscover it. A drop here is a perf
-	// regression (claim falls back to a scan), not a correctness one.
-	if !delayed {
-		r.publishPending(cmd, tenantID, priority, pendingSeq, id)
-	} else {
-		r.NoteDelayed(cmd, tenantID)
+	return pendingSeq, nil
+}
+
+// lockCreateKey holds the stripe of the create's idempotency or
+// deduplication key from its lookup to its commit, and returns the unlock.
+// A create carries at most one of the two keys; taking two stripes could
+// deadlock on one non-reentrant mutex, so both together are refused.
+func (r *TaskRepository) lockCreateKey(idempotencyKey string, dedupeKey []byte) (func(), error) {
+	var key string
+	switch {
+	case idempotencyKey != "" && dedupeKey != nil:
+		return nil, domain.ErrDeduplicationWithIdempotency
+	case idempotencyKey != "":
+		key = idempotencyKey
+	case dedupeKey != nil:
+		key = string(dedupeKey)
+	default:
+		return func() {}, nil
 	}
-	metrics.TaskCreatedTotal.WithLabelValues(string(cmd)).Inc()
-	if !delayed {
-		metrics.QueueDepth.WithLabelValues(string(cmd), "ready").Inc()
-	}
-	return task, ready, nil
+	mu := r.idempoStripe(key)
+	mu.Lock()
+	return mu.Unlock, nil
 }
 
 func (r *TaskRepository) idempoStripe(key string) *sync.Mutex {
@@ -680,6 +761,9 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	if err := b.Set(KeyTask(id), updatedJSON, nil); err != nil {
 		return nil, false, err
 	}
+	if err := r.releaseDedupe(b, &t); err != nil {
+		return nil, false, err
+	}
 	// Phase 6 / M2: lease lives in memory; task body's LeaseUntil
 	// stays as the durable source of truth for recovery.
 	ttlScore := unixSeconds(now.Add(taskRetention))
@@ -818,6 +902,9 @@ collect:
 			return nil, err
 		}
 		if err := b.Set(KeyTask(h.id), updatedJSON, nil); err != nil {
+			return nil, err
+		}
+		if err := r.releaseDedupe(b, &t); err != nil {
 			return nil, err
 		}
 		// Phase 6 / M2: lease lives in-memory, recovered from task body

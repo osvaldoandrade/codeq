@@ -105,9 +105,13 @@ type CreateTask struct {
 	DelaySeconds   int32                  `protobuf:"varint,9,opt,name=delay_seconds,json=delaySeconds,proto3" json:"delay_seconds,omitempty"`
 	TraceParent    string                 `protobuf:"bytes,10,opt,name=trace_parent,json=traceParent,proto3" json:"trace_parent,omitempty"` // W3C trace context (optional)
 	TraceState     string                 `protobuf:"bytes,11,opt,name=trace_state,json=traceState,proto3" json:"trace_state,omitempty"`
+	// deduplication_key collapses this create into a task of the same tenant,
+	// command and key that still waits to be claimed (ADR 0004). Exclusive
+	// with idempotency_key and task_id.
+	DeduplicationKey string `protobuf:"bytes,12,opt,name=deduplication_key,json=deduplicationKey,proto3" json:"deduplication_key,omitempty"`
 	// task_id names the task instead of letting the server generate its ID
 	// (ADR 0008). Creating a task_id that already exists returns that task to
-	// its own tenant. Exclusive with idempotency_key.
+	// its own tenant. Exclusive with idempotency_key and deduplication_key.
 	TaskId        string `protobuf:"bytes,13,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -216,6 +220,13 @@ func (x *CreateTask) GetTraceParent() string {
 func (x *CreateTask) GetTraceState() string {
 	if x != nil {
 		return x.TraceState
+	}
+	return ""
+}
+
+func (x *CreateTask) GetDeduplicationKey() string {
+	if x != nil {
+		return x.DeduplicationKey
 	}
 	return ""
 }
@@ -717,7 +728,7 @@ const file_producerpb_proto_rawDesc = "" +
 	"\x10producerpb.proto\x12\n" +
 	"producerpb\x1a\x1fgoogle/protobuf/timestamp.proto\"\x1d\n" +
 	"\x05Hello\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\x89\x03\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\xb6\x03\n" +
 	"\n" +
 	"CreateTask\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x18\n" +
@@ -732,7 +743,8 @@ const file_producerpb_proto_rawDesc = "" +
 	"\ftrace_parent\x18\n" +
 	" \x01(\tR\vtraceParent\x12\x1f\n" +
 	"\vtrace_state\x18\v \x01(\tR\n" +
-	"traceState\x12\x17\n" +
+	"traceState\x12+\n" +
+	"\x11deduplication_key\x18\f \x01(\tR\x10deduplicationKey\x12\x17\n" +
 	"\atask_id\x18\r \x01(\tR\x06taskId\"?\n" +
 	"\x0fCreateTaskBatch\x12,\n" +
 	"\x05tasks\x18\x01 \x03(\v2\x16.producerpb.CreateTaskR\x05tasks\"\xb7\x01\n" +

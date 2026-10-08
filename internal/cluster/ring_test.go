@@ -63,3 +63,28 @@ func TestLocalRingIsLocal(t *testing.T) {
 		t.Fatalf("IsLocal disagrees with Owner")
 	}
 }
+
+func TestGenerateOwnedID(t *testing.T) {
+	r := NewRing([]Node{{ID: "a"}, {ID: "b"}, {ID: "c"}})
+	for _, owner := range r.All() {
+		n := 0
+		id, ok := r.GenerateOwnedID(owner, func() string { n++; return fmt.Sprintf("id-%d", n) })
+		if !ok || r.Owner(id).ID != owner.ID {
+			t.Fatalf("GenerateOwnedID(%s) = %q, %v; want an id owned by %s", owner.ID, id, ok, owner.ID)
+		}
+	}
+
+	// A generator that never lands on the owner must fail, never fall back
+	// to an id of another node.
+	other := r.Owner("fixed")
+	var target Node
+	for _, n := range r.All() {
+		if n.ID != other.ID {
+			target = n
+			break
+		}
+	}
+	if id, ok := r.GenerateOwnedID(target, func() string { return "fixed" }); ok || id != "" {
+		t.Fatalf("GenerateOwnedID with an unlucky generator = %q, %v; want \"\", false", id, ok)
+	}
+}

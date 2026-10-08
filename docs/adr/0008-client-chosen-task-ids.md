@@ -44,6 +44,13 @@ When present, the task is created under that ID, so `GET /tasks/{taskId}`,
 - **Exclusive with `idempotencyKey`** (`400`). A named task is already
   idempotent by its ID; two keys deciding one create would contradict
   each other.
+- **Exclusive with `deduplicationKey`** (`400`, `'taskId' and
+  'deduplicationKey' are mutually exclusive`). A named task is already
+  deduplicated by its ID, and a create joined to another waiting task
+  (ADR 0004) could not honor the ID it asked for. The service checks, in
+  order: both keys together, an invalid ID, an ID with an idempotency key,
+  an ID with a deduplication key. The producer stream acks the refusal with
+  `ok: false`.
 
 Implementation:
 
@@ -52,7 +59,8 @@ Implementation:
   existence check to the commit, so two creates of one ID never both
   write.
 - Generated IDs keep the previous path: no lookup and no lock.
-- Routing follows the ID:
+- Routing follows the ID, and the named path is taken before any choice by
+  deduplication key:
   - intra-process shards use `shardOf(taskID)`;
   - the cluster router sends the create to `ring.Owner(taskID)` with
     `EnqueueRequest.named = 11`, so the owner, not the router, performs
@@ -83,4 +91,5 @@ Implementation:
 ## References
 
 - ADR 0003 for binding namespaces.
+- ADR 0004 for the deduplication key this ID excludes.
 - `repository.ReplayIdempotent` for the cross-tenant rule.

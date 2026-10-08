@@ -15,7 +15,7 @@ import (
 func setupExpiredLease(t *testing.T, db *DB, repo *TaskRepository, cmd domain.Command) string {
 	t.Helper()
 	ctx := context.Background()
-	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 0, "", 1, "", "", time.Time{}, "")
+	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 0, "", 1, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

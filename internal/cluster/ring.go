@@ -217,3 +217,21 @@ func (l *LocalRing) GenerateLocalID(genID func() string) string {
 	// hop correctly.
 	return genID()
 }
+
+// maxOwnedIDAttempts bounds GenerateOwnedID. One draw lands on a given node
+// with probability about 1/N, so missing after this many draws is
+// negligible for any realistic cluster size.
+const maxOwnedIDAttempts = 1024
+
+// GenerateOwnedID returns an ID that owner owns, drawn by rejection from
+// genID, and false if no draw within maxOwnedIDAttempts landed on owner.
+// Unlike GenerateLocalID it never falls back to an ID of another node: the
+// callers need the placement, not just a placement hint.
+func (r *Ring) GenerateOwnedID(owner Node, genID func() string) (string, bool) {
+	for range maxOwnedIDAttempts {
+		if id := genID(); r.Owner(id).ID == owner.ID {
+			return id, true
+		}
+	}
+	return "", false
+}

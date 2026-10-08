@@ -19,7 +19,7 @@ const (
 
 func createNamed(t *testing.T, repo repository.TaskRepository, id, tenant, payload string) (*domain.Task, error) {
 	t.Helper()
-	return repo.Enqueue(context.Background(), domain.CmdGenerateMaster, payload, 5, "", 3, "", id, time.Time{}, tenant)
+	return repo.Enqueue(context.Background(), domain.CmdGenerateMaster, payload, 5, "", 3, "", "", id, time.Time{}, tenant)
 }
 
 func assertNamedTaskLifecycle(t *testing.T, repo repository.TaskRepository) {
@@ -107,7 +107,7 @@ func TestNamedTaskConcurrentCreatesWriteOneTask(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, errs[i] = repo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{}`, 5, "", 3, "", namedID, time.Time{}, namedTenant)
+			_, errs[i] = repo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", namedID, time.Time{}, namedTenant)
 		}()
 	}
 	wg.Wait()

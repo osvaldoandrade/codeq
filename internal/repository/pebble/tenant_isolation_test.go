@@ -13,10 +13,10 @@ func TestTenantQueuesStaySeparate(t *testing.T) {
 	repo := NewTaskRepository(openTestDB(t), time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	if _, err := repo.Enqueue(ctx, cmd, `{"n":1}`, 0, "", 5, "", "", time.Time{}, "tenant-a"); err != nil {
+	if _, err := repo.Enqueue(ctx, cmd, `{"n":1}`, 0, "", 5, "", "", "", time.Time{}, "tenant-a"); err != nil {
 		t.Fatalf("enqueue a: %v", err)
 	}
-	if _, err := repo.Enqueue(ctx, cmd, `{"n":2}`, 0, "", 5, "", "", time.Time{}, "tenant-b"); err != nil {
+	if _, err := repo.Enqueue(ctx, cmd, `{"n":2}`, 0, "", 5, "", "", "", time.Time{}, "tenant-b"); err != nil {
 		t.Fatalf("enqueue b: %v", err)
 	}
 

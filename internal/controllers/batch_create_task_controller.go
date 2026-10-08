@@ -78,7 +78,7 @@ func (h *batchCreateTaskController) Handle(c *gin.Context) {
 		}
 
 		idempotencyKey := storageIdempotencyKey(scope, t.Idempotency)
-		task, err := h.svc.CreateTask(c.Request.Context(), t.Command, payloadJSON, t.Priority, t.Webhook, t.MaxAttempts, idempotencyKey, t.TaskID, runAt, t.DelaySecs, tenantID)
+		task, err := h.svc.CreateTask(c.Request.Context(), t.Command, payloadJSON, t.Priority, t.Webhook, t.MaxAttempts, idempotencyKey, t.Deduplication, t.TaskID, runAt, t.DelaySecs, tenantID)
 		if errors.Is(err, domain.ErrIdempotencyConflict) || (err == nil && !bindingMayReplay(scope, task)) {
 			// Per-item 409 equivalent: the stable code and never the task.
 			recordIdempotencyConflict(c, tenantID)

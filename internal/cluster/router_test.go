@@ -100,7 +100,7 @@ func TestRouterEnqueueBiasesLocal(t *testing.T) {
 	// see TestRouterEnqueueForwardsCrossNodeID below.
 	const N = 200
 	for range N {
-		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
+		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"x":1}`, 5, "", 3, "", "", "", time.Time{}, ""); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -150,7 +150,7 @@ func TestRouterEnqueueForwardsCrossNodeID(t *testing.T) {
 
 	// Use the local repo's EnqueueWithID for a representative cross-node
 	// hand-off (the gRPC Enqueue server-side calls exactly this).
-	if _, _, err := b.repo.EnqueueWithID(ctx, crossNodeID, domain.CmdGenerateMaster, `{}`, 0, "", 3, "", time.Time{}, ""); err != nil {
+	if _, _, err := b.repo.EnqueueWithID(ctx, crossNodeID, domain.CmdGenerateMaster, `{}`, 0, "", 3, "", "", time.Time{}, ""); err != nil {
 		t.Fatalf("cross-node EnqueueWithID: %v", err)
 	}
 	bCount, _ := b.repo.PendingLength(ctx, domain.CmdGenerateMaster)
@@ -179,7 +179,7 @@ func TestRouterClaimScatterGather(t *testing.T) {
 	// Put a task DIRECTLY on node B's repo with an ID that hashes there
 	// (we don't need the hash decision here — we just want a task that lives
 	// on B but is claimed via the router on A).
-	_, _, err := b.repo.EnqueueWithID(ctx, "b-only-task", domain.CmdGenerateMaster, `{"a":1}`, 5, "", 3, "", time.Time{}, "")
+	_, _, err := b.repo.EnqueueWithID(ctx, "b-only-task", domain.CmdGenerateMaster, `{"a":1}`, 5, "", 3, "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("seed B: %v", err)
 	}
@@ -193,6 +193,129 @@ func TestRouterClaimScatterGather(t *testing.T) {
 	}
 	if claimed.ID != "b-only-task" {
 		t.Fatalf("expected b-only-task, got %s", claimed.ID)
+	}
+}
+
+// TestRouterListTasksWalksEveryNode pages a queue across two nodes over the
+// cluster RPC, then proves a node that cannot answer fails the page instead
+// of being skipped.
+func TestRouterListTasksWalksEveryNode(t *testing.T) {
+	ctx := context.Background()
+	a := newTestNode(t, "node-a")
+	b := newTestNode(t, "node-b")
+	t.Cleanup(a.stop)
+	pool := poolWithBufnet([]*testNode{a, b})
+	defer pool.Close()
+	ring := NewLocalRing(NewRing([]Node{a.node, b.node}), "node-a")
+	for i := range ring.nodes {
+		ring.nodes[i].GRPCAddr = "passthrough:///" + ring.nodes[i].GRPCAddr
+		ring.byID[ring.nodes[i].ID] = ring.nodes[i]
+	}
+	router := NewTaskRouter(a.repo, ring, pool)
+
+	want := map[string]bool{}
+	for i, repo := range []*pebblerepo.TaskRepository{a.repo, a.repo, b.repo, b.repo, b.repo} {
+		task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", "", time.Time{}, "tenant-a")
+		if err != nil {
+			t.Fatalf("enqueue %d: %v", i, err)
+		}
+		want[task.ID] = true
+	}
+
+	got := map[string]bool{}
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 10 {
+			t.Fatal("listing never ended")
+		}
+		page, err := router.ListTasks(ctx, domain.CmdGenerateMaster, "tenant-a", domain.QueueStateReady, 2, cursor)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		for _, task := range page.Tasks {
+			if got[task.ID] || !want[task.ID] {
+				t.Fatalf("page %d: unexpected or repeated task %s", pages, task.ID)
+			}
+			got[task.ID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if len(got) != len(want) {
+		t.Fatalf("listed %d of %d tasks", len(got), len(want))
+	}
+
+	b.stop()
+	if _, err := router.ListTasks(ctx, domain.CmdGenerateMaster, "tenant-a", domain.QueueStateReady, 10, ""); err == nil {
+		t.Fatal("listing with node-b down succeeded; want an error, not a partial page")
+	}
+}
+
+const (
+	dedupeNodeA = "node-a"
+	dedupeNodeB = "node-b"
+)
+
+// TestRouterDeduplicationKeyRoutesToKeyOwner proves that creates of one
+// deduplication key entering through different nodes meet on the node that
+// owns the key and resolve to one waiting task, including across the gRPC
+// hop (which must carry the key both ways).
+func TestRouterDeduplicationKeyRoutesToKeyOwner(t *testing.T) {
+	ctx := context.Background()
+	a := newTestNode(t, dedupeNodeA)
+	b := newTestNode(t, dedupeNodeB)
+	t.Cleanup(a.stop)
+	t.Cleanup(b.stop)
+	nodes := []*testNode{a, b}
+	pool := poolWithBufnet(nodes)
+	defer pool.Close()
+
+	routers := make(map[string]*TaskRouter, len(nodes))
+	repos := map[string]*pebblerepo.TaskRepository{dedupeNodeA: a.repo, dedupeNodeB: b.repo}
+	for _, n := range nodes {
+		ring := NewLocalRing(NewRing([]Node{a.node, b.node}), n.node.ID)
+		for i := range ring.nodes {
+			ring.nodes[i].GRPCAddr = "passthrough:///" + ring.nodes[i].GRPCAddr
+			ring.byID[ring.nodes[i].ID] = ring.nodes[i]
+		}
+		routers[n.node.ID] = NewTaskRouter(n.repo, ring, pool)
+	}
+	ring := NewRing([]Node{a.node, b.node})
+
+	keys := map[string]string{}
+	for i := 0; len(keys) < 2 && i < 1000; i++ {
+		key := fmt.Sprintf("sync-%d", i)
+		owner := ring.Owner(string(pebblerepo.KeyDedupe(domain.CmdGenerateMaster, "tenant-a", key))).ID
+		if _, ok := keys[owner]; !ok {
+			keys[owner] = key
+		}
+	}
+	if len(keys) != 2 {
+		t.Fatal("could not find a key owned by each node")
+	}
+
+	for owner, key := range keys {
+		entries := []string{dedupeNodeA, dedupeNodeB, dedupeNodeA}
+		ids := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			task, err := routers[entry].Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", key, "", time.Time{}, "tenant-a")
+			if err != nil {
+				t.Fatalf("enqueue via %s: %v", entry, err)
+			}
+			if task.DeduplicationKey != key {
+				t.Fatalf("task via %s lost the key: %q", entry, task.DeduplicationKey)
+			}
+			ids = append(ids, task.ID)
+		}
+		if ids[0] != ids[1] || ids[1] != ids[2] {
+			t.Fatalf("key %s owned by %s: creates resolved to %v, want one task", key, owner, ids)
+		}
+		stats, err := repos[owner].QueueStats(ctx, domain.CmdGenerateMaster, "tenant-a")
+		if err != nil || stats.Ready != 1 {
+			t.Fatalf("owner %s ready = %+v, %v; want 1", owner, stats, err)
+		}
 	}
 }
 
@@ -223,18 +346,18 @@ func TestRouterNamedCreateRunsOnTheIDOwner(t *testing.T) {
 	}
 	repos := map[string]*pebblerepo.TaskRepository{"node-a": a.repo, "node-b": b.repo}
 	for owner, id := range ids {
-		task, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":1}`, 5, "", 3, "", id, time.Time{}, "tenant-a")
+		task, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":1}`, 5, "", 3, "", "", id, time.Time{}, "tenant-a")
 		if err != nil || task.ID != id {
 			t.Fatalf("named create of %s (owner %s) = %+v, %v", id, owner, task, err)
 		}
 		if _, err := repos[owner].Get(ctx, id); err != nil {
 			t.Fatalf("task %s not on its owner %s: %v", id, owner, err)
 		}
-		replay, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":2}`, 5, "", 3, "", id, time.Time{}, "tenant-a")
+		replay, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":2}`, 5, "", 3, "", "", id, time.Time{}, "tenant-a")
 		if err != nil || replay.ID != id || replay.Payload != `{"n":1}` {
 			t.Fatalf("replay of %s = %+v, %v", id, replay, err)
 		}
-		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", id, time.Time{}, "tenant-b"); !errors.Is(err, domain.ErrTaskIDConflict) {
+		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", id, time.Time{}, "tenant-b"); !errors.Is(err, domain.ErrTaskIDConflict) {
 			t.Fatalf("cross-tenant create of %s (owner %s): err %v, want ErrTaskIDConflict", id, owner, err)
 		}
 	}
