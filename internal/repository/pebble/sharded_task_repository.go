@@ -353,3 +353,34 @@ func requeueOrDefer(ctx context.Context, sh *TaskRepository, cmd domain.Command,
 
 // ---- compile-time check ----
 var _ repository.TaskRepository = (*ShardedTaskRepository)(nil)
+
+// OnShard returns a view of the sharded repository whose creates place the
+// task, and its idempotency mapping, on shard idx; every other method is the
+// sharded one. A writer that leads only that shard's Raft group (the
+// recurring schedule runner leads the catalog shard) can then enqueue
+// without depending on the leaders of the other shards.
+func (s *ShardedTaskRepository) OnShard(idx int) repository.TaskRepository {
+	return &shardPinnedRepository{ShardedTaskRepository: s, idx: idx}
+}
+
+type shardPinnedRepository struct {
+	*ShardedTaskRepository
+	idx int
+}
+
+// Enqueue creates the task on the pinned shard.
+func (p *shardPinnedRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := p.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
+	return task, err
+}
+
+// EnqueueWithReady creates the task on the pinned shard with an ID that
+// shard owns, so every later lookup by ID routes back to it. A client-chosen
+// ID or a deduplication key keeps the ordinary routing: those keys decide
+// their own shard.
+func (p *shardPinnedRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if taskID != "" || deduplicationKey != "" {
+		return p.ShardedTaskRepository.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
+	}
+	return p.shards[p.idx].EnqueueWithID(ctx, p.idOnShard(p.idx), cmd, payload, priority, webhook, maxAttempts, idempotencyKey, "", visibleAt, tenantID)
+}

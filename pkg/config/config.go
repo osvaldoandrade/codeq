@@ -156,6 +156,10 @@ type RaftConfig struct {
 	// TopicCatalogProtocol gates replicated QueueTopic writes during rolling
 	// upgrades. Empty keeps the Raft catalog fail closed; "v1" enables it.
 	TopicCatalogProtocol string `yaml:"topicCatalogProtocol"`
+	// ScheduleCatalogProtocol gates replicated recurring schedules during
+	// rolling upgrades. Empty keeps schedules fail closed (503, no firing);
+	// "v1" enables them once every peer runs a compatible build.
+	ScheduleCatalogProtocol string `yaml:"scheduleCatalogProtocol"`
 }
 
 type RateLimitConfig struct {
@@ -333,6 +337,9 @@ func applyEnvAndDefaults(c *Config) {
 	}
 	if v := os.Getenv("RAFT_TOPIC_CATALOG_PROTOCOL"); v != "" {
 		c.Raft.TopicCatalogProtocol = strings.TrimSpace(v)
+	}
+	if v := os.Getenv("RAFT_SCHEDULE_CATALOG_PROTOCOL"); v != "" {
+		c.Raft.ScheduleCatalogProtocol = strings.TrimSpace(v)
 	}
 	if v := os.Getenv("TRACING_ENABLED"); v != "" {
 		c.TracingEnabled = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
@@ -683,6 +690,9 @@ func (c *Config) Validate() error {
 		}
 		if protocol := strings.TrimSpace(c.Raft.TopicCatalogProtocol); protocol != "" && protocol != "v1" {
 			errs = append(errs, fmt.Sprintf("raft.topicCatalogProtocol %q is unsupported (expected v1 or empty)", protocol))
+		}
+		if protocol := strings.TrimSpace(c.Raft.ScheduleCatalogProtocol); protocol != "" && protocol != "v1" {
+			errs = append(errs, fmt.Sprintf("raft.scheduleCatalogProtocol %q is unsupported (expected v1 or empty)", protocol))
 		}
 	}
 
