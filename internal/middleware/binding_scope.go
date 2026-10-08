@@ -48,6 +48,7 @@ var (
 		{http.MethodPost, routeTasksClaim}:               subscribeOnly,
 		{http.MethodPost, routeTasksClaim + "/batch"}:    subscribeOnly,
 		{http.MethodPost, routeTaskByID + "/heartbeat"}:  subscribeOnly,
+		{http.MethodPost, routeTaskByID + "/progress"}:   subscribeOnly,
 		{http.MethodPost, routeTaskByID + "/abandon"}:    subscribeOnly,
 		{http.MethodPost, routeTaskByID + "/nack"}:       subscribeOnly,
 		{http.MethodPost, routeTaskByID + "/result"}:     subscribeOnly,

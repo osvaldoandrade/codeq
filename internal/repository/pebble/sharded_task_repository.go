@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"hash/fnv"
 	"sync/atomic"
@@ -166,6 +167,11 @@ func (s *ShardedTaskRepository) ClaimMany(ctx context.Context, workerID string, 
 
 func (s *ShardedTaskRepository) Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error {
 	return s.shards[s.shardOf(taskID)].Heartbeat(ctx, taskID, workerID, extendSeconds)
+}
+
+// Progress routes to the shard that owns taskID.
+func (s *ShardedTaskRepository) Progress(ctx context.Context, taskID string, workerID string, progress json.RawMessage) error {
+	return s.shards[s.shardOf(taskID)].Progress(ctx, taskID, workerID, progress)
 }
 
 func (s *ShardedTaskRepository) Abandon(ctx context.Context, taskID string, workerID string) error {

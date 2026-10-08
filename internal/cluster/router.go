@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,7 +26,7 @@ import (
 // Routing decisions, in one place so they're easy to audit:
 //   - Enqueue / EnqueueWithReady → router picks the ID, hash → owner.
 //     Owner == self ⇒ local EnqueueWithID; else gRPC.Enqueue.
-//   - Get / Heartbeat / Abandon / Nack → ID hash routes directly.
+//   - Get / Heartbeat / Progress / Abandon / Nack → ID hash routes directly.
 //   - Claim → scatter-gather LocalClaim across every node; first
 //     non-empty response wins. Workers can pass a shard-affinity header
 //     (handled at the controller layer) to force a single-node claim.
@@ -182,6 +183,35 @@ func (r *TaskRouter) Heartbeat(ctx context.Context, taskID string, workerID stri
 		return errors.New("not-found")
 	case resp.NotOwner:
 		return errors.New("not-owner")
+	}
+	return nil
+}
+
+// Progress stores the lease holder's progress value on the node that
+// owns taskID, locally or through the owner's Progress RPC.
+func (r *TaskRouter) Progress(ctx context.Context, taskID string, workerID string, progress json.RawMessage) error {
+	if r.ring.IsLocal(taskID) {
+		return r.local.Progress(ctx, taskID, workerID, progress)
+	}
+	owner := r.ring.Owner(taskID)
+	if !r.peerHasLikely(owner.ID, taskID) {
+		return errors.New("not-found")
+	}
+	c, err := r.pool.Client(owner)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Progress(ctx, &clusterpb.ProgressRequest{TaskId: taskID, WorkerId: workerID, Progress: progress})
+	if err != nil {
+		return err
+	}
+	switch {
+	case resp.NotFound:
+		return errors.New("not-found")
+	case resp.NotOwner:
+		return errors.New("not-owner")
+	case resp.NotInProgress:
+		return errors.New("not-in-progress")
 	}
 	return nil
 }

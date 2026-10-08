@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -932,6 +933,49 @@ func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID 
 	// pre-M2 behavior where Heartbeat blind-set the lease key).
 	r.leases.Extend(taskID, workerID, until.Unix())
 	return nil
+}
+
+// ---------- Progress ----------
+
+// Progress replaces the progress value of an in-progress task leased to
+// workerID. It rewrites only the task body, in one batch on the same
+// replicated write path as Heartbeat, and leaves the lease and queue
+// indexes untouched. The value is never cleared by later transitions.
+func (r *TaskRepository) Progress(ctx context.Context, taskID string, workerID string, progress json.RawMessage) error {
+	if err := r.ensureLeaderDispatch(ctx); err != nil {
+		return err
+	}
+	taskJSON, err := r.db.Get(KeyTask(taskID))
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("not-found")
+		}
+		return err
+	}
+	var t domain.Task
+	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
+		return fmt.Errorf("unmarshal task: %w", err)
+	}
+	if t.WorkerID != workerID {
+		return fmt.Errorf("not-owner")
+	}
+	if t.Status != domain.StatusInProgress {
+		return fmt.Errorf("not-in-progress")
+	}
+
+	t.Progress = progress
+	t.UpdatedAt = r.now()
+	updated, err := sonic.Marshal(&t)
+	if err != nil {
+		return fmt.Errorf("marshal task: %w", err)
+	}
+
+	b := r.db.Batch()
+	defer b.Close()
+	if err := b.Set(KeyTask(taskID), updated, nil); err != nil {
+		return err
+	}
+	return r.db.CommitBatch(b)
 }
 
 // ---------- Abandon ----------

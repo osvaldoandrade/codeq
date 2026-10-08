@@ -3,7 +3,7 @@
 // reachable on the cluster network.
 //
 // Service shape:
-//   - Operations that know a task ID (Get/Heartbeat/Result/Nack/Abandon)
+//   - Operations that know a task ID (Get/Heartbeat/Progress/Result/Nack/Abandon)
 //     route directly via consistent hash on the ID.
 //   - Operations that do NOT know a task ID (LocalClaim, PendingLength,
 //     AdminQueues) target a specific node by ID and act on that node's
@@ -40,6 +40,7 @@ const (
 	TaskNode_Enqueue_FullMethodName          = "/clusterpb.TaskNode/Enqueue"
 	TaskNode_GetTask_FullMethodName          = "/clusterpb.TaskNode/GetTask"
 	TaskNode_Heartbeat_FullMethodName        = "/clusterpb.TaskNode/Heartbeat"
+	TaskNode_Progress_FullMethodName         = "/clusterpb.TaskNode/Progress"
 	TaskNode_Abandon_FullMethodName          = "/clusterpb.TaskNode/Abandon"
 	TaskNode_Nack_FullMethodName             = "/clusterpb.TaskNode/Nack"
 	TaskNode_SaveResult_FullMethodName       = "/clusterpb.TaskNode/SaveResult"
@@ -60,6 +61,7 @@ type TaskNodeClient interface {
 	Enqueue(ctx context.Context, in *EnqueueRequest, opts ...grpc.CallOption) (*EnqueueResponse, error)
 	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	Progress(ctx context.Context, in *ProgressRequest, opts ...grpc.CallOption) (*ProgressResponse, error)
 	Abandon(ctx context.Context, in *AbandonRequest, opts ...grpc.CallOption) (*AbandonResponse, error)
 	Nack(ctx context.Context, in *NackRequest, opts ...grpc.CallOption) (*NackResponse, error)
 	SaveResult(ctx context.Context, in *SaveResultRequest, opts ...grpc.CallOption) (*SaveResultResponse, error)
@@ -106,6 +108,16 @@ func (c *taskNodeClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HeartbeatResponse)
 	err := c.cc.Invoke(ctx, TaskNode_Heartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskNodeClient) Progress(ctx context.Context, in *ProgressRequest, opts ...grpc.CallOption) (*ProgressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProgressResponse)
+	err := c.cc.Invoke(ctx, TaskNode_Progress_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +232,7 @@ type TaskNodeServer interface {
 	Enqueue(context.Context, *EnqueueRequest) (*EnqueueResponse, error)
 	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
 	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	Progress(context.Context, *ProgressRequest) (*ProgressResponse, error)
 	Abandon(context.Context, *AbandonRequest) (*AbandonResponse, error)
 	Nack(context.Context, *NackRequest) (*NackResponse, error)
 	SaveResult(context.Context, *SaveResultRequest) (*SaveResultResponse, error)
@@ -250,6 +263,9 @@ func (UnimplementedTaskNodeServer) GetTask(context.Context, *GetTaskRequest) (*G
 }
 func (UnimplementedTaskNodeServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedTaskNodeServer) Progress(context.Context, *ProgressRequest) (*ProgressResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Progress not implemented")
 }
 func (UnimplementedTaskNodeServer) Abandon(context.Context, *AbandonRequest) (*AbandonResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Abandon not implemented")
@@ -352,6 +368,24 @@ func _TaskNode_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TaskNodeServer).Heartbeat(ctx, req.(*HeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskNode_Progress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProgressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskNodeServer).Progress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskNode_Progress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskNodeServer).Progress(ctx, req.(*ProgressRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -554,6 +588,10 @@ var TaskNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _TaskNode_Heartbeat_Handler,
+		},
+		{
+			MethodName: "Progress",
+			Handler:    _TaskNode_Progress_Handler,
 		},
 		{
 			MethodName: "Abandon",

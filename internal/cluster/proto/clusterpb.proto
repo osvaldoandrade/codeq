@@ -3,7 +3,7 @@
 // reachable on the cluster network.
 //
 // Service shape:
-//   - Operations that know a task ID (Get/Heartbeat/Result/Nack/Abandon)
+//   - Operations that know a task ID (Get/Heartbeat/Progress/Result/Nack/Abandon)
 //     route directly via consistent hash on the ID.
 //   - Operations that do NOT know a task ID (LocalClaim, PendingLength,
 //     AdminQueues) target a specific node by ID and act on that node's
@@ -45,6 +45,7 @@ message Task {
   google.protobuf.Timestamp updated_at = 17;
   string trace_parent = 18;
   string trace_state = 19;
+  bytes progress = 21;        // raw JSON reported by the lease holder; empty when never reported
 }
 
 message ResultRecord {
@@ -72,6 +73,17 @@ message HeartbeatRequest {
 message HeartbeatResponse {
   bool not_found = 1;
   bool not_owner = 2;
+}
+
+message ProgressRequest {
+  string task_id = 1;
+  string worker_id = 2;
+  bytes progress = 3;          // raw JSON, already validated by the HTTP layer
+}
+message ProgressResponse {
+  bool not_found = 1;
+  bool not_owner = 2;
+  bool not_in_progress = 3;
 }
 
 message AbandonRequest {
@@ -200,6 +212,7 @@ service TaskNode {
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc Progress(ProgressRequest) returns (ProgressResponse);
   rpc Abandon(AbandonRequest) returns (AbandonResponse);
   rpc Nack(NackRequest) returns (NackResponse);
   rpc SaveResult(SaveResultRequest) returns (SaveResultResponse);
