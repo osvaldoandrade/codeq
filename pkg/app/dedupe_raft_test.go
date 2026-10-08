@@ -60,7 +60,7 @@ func createDeduplicated(t *testing.T, node *raftTestNode, key string) string {
 	var task struct {
 		ID string `json:"id"`
 	}
-	body := map[string]any{"command": dedupeRaftCommand, keyPayload: map[string]string{"channel": key}, "deduplicationKey": key}
+	body := map[string]any{keyCommand: dedupeRaftCommand, keyPayload: map[string]string{"channel": key}, "deduplicationKey": key}
 	status, raw := doJSON(t, context.Background(), http.MethodPost, node.server.URL+"/v1/codeq/tasks", "dev-token", body, &task)
 	if status != http.StatusAccepted || task.ID == "" {
 		t.Fatalf("create %s on %s: status %d body %s", key, node.id, status, raw)
