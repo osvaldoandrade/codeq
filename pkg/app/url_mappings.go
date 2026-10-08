@@ -59,6 +59,11 @@ func SetupMappings(app *Application) {
 		topicAdmin.DELETE("/topics/:topicName", fwd.Single(), topicHandler.Delete)
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
 		admin.GET("/queues/:command/tasks", controllers.NewListTasksController(app.Scheduler).Handle)
+		// Dead-letter administration (ADR 0009). By-ID writes forward like
+		// any single-task write; the bulk requeue is gated like a batch.
+		admin.POST("/tasks/:id/requeue", fwd.Single(), controllers.NewRequeueTaskController(app.Scheduler).Handle)
+		admin.DELETE("/tasks/:id", fwd.Single(), controllers.NewDeleteTaskController(app.Scheduler).Handle)
+		admin.POST("/queues/:command/dlq/requeue", fwd.Batch(), controllers.NewRequeueDLQController(app.Scheduler).Handle)
 		topicAdmin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
 
 		// Novo: limpeza administrativa de tasks expiradas no índice Z

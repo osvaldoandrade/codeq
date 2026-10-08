@@ -32,6 +32,17 @@ type TaskRepository interface {
 	// resuming after cursor (empty for the first page). See ADR 0005.
 	ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error)
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
+	// RequeueDLQTask moves one dead-lettered task back to the ready queue
+	// of its priority with no attempts and no error. It fails with
+	// "not-found" or domain.ErrTaskNotInDLQ. See ADR 0009.
+	RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error)
+	// RequeueDLQ requeues up to limit tasks of the (cmd, tenant) dead-letter
+	// queue and reports whether entries remain. limit 0 only reports.
+	RequeueDLQ(ctx context.Context, cmd domain.Command, tenantID string, limit int) (*domain.DLQRequeue, error)
+	// DeleteTask removes a task that is not in progress, its result and the
+	// queue index entry that points at it. It fails with "not-found" or
+	// domain.ErrTaskInProgress. See ADR 0009 for what it leaves behind.
+	DeleteTask(ctx context.Context, taskID string) error
 }
 
 // ResultRepository stores task results and the completion transition.
