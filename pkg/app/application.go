@@ -6,14 +6,15 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
+	schedulesapp "github.com/osvaldoandrade/codeq/internal/application/schedules"
 	topicsapp "github.com/osvaldoandrade/codeq/internal/application/topics"
 	"github.com/osvaldoandrade/codeq/internal/leaderforward"
 	"github.com/osvaldoandrade/codeq/internal/ratelimit"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
-
-	"github.com/gin-gonic/gin"
 )
 
 // RaftGroupStatus is the small slice of raft state the status endpoint
@@ -35,6 +36,7 @@ type Application struct {
 	Results           services.ResultsService
 	Subs              services.SubscriptionService
 	Topics            *topicsapp.Service
+	Schedules         *schedulesapp.Service
 	Logger            *slog.Logger
 	TZ                *time.Location
 	ProducerValidator auth.Validator

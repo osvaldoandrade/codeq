@@ -120,6 +120,30 @@ var (
 		},
 		[]string{labelRoute, "kind"},
 	)
+
+	// ScheduleFiresTotal counts recurring schedule slots by outcome:
+	// enqueued (task created or replayed and the slot recorded), failed
+	// (the create failed; retried on the next tick) or superseded (the spec
+	// changed while firing; the next tick follows the new spec).
+	ScheduleFiresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "schedule_fires_total",
+			Help:      "Total number of recurring schedule slots fired, labeled by outcome.",
+		},
+		[]string{"outcome"},
+	)
+
+	// ScheduleFireDelaySeconds is how late a slot was enqueued relative to
+	// its scheduled time.
+	ScheduleFireDelaySeconds = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "schedule_fire_delay_seconds",
+			Help:      "Delay between a recurring schedule slot and the enqueue of its task.",
+			Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60, 300},
+		},
+	)
 )
 
 func init() {
@@ -135,5 +159,7 @@ func init() {
 		LeaderForwardTotal,
 		IdempotencyConflictTotal,
 		QueueDepth,
+		ScheduleFiresTotal,
+		ScheduleFireDelaySeconds,
 	)
 }

@@ -1,9 +1,11 @@
 package app
 
 import (
+	schedulesapp "github.com/osvaldoandrade/codeq/internal/application/schedules"
 	topicsapp "github.com/osvaldoandrade/codeq/internal/application/topics"
 	"github.com/osvaldoandrade/codeq/internal/controllers"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
+	scheduleshttp "github.com/osvaldoandrade/codeq/internal/server/http/schedules"
 	topicshttp "github.com/osvaldoandrade/codeq/internal/server/http/topics"
 
 	"github.com/gin-gonic/gin"
@@ -56,6 +58,15 @@ func SetupMappings(app *Application) {
 		topicAdmin.PUT("/topics/:topicName", fwd.Single(), topicHandler.Upsert)
 		topicAdmin.GET("/topics/:topicName", topicHandler.Get)
 		topicAdmin.DELETE("/topics/:topicName", fwd.Single(), topicHandler.Delete)
+		scheduleService := app.Schedules
+		if scheduleService == nil {
+			scheduleService = schedulesapp.NewUnavailableService("schedule service not configured")
+		}
+		scheduleHandler := scheduleshttp.NewHandler(scheduleService)
+		admin.PUT("/schedules/:name", fwd.Single(), scheduleHandler.Upsert)
+		admin.GET("/schedules/:name", scheduleHandler.Get)
+		admin.GET("/schedules", scheduleHandler.List)
+		admin.DELETE("/schedules/:name", fwd.Single(), scheduleHandler.Delete)
 		admin.GET("/queues", controllers.NewQueuesAdminController(app.Scheduler).Handle)
 		topicAdmin.GET("/queues/:command", controllers.NewQueueStatsController(app.Scheduler).Handle)
 

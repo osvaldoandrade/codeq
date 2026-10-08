@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	schedulesapp "github.com/osvaldoandrade/codeq/internal/application/schedules"
 	topicsapp "github.com/osvaldoandrade/codeq/internal/application/topics"
 	"github.com/osvaldoandrade/codeq/internal/cluster"
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
@@ -379,6 +380,7 @@ func (rt *pebbleRuntime) finish() (*Application, error) {
 	)
 	go cleanup.Start(rt.bgCtx)
 	app := rt.newApplication(rt.httpEngine(), scheduler, results)
+	app.Schedules = rt.startSchedules(notifier, callback)
 	if err := rt.applyOptions(app); err != nil {
 		return nil, err
 	}
@@ -423,6 +425,36 @@ func (rt *pebbleRuntime) startReapers(callback services.ResultCallbackService) {
 		}
 		pebblerepo.NewReaper(shardDB, rt.loc, rt.logger, shardOpts).Start(rt.bgCtx)
 	}
+}
+
+// startSchedules wires the recurring schedule catalog on the first shard
+// and, when this deployment can fire each slot exactly once, starts the
+// runner gated on that shard's leadership (ADR 0006). Scheduled tasks are
+// created on the first shard too, so the runner never depends on the
+// leaders of the other shards.
+func (rt *pebbleRuntime) startSchedules(notifier services.NotifierService, callback services.ResultCallbackService) *schedulesapp.Service {
+	if rt.cfg.Cluster.Enabled {
+		return schedulesapp.NewUnavailableService("cluster mode keeps one catalog per node; use Raft for replicated schedules")
+	}
+	if rt.cfg.Raft.Enabled && strings.TrimSpace(rt.cfg.Raft.ScheduleCatalogProtocol) != "v1" {
+		return schedulesapp.NewUnavailableService("raft.scheduleCatalogProtocol=v1 is required for replicated schedules")
+	}
+	store := topicpebble.NewScheduleStore(rt.dbs[0])
+	var tasks repository.TaskRepository = rt.taskShards[0]
+	if sharded, ok := rt.taskRepo.(*pebblerepo.ShardedTaskRepository); ok {
+		tasks = sharded.OnShard(0)
+	}
+	creator := services.NewSchedulerService(
+		tasks, notifier, callback, rt.loc, time.Now,
+		rt.cfg.DefaultLeaseSeconds, rt.cfg.RequeueInspectLimit, rt.cfg.MaxAttemptsDefault,
+		rt.cfg.BackoffPolicy, rt.cfg.BackoffBaseSeconds, rt.cfg.BackoffMaxSeconds,
+	)
+	opts := schedulesapp.RunnerOptions{Logger: rt.logger}
+	if rt.cfg.Raft.Enabled && len(rt.raftNodes) > 0 && rt.raftNodes[0] != nil {
+		opts.LeaderGate = rt.raftNodes[0].IsLeader
+	}
+	schedulesapp.NewRunner(store, creator, schedulesapp.ParseCron, opts).Start(rt.bgCtx)
+	return schedulesapp.NewService(store, schedulesapp.ParseCron, time.Now)
 }
 
 func (rt *pebbleRuntime) httpEngine() *gin.Engine {
