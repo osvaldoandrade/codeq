@@ -113,6 +113,23 @@ func (s *Server) Heartbeat(ctx context.Context, req *clusterpb.HeartbeatRequest)
 	return &clusterpb.HeartbeatResponse{}, nil
 }
 
+// Progress stores the lease holder's progress value on the local shard.
+func (s *Server) Progress(ctx context.Context, req *clusterpb.ProgressRequest) (*clusterpb.ProgressResponse, error) {
+	if err := s.Tasks.Progress(ctx, req.TaskId, req.WorkerId, req.Progress); err != nil {
+		switch {
+		case isNotFound(err):
+			return &clusterpb.ProgressResponse{NotFound: true}, nil
+		case isNotOwner(err):
+			return &clusterpb.ProgressResponse{NotOwner: true}, nil
+		case isNotInProgress(err):
+			return &clusterpb.ProgressResponse{NotInProgress: true}, nil
+		default:
+			return nil, err
+		}
+	}
+	return &clusterpb.ProgressResponse{}, nil
+}
+
 func (s *Server) Abandon(ctx context.Context, req *clusterpb.AbandonRequest) (*clusterpb.AbandonResponse, error) {
 	if err := s.Tasks.Abandon(ctx, req.TaskId, req.WorkerId); err != nil {
 		switch {
@@ -313,6 +330,7 @@ func domainTaskToProto(t *domain.Task) *clusterpb.Task {
 		TraceParent:       t.TraceParent,
 		TraceState:        t.TraceState,
 		DeduplicationKey:  t.DeduplicationKey,
+		Progress:          t.Progress,
 	}
 }
 
@@ -338,6 +356,7 @@ func protoToDomainTask(p *clusterpb.Task) *domain.Task {
 		TraceParent:       p.TraceParent,
 		TraceState:        p.TraceState,
 		DeduplicationKey:  p.DeduplicationKey,
+		Progress:          p.Progress,
 	}
 	if p.CreatedAt != nil {
 		t.CreatedAt = p.CreatedAt.AsTime()

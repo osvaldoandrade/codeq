@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding"
+	"encoding/json"
 	"time"
 )
 
@@ -56,6 +57,10 @@ type Task struct {
 	DeduplicationKey string    `json:"deduplicationKey,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	// Progress is the last JSON value reported by the worker holding the
+	// lease. It is kept across nack, abandon and retries; absent until the
+	// first report.
+	Progress json.RawMessage `json:"progress,omitempty"`
 }
 
 var (

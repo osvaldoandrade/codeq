@@ -111,7 +111,7 @@ func newBindingRouter(cfg *config.Config) *routerFixture {
 	anyAuth := v1.Group("", AnyAuthMiddleware(f.worker, f.producer, cfg))
 	producer.POST("/tasks", ok)
 	producer.POST("/tasks/batch", ok)
-	for _, p := range []string{"/tasks/claim", "/tasks/claim/batch", "/tasks/:id/heartbeat", "/tasks/:id/abandon", "/tasks/:id/nack", "/tasks/:id/result", "/tasks/batch/results"} {
+	for _, p := range []string{"/tasks/claim", "/tasks/claim/batch", "/tasks/:id/heartbeat", "/tasks/:id/progress", "/tasks/:id/abandon", "/tasks/:id/nack", "/tasks/:id/result", "/tasks/batch/results"} {
 		worker.POST(p, ok)
 	}
 	worker.POST("/workers/subscriptions", RequireWorkerScope("codeq:subscribe"), ok)
@@ -161,6 +161,7 @@ var bindingRouteMatrix = []routeCase{
 	{http.MethodPost, routeTasksClaim, http.StatusUnauthorized, http.StatusOK},
 	{http.MethodPost, "/v1/codeq/tasks/claim/batch", http.StatusUnauthorized, http.StatusOK},
 	{http.MethodPost, "/v1/codeq/tasks/t1/heartbeat", http.StatusUnauthorized, http.StatusOK},
+	{http.MethodPost, "/v1/codeq/tasks/t1/progress", http.StatusUnauthorized, http.StatusOK},
 	{http.MethodPost, "/v1/codeq/tasks/t1/abandon", http.StatusUnauthorized, http.StatusOK},
 	{http.MethodPost, "/v1/codeq/tasks/t1/nack", http.StatusUnauthorized, http.StatusOK},
 	{http.MethodPost, pathTask1 + "/result", http.StatusUnauthorized, http.StatusOK},

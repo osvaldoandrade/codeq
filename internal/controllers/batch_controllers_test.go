@@ -57,6 +57,10 @@ func (m *mockSchedulerService) ClaimManyTasks(ctx context.Context, workerID stri
 func (m *mockSchedulerService) Heartbeat(context.Context, string, string, int) error {
 	return nil
 }
+
+func (m *mockSchedulerService) ReportProgress(context.Context, string, string, json.RawMessage) error {
+	return nil
+}
 func (m *mockSchedulerService) Abandon(context.Context, string, string) error { return nil }
 func (m *mockSchedulerService) NackTask(context.Context, string, string, int, string) (int, bool, error) {
 	return 0, false, nil

@@ -30,6 +30,7 @@ func SetupMappings(app *Application) {
 		worker.POST("/tasks/claim", middleware.RequireWorkerScope("codeq:claim"), fwd.Claim(), middleware.RateLimitWorkerClaim(app.RateLimiter, app.Config), controllers.NewClaimTaskController(app.Scheduler).Handle)
 		worker.POST("/tasks/claim/batch", middleware.RequireWorkerScope("codeq:claim"), fwd.Batch(), middleware.RateLimitWorkerClaim(app.RateLimiter, app.Config), controllers.NewBatchClaimTaskController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/heartbeat", middleware.RequireWorkerScope("codeq:heartbeat"), fwd.Single(), controllers.NewHeartbeatController(app.Scheduler).Handle)
+		worker.POST("/tasks/:id/progress", middleware.RequireWorkerScope("codeq:heartbeat"), fwd.Single(), controllers.NewProgressController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/abandon", middleware.RequireWorkerScope("codeq:abandon"), fwd.Single(), controllers.NewAbandonController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/nack", middleware.RequireWorkerScope("codeq:nack"), fwd.Single(), controllers.NewNackController(app.Scheduler).Handle)
 		worker.POST("/tasks/:id/result", middleware.RequireWorkerScope("codeq:result"), fwd.Single(), controllers.NewSubmitResultController(app.Results).Handle)

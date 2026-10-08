@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"strings"
@@ -28,6 +29,9 @@ type SchedulerService interface {
 	// polling for the batch path.
 	ClaimManyTasks(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, max int, tenantID string) ([]*domain.Task, error)
 	Heartbeat(ctx context.Context, taskID, workerID string, extendSeconds int) error
+	// ReportProgress stores the progress value the lease holder reports for
+	// an in-progress task. It is validated by the caller.
+	ReportProgress(ctx context.Context, taskID, workerID string, progress json.RawMessage) error
 	Abandon(ctx context.Context, taskID, workerID string) error
 	NackTask(ctx context.Context, taskID, workerID string, delaySeconds int, reason string) (int, bool, error)
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
@@ -254,6 +258,11 @@ func (s *schedulerService) Heartbeat(ctx context.Context, taskID, workerID strin
 		extendSeconds = s.defaultLease
 	}
 	return s.repo.Heartbeat(ctx, taskID, workerID, extendSeconds)
+}
+
+// ReportProgress passes the validated progress value to the repository.
+func (s *schedulerService) ReportProgress(ctx context.Context, taskID, workerID string, progress json.RawMessage) error {
+	return s.repo.Progress(ctx, taskID, workerID, progress)
 }
 
 func (s *schedulerService) Abandon(ctx context.Context, taskID, workerID string) error {

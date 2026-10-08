@@ -140,6 +140,16 @@ curl -X POST http://localhost:8080/v1/codeq/tasks/claim \
   -d '{"commands":["GENERATE_MASTER"],"leaseSeconds":120,"waitSeconds":10}'
 ```
 
+Report progress while holding the lease (any JSON value up to 64 KiB, kept
+across retries and returned by `GET /v1/codeq/tasks/<id>`):
+
+```bash
+curl -X POST http://localhost:8080/v1/codeq/tasks/<id>/progress \
+  -H 'Authorization: Bearer <worker-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"progress":{"processed":250,"total":1000}}'
+```
+
 Submit a result:
 
 ```bash

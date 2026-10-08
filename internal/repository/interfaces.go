@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/osvaldoandrade/codeq/pkg/domain"
@@ -16,6 +17,10 @@ type TaskRepository interface {
 	EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
 	Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error)
 	Heartbeat(ctx context.Context, taskID string, workerID string, extendSeconds int) error
+	// Progress stores the progress value reported by the worker holding the
+	// lease of an in-progress task. It fails with "not-found", "not-owner"
+	// or "not-in-progress" like the other lease-holder operations.
+	Progress(ctx context.Context, taskID string, workerID string, progress json.RawMessage) error
 	Abandon(ctx context.Context, taskID string, workerID string) error
 	Nack(ctx context.Context, taskID string, workerID string, delaySeconds int, maxAttemptsDefault int, reason string) (int, bool, error)
 	MoveDueDelayed(ctx context.Context, cmd domain.Command, limit int) (int, error)
