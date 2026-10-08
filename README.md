@@ -180,6 +180,32 @@ then fail closed with `503`. After every peer runs a compatible build, set the
 value to `v1` consistently across the cluster (or use
 `RAFT_TOPIC_CATALOG_PROTOCOL=v1`) to enable replicated topic administration.
 
+### Dead-letter administration
+
+A task whose attempts run out is dead-lettered (`FAILED`). An admin can put
+it back on its ready queue as a fresh run (no attempts, no error), drain the
+whole dead-letter queue of a command, or delete a task no worker holds. The
+tenant comes from the token; a task of another tenant answers `404`.
+
+```bash
+# Requeue one task: 200 with the task, 409 task_not_in_dlq if it is not dead-lettered.
+curl -X POST http://localhost:8080/v1/codeq/admin/tasks/<id>/requeue \
+  -H 'Authorization: Bearer <admin-token>'
+
+# Requeue up to `limit` tasks (default 100, max 1000) of a command's dead-letter queue.
+curl -X POST 'http://localhost:8080/v1/codeq/admin/queues/GENERATE_MASTER/dlq/requeue?limit=500' \
+  -H 'Authorization: Bearer <admin-token>'
+
+# Delete a task: 204, or 409 task_in_progress while a worker holds it.
+curl -X DELETE http://localhost:8080/v1/codeq/admin/tasks/<id> \
+  -H 'Authorization: Bearer <admin-token>'
+```
+
+The bulk call answers `{"requeued":n,"remaining":true|false}`; repeat it while
+`remaining` is true. A delete removes the task, its result and its queue entry;
+see [ADR 0009](docs/adr/0009-dlq-operations.md) for what it leaves to the
+retention sweep.
+
 For high-throughput producers and workers, use the gRPC streaming API — a
 long-lived bidirectional stream amortizes auth and pipelines acks. See the
 [Producer Stream](https://github.com/osvaldoandrade/codeq/wiki/IO-Producer-Stream)
