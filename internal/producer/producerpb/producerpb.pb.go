@@ -105,8 +105,12 @@ type CreateTask struct {
 	DelaySeconds   int32                  `protobuf:"varint,9,opt,name=delay_seconds,json=delaySeconds,proto3" json:"delay_seconds,omitempty"`
 	TraceParent    string                 `protobuf:"bytes,10,opt,name=trace_parent,json=traceParent,proto3" json:"trace_parent,omitempty"` // W3C trace context (optional)
 	TraceState     string                 `protobuf:"bytes,11,opt,name=trace_state,json=traceState,proto3" json:"trace_state,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// deduplication_key collapses this create into a task of the same tenant,
+	// command and key that still waits to be claimed (ADR 0004). Exclusive
+	// with idempotency_key.
+	DeduplicationKey string `protobuf:"bytes,12,opt,name=deduplication_key,json=deduplicationKey,proto3" json:"deduplication_key,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CreateTask) Reset() {
@@ -212,6 +216,13 @@ func (x *CreateTask) GetTraceParent() string {
 func (x *CreateTask) GetTraceState() string {
 	if x != nil {
 		return x.TraceState
+	}
+	return ""
+}
+
+func (x *CreateTask) GetDeduplicationKey() string {
+	if x != nil {
+		return x.DeduplicationKey
 	}
 	return ""
 }
@@ -706,7 +717,7 @@ const file_producerpb_proto_rawDesc = "" +
 	"\x10producerpb.proto\x12\n" +
 	"producerpb\x1a\x1fgoogle/protobuf/timestamp.proto\"\x1d\n" +
 	"\x05Hello\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\xf0\x02\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\x9d\x03\n" +
 	"\n" +
 	"CreateTask\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x18\n" +
@@ -721,7 +732,8 @@ const file_producerpb_proto_rawDesc = "" +
 	"\ftrace_parent\x18\n" +
 	" \x01(\tR\vtraceParent\x12\x1f\n" +
 	"\vtrace_state\x18\v \x01(\tR\n" +
-	"traceState\"?\n" +
+	"traceState\x12+\n" +
+	"\x11deduplication_key\x18\f \x01(\tR\x10deduplicationKey\"?\n" +
 	"\x0fCreateTaskBatch\x12,\n" +
 	"\x05tasks\x18\x01 \x03(\v2\x16.producerpb.CreateTaskR\x05tasks\"\xb7\x01\n" +
 	"\rProducerEvent\x12)\n" +

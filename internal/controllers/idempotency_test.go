@@ -22,7 +22,7 @@ const (
 // recordingScheduler captures the storage idempotency key and answers with
 // the configured task or error.
 func recordingScheduler(seen *string, task *domain.Task, err error) *mockSchedulerService {
-	return &mockSchedulerService{createFunc: func(_ context.Context, _ domain.Command, _ string, _ int, _ string, _ int, key string, _ time.Time, _ int, _ string) (*domain.Task, error) {
+	return &mockSchedulerService{createFunc: func(_ context.Context, _ domain.Command, _ string, _ int, _ string, _ int, key string, _ string, _ time.Time, _ int, _ string) (*domain.Task, error) {
 		*seen = key
 		return task, err
 	}}
@@ -105,7 +105,7 @@ func TestCreateTaskIdempotencyConflictHasNoBody(t *testing.T) {
 
 func TestBatchCreateIdempotency(t *testing.T) {
 	keys := []string{}
-	svc := &mockSchedulerService{createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, key string, _ time.Time, _ int, tenant string) (*domain.Task, error) {
+	svc := &mockSchedulerService{createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, key string, _ string, _ time.Time, _ int, tenant string) (*domain.Task, error) {
 		keys = append(keys, key)
 		if key == bindingTenant+"\x00"+topicA+"\x00taken" {
 			return nil, domain.ErrIdempotencyConflict

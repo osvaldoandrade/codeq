@@ -23,7 +23,7 @@ const (
 // it; the slot's idempotency key makes a repeated call return the task the
 // first call enqueued.
 type TaskCreator interface {
-	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
+	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
 }
 
 // RunnerOptions tunes the firing loop. Zero values select the defaults.
@@ -114,7 +114,7 @@ func (r *Runner) fire(ctx context.Context, s schedule.Schedule) {
 	defer cancel()
 	slot := s.NextRunAt
 	task, err := r.tasks.CreateTask(ctx, domain.Command(s.Spec.Command), s.Spec.TaskPayload(), s.Spec.Priority,
-		s.Spec.Webhook, s.Spec.MaxAttempts, schedule.SlotKey(s.ScheduleID, slot), time.Time{}, 0, s.TenantID)
+		s.Spec.Webhook, s.Spec.MaxAttempts, schedule.SlotKey(s.ScheduleID, slot), "", time.Time{}, 0, s.TenantID)
 	if err != nil {
 		metrics.ScheduleFiresTotal.WithLabelValues(outcomeFailed).Inc()
 		r.logger.Warn("schedule fire failed; retrying next tick", "schedule", s.ScheduleID, "slot", slot, "err", err)

@@ -24,7 +24,7 @@ Implement the foundational plugin infrastructure:
 
 ### 3. Service Adapters
 - [ ] Create `PluginPersistence` interface
-- [ ] Implement adapter pattern for existing KVRocks
+- [ ] Implement adapter pattern for the current persistence provider
 - [ ] Add connection pool management
 - [ ] Implement error translation layer
 - [ ] Add tenant isolation enforcement
@@ -75,7 +75,7 @@ type PersistencePlugin interface {
 ```
 
 ### Step 3: Adapt Existing Code (Week 2-3)
-- Wrap current KVRocks implementation as plugin
+- Wrap the current repository as a plugin
 - Update `internal/repository/` to use plugin interface
 - Ensure backward compatibility
 - Add integration tests
@@ -89,7 +89,7 @@ type PersistencePlugin interface {
 ## Acceptance Criteria
 - [ ] Plugin registry implemented and tested
 - [ ] Core interfaces defined with godoc documentation
-- [ ] Existing KVRocks persistence wrapped as plugin
+- [ ] Existing persistence wrapped as a plugin
 - [ ] In-memory test plugin available
 - [ ] Integration tests pass
 - [ ] Zero breaking changes to public APIs
@@ -98,7 +98,7 @@ type PersistencePlugin interface {
 
 ## Testing Requirements
 - Unit tests for registry and interfaces
-- Integration tests with real KVRocks
+- Integration tests against the persistence provider
 - Integration tests with in-memory plugin
 - Backward compatibility tests
 - Performance comparison (before/after adapter)

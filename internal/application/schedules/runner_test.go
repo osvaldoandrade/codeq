@@ -66,7 +66,7 @@ type idempotentCreator struct {
 	failOn int // fail the n-th call (1-based); 0 never
 }
 
-func (c *idempotentCreator) CreateTask(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, key string, _ time.Time, _ int, tenant string) (*domain.Task, error) {
+func (c *idempotentCreator) CreateTask(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, key, _ string, _ time.Time, _ int, tenant string) (*domain.Task, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, key)

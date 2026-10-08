@@ -85,21 +85,27 @@ func (r *TaskRouter) peerHasLikely(ownerID, key string) bool {
 
 // ---------------- Enqueue ----------------
 
-func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	t, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+// Enqueue creates a task on the node that owns its ID. See EnqueueWithReady.
+func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	t, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
 	return t, err
 }
 
-func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// EnqueueWithReady is Enqueue that also reports whether the new task is
+// immediately ready to claim.
+func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	// Pre-pick the ID so the hash → owner decision is deterministic.
 	// Bias toward local ownership: the producer-side router would
 	// otherwise pay a cross-node gRPC for (N-1)/N of all creates, which
 	// dominated cluster overhead in Phase 4. GenerateLocalID picks a UUID
 	// whose hash falls in this node's vnode arcs — same ID space, same
 	// uniqueness guarantee, just biased toward "stay home".
-	id := r.ring.GenerateLocalID(uuid.NewString)
+	id, err := r.newTaskID(cmd, tenantID, deduplicationKey)
+	if err != nil {
+		return nil, false, err
+	}
 	if r.ring.IsLocal(id) {
-		t, ready, err := r.local.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+		t, ready, err := r.local.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
 		if err == nil && t != nil && r.localBloom != nil {
 			r.localBloom.Add(t.ID)
 		}
@@ -124,6 +130,8 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		IdempotencyKey: idempotencyKey,
 		VisibleAtUnix:  visible,
 		TenantId:       tenantID,
+
+		DeduplicationKey: deduplicationKey,
 	})
 	if err != nil {
 		// The owner's ErrIdempotencyConflict crosses gRPC as a message;
@@ -134,6 +142,22 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		return nil, false, err
 	}
 	return protoToDomainTask(resp.Task), resp.Ready, nil
+}
+
+// newTaskID picks the ID of a new task. Without a deduplication key it is
+// biased toward this node (see EnqueueWithReady). With one, every create of
+// that key must meet the same lookup and lock, so the ID is owned by the
+// node that owns the key, whichever node received the request.
+func (r *TaskRouter) newTaskID(cmd domain.Command, tenantID, deduplicationKey string) (string, error) {
+	if deduplicationKey == "" {
+		return r.ring.GenerateLocalID(uuid.NewString), nil
+	}
+	owner := r.ring.Owner(string(pebblerepo.KeyDedupe(cmd, tenantID, deduplicationKey)))
+	id, ok := r.ring.GenerateOwnedID(owner, uuid.NewString)
+	if !ok {
+		return "", fmt.Errorf("pick a task id owned by %s for a deduplication key", owner.ID)
+	}
+	return id, nil
 }
 
 // ---------------- ID-routed read/mutate ----------------
@@ -363,6 +387,50 @@ func (r *TaskRouter) QueueStats(ctx context.Context, cmd domain.Command, tenantI
 		local.DLQ += qs.Dlq
 	}
 	return local, nil
+}
+
+// ListTasks pages a queue state across the nodes in ring order: this node
+// reads its own tasks, every other node answers over the cluster RPC. A node
+// that cannot answer fails the page instead of being skipped, since a caller
+// listing in-flight work must not mistake a missing node for an empty one.
+func (r *TaskRouter) ListTasks(ctx context.Context, cmd domain.Command, tenantID string, state domain.QueueState, limit int, cursor string) (*domain.TaskPage, error) {
+	nodes := r.ring.All()
+	partitions := make([]string, len(nodes))
+	for i, n := range nodes {
+		partitions[i] = n.ID
+	}
+	return repository.ListAcrossPartitions(ctx, partitions, limit, cursor, func(ctx context.Context, nodeID string, limit int, cursor string) (*domain.TaskPage, error) {
+		if nodeID == r.ring.SelfID() {
+			return r.local.ListTasks(ctx, cmd, tenantID, state, limit, cursor)
+		}
+		return r.listRemote(ctx, nodeID, &clusterpb.ListTasksRequest{
+			Command:  string(cmd),
+			TenantId: tenantID,
+			State:    string(state),
+			Limit:    safeint.Int32(limit),
+			Cursor:   cursor,
+		})
+	})
+}
+
+func (r *TaskRouter) listRemote(ctx context.Context, nodeID string, req *clusterpb.ListTasksRequest) (*domain.TaskPage, error) {
+	node, ok := r.ring.Node(nodeID)
+	if !ok {
+		return nil, fmt.Errorf("list tasks: unknown node %s", nodeID)
+	}
+	c, err := r.pool.Client(node)
+	if err != nil {
+		return nil, fmt.Errorf("dial node %s: %w", nodeID, err)
+	}
+	resp, err := c.ListTasks(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks on node %s: %w", nodeID, err)
+	}
+	page := &domain.TaskPage{Tasks: make([]*domain.Task, len(resp.Tasks)), NextCursor: resp.NextCursor}
+	for i, t := range resp.Tasks {
+		page.Tasks[i] = protoToDomainTask(t)
+	}
+	return page, nil
 }
 
 func (r *TaskRouter) AdminQueues(ctx context.Context) (map[string]any, error) {

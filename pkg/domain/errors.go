@@ -21,3 +21,9 @@ type LeaderHint interface {
 // cross-tenant existence oracle with data). Its message is the stable wire
 // code the HTTP layer answers with 409.
 var ErrIdempotencyConflict = errors.New("idempotency_conflict")
+
+// ErrDeduplicationWithIdempotency rejects a create that carries both an
+// idempotency key and a deduplication key. Each key alone decides whether a
+// create writes a new task, so together they would contradict each other
+// (ADR 0004). The HTTP layer answers it with 400.
+var ErrDeduplicationWithIdempotency = errors.New("'idempotencyKey' and 'deduplicationKey' are mutually exclusive")

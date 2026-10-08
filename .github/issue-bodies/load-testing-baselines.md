@@ -28,7 +28,7 @@ For each scenario, capture:
 - Error rates
 - Queue depth metrics
 - Resource utilization (CPU, memory, disk I/O)
-- KVRocks/Redis metrics
+- Queue depth and disk metrics
 
 ### Deliverables
 1. Baseline results document in `docs/load-testing-baselines.md`
@@ -49,7 +49,6 @@ Contributors can help by:
 - OS: 
 - CPU: 
 - Memory: 
-- KVRocks version: 
 - codeQ version: 
 
 ### Test: [scenario name]

@@ -56,4 +56,6 @@ Proposed → Accepted → (Superseded by NNNN | Deprecated)
 | [0001](0001-target-architecture.md) | Target architecture (layered + hexagonal) | Accepted |
 | [0002](0002-tenant-claim-resolution.md) | Resolve one canonical tenant claim | Accepted |
 | [0003](0003-binding-scoped-tokens.md) | Enforce binding-scoped tokens for workload-cluster QueueTopic bindings | Proposed |
+| [0004](0004-deduplicate-waiting-tasks.md) | Deduplicate creates while a task waits | Proposed |
+| [0005](0005-list-tasks-by-queue-state.md) | List the tasks of a queue state | Proposed |
 | [0006](0006-recurring-schedules.md) | Recurring schedules | Proposed |

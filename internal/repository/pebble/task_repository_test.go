@@ -24,7 +24,7 @@ func TestEnqueueClaimComplete(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	enq, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, "")
+	enq, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -57,9 +57,9 @@ func TestPriorityOrder(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	low, _ := repo.Enqueue(ctx, cmd, `{"p":0}`, 0, "", 3, "", time.Time{}, "")
-	high, _ := repo.Enqueue(ctx, cmd, `{"p":9}`, 9, "", 3, "", time.Time{}, "")
-	mid, _ := repo.Enqueue(ctx, cmd, `{"p":5}`, 5, "", 3, "", time.Time{}, "")
+	low, _ := repo.Enqueue(ctx, cmd, `{"p":0}`, 0, "", 3, "", "", time.Time{}, "")
+	high, _ := repo.Enqueue(ctx, cmd, `{"p":9}`, 9, "", 3, "", "", time.Time{}, "")
+	mid, _ := repo.Enqueue(ctx, cmd, `{"p":5}`, 5, "", 3, "", "", time.Time{}, "")
 
 	for i, want := range []*domain.Task{high, mid, low} {
 		got, ok, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
@@ -78,9 +78,9 @@ func TestFIFOWithinPriority(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	a, _ := repo.Enqueue(ctx, cmd, `{"o":"a"}`, 5, "", 3, "", time.Time{}, "")
-	b, _ := repo.Enqueue(ctx, cmd, `{"o":"b"}`, 5, "", 3, "", time.Time{}, "")
-	c, _ := repo.Enqueue(ctx, cmd, `{"o":"c"}`, 5, "", 3, "", time.Time{}, "")
+	a, _ := repo.Enqueue(ctx, cmd, `{"o":"a"}`, 5, "", 3, "", "", time.Time{}, "")
+	b, _ := repo.Enqueue(ctx, cmd, `{"o":"b"}`, 5, "", 3, "", "", time.Time{}, "")
+	c, _ := repo.Enqueue(ctx, cmd, `{"o":"c"}`, 5, "", 3, "", "", time.Time{}, "")
 
 	for i, want := range []*domain.Task{a, b, c} {
 		got, ok, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
@@ -101,7 +101,7 @@ func TestNackDelayedThenReclaim(t *testing.T) {
 	repo.reconcile.interval = 0
 	cmd := domain.CmdGenerateMaster
 
-	enq, _ := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, "")
+	enq, _ := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, "")
 	claimed, _, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
 	if err != nil {
 		t.Fatalf("claim: %v", err)
@@ -137,7 +137,7 @@ func TestNackEventuallyDLQ(t *testing.T) {
 
 	// Each Claim and each Nack increment attempts. With maxAttempts=3 the
 	// sequence is: claim(1)→nack(2,<3)→delayed → claim(3)→nack(4,>=3)→DLQ.
-	_, _ = repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, "")
+	_, _ = repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, "")
 	for i := 0; i < 2; i++ {
 		c, _, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
 		if err != nil {
@@ -180,7 +180,7 @@ func TestDelayedCounterFastPath(t *testing.T) {
 
 	// A non-delayed enqueue must not bump the counter (it goes straight
 	// to pending).
-	if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, ""); err != nil {
+	if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	if got := counter.Load(); got != 0 {
@@ -188,7 +188,7 @@ func TestDelayedCounterFastPath(t *testing.T) {
 	}
 
 	// A delayed enqueue bumps it.
-	if _, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 5, "", 3, "", time.Now().Add(time.Hour), ""); err != nil {
+	if _, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 5, "", 3, "", "", time.Now().Add(time.Hour), ""); err != nil {
 		t.Fatalf("delayed enqueue: %v", err)
 	}
 	if got := counter.Load(); got != 1 {
@@ -232,7 +232,7 @@ func TestDelayedCounterRecovery(t *testing.T) {
 	repo1 := NewTaskRepository(db1, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 	for i := 0; i < 3; i++ {
-		if _, err := repo1.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Now().Add(time.Hour), ""); err != nil {
+		if _, err := repo1.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Now().Add(time.Hour), ""); err != nil {
 			t.Fatalf("seed enqueue %d: %v", i, err)
 		}
 	}
@@ -258,11 +258,11 @@ func TestIdempotencyReturnsOriginal(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	a, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "job-7", time.Time{}, "")
+	a, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "job-7", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enq1: %v", err)
 	}
-	b, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 5, "", 3, "job-7", time.Time{}, "")
+	b, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 5, "", 3, "job-7", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enq2: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestAdminQueuesAggregates(t *testing.T) {
 	cmd := domain.CmdGenerateMaster
 
 	for range 3 {
-		if _, err := repo.Enqueue(ctx, cmd, `{}`, 0, "", 3, "", time.Time{}, ""); err != nil {
+		if _, err := repo.Enqueue(ctx, cmd, `{}`, 0, "", 3, "", "", time.Time{}, ""); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
