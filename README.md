@@ -180,6 +180,27 @@ then fail closed with `503`. After every peer runs a compatible build, set the
 value to `v1` consistently across the cluster (or use
 `RAFT_TOPIC_CATALOG_PROTOCOL=v1`) to enable replicated topic administration.
 
+### Recurring schedules
+
+An admin can keep a cron rule next to the queue; codeQ enqueues exactly one
+task per slot, even across restarts and Raft leader changes:
+
+```bash
+curl -X PUT http://localhost:8080/v1/codeq/admin/schedules/nightly-sync \
+  -H 'Authorization: Bearer <admin-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"cron":"0 3 * * *","timezone":"America/Sao_Paulo","command":"SYNC","payload":{"full":true}}'
+```
+
+`cron` takes the five standard fields or a descriptor (`@hourly`,
+`@every 30s`); `timezone` is an IANA name (UTC by default). The response
+shows `nextRunAt`, `lastRunAt` and `lastTaskId`. `PUT` is idempotent,
+`GET /v1/codeq/admin/schedules[/{name}]` reads, and `DELETE` removes. A
+schedule that missed slots while no leader ran fires once and resumes. In
+Raft mode set `raft.scheduleCatalogProtocol=v1` (or
+`RAFT_SCHEDULE_CATALOG_PROTOCOL=v1`) on every peer once all run a compatible
+build. See [ADR 0006](docs/adr/0006-recurring-schedules.md).
+
 For high-throughput producers and workers, use the gRPC streaming API — a
 long-lived bidirectional stream amortizes auth and pipelines acks. See the
 [Producer Stream](https://github.com/osvaldoandrade/codeq/wiki/IO-Producer-Stream)
