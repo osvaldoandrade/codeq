@@ -72,12 +72,21 @@ func (s *ShardedTaskRepository) nextStart() int {
 
 // ---------------- TaskRepository interface ----------------
 
-func (s *ShardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	task, _, err := s.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+// Enqueue creates a task on the shard its ID (or its idempotency key)
+// routes to. See EnqueueWithReady.
+func (s *ShardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := s.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, taskID, visibleAt, tenantID)
 	return task, err
 }
 
-func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// EnqueueWithReady is Enqueue that also reports whether the new task is
+// immediately ready to claim.
+func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	// A client-chosen ID owns its shard: every key of the task, and the
+	// existence check, live on shardOf(taskID).
+	if taskID != "" {
+		return s.shards[s.shardOf(taskID)].EnqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+	}
 	// Idempotency check against its own shard first.
 	if idempotencyKey != "" {
 		idShard := s.shardOf(idempotencyKey)

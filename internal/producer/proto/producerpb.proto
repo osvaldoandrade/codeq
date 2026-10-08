@@ -49,6 +49,10 @@ message CreateTask {
   int32 delay_seconds = 9;
   string trace_parent = 10;     // W3C trace context (optional)
   string trace_state = 11;
+  // task_id names the task instead of letting the server generate its ID
+  // (ADR 0008). Creating a task_id that already exists returns that task to
+  // its own tenant. Exclusive with idempotency_key.
+  string task_id = 13;
 }
 
 // CreateTaskBatch is a producer pipelining N CreateTasks into a single

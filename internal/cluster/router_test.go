@@ -99,7 +99,7 @@ func TestRouterEnqueueBiasesLocal(t *testing.T) {
 	// see TestRouterEnqueueForwardsCrossNodeID below.
 	const N = 200
 	for range N {
-		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"x":1}`, 5, "", 3, "", time.Time{}, ""); err != nil {
+		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}

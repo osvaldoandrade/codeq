@@ -100,6 +100,10 @@ type CreateRequest struct {
 	DelaySeconds   int
 	TraceParent    string
 	TraceState     string
+	// TaskID names the task instead of letting the server generate its ID;
+	// creating an existing ID returns that task (ADR 0008). Exclusive with
+	// IdempotencyKey.
+	TaskID string
 }
 
 // Session is one authenticated stream. Produce on it is safe to call
@@ -324,6 +328,7 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 			DelaySeconds:   safeint.Int32(req.DelaySeconds),
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
+			TaskId:         req.TaskID,
 		},
 	}}
 	if err := s.send(ev); err != nil {
@@ -390,6 +395,7 @@ func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]Bat
 			DelaySeconds:   safeint.Int32(req.DelaySeconds),
 			TraceParent:    req.TraceParent,
 			TraceState:     req.TraceState,
+			TaskId:         req.TaskID,
 		}
 	}
 

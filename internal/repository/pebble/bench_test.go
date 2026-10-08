@@ -30,7 +30,7 @@ func BenchmarkClaimNoDelayed(b *testing.B) {
 
 	// Pre-fill enough pending tasks to outlast the bench.
 	for i := 0; i < b.N+1; i++ {
-		if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, ""); err != nil {
+		if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
 			b.Fatalf("seed enqueue %d: %v", i, err)
 		}
 	}
@@ -76,7 +76,7 @@ func BenchmarkBatchSaveAndUpdate(b *testing.B) {
 	totalTasks := b.N * batchSize
 	ids := make([]string, totalTasks)
 	for i := 0; i < totalTasks; i++ {
-		t, err := taskRepo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, "")
+		t, err := taskRepo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, "")
 		if err != nil {
 			b.Fatalf("seed enqueue %d: %v", i, err)
 		}
@@ -158,7 +158,7 @@ func BenchmarkEnqueueParallel(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, ""); err != nil {
+			if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
 				b.Fatalf("enqueue: %v", err)
 			}
 		}
@@ -184,7 +184,7 @@ func BenchmarkClaimNoDelayed_IterForced(b *testing.B) {
 	cmd := domain.CmdGenerateMaster
 
 	for i := 0; i < b.N+1; i++ {
-		if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", time.Time{}, ""); err != nil {
+		if _, err := repo.Enqueue(ctx, cmd, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
 			b.Fatalf("seed enqueue %d: %v", i, err)
 		}
 	}

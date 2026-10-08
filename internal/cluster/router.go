@@ -85,18 +85,24 @@ func (r *TaskRouter) peerHasLikely(ownerID, key string) bool {
 
 // ---------------- Enqueue ----------------
 
-func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	t, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
+// Enqueue creates a task on the node that owns its ID. See EnqueueWithReady.
+func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	t, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, taskID, visibleAt, tenantID)
 	return t, err
 }
 
-func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// EnqueueWithReady is Enqueue that also reports whether the new task is
+// immediately ready to claim. A client-chosen taskID is created on its owner.
+func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	// Pre-pick the ID so the hash → owner decision is deterministic.
 	// Bias toward local ownership: the producer-side router would
 	// otherwise pay a cross-node gRPC for (N-1)/N of all creates, which
 	// dominated cluster overhead in Phase 4. GenerateLocalID picks a UUID
 	// whose hash falls in this node's vnode arcs — same ID space, same
 	// uniqueness guarantee, just biased toward "stay home".
+	if taskID != "" {
+		return r.enqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+	}
 	id := r.ring.GenerateLocalID(uuid.NewString)
 	if r.ring.IsLocal(id) {
 		t, ready, err := r.local.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, visibleAt, tenantID)
@@ -130,6 +136,46 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		// restore the sentinel so the HTTP layer answers 409 with no task.
 		if errMessageHas(err, domain.ErrIdempotencyConflict.Error()) {
 			return nil, false, domain.ErrIdempotencyConflict
+		}
+		return nil, false, err
+	}
+	return protoToDomainTask(resp.Task), resp.Ready, nil
+}
+
+// enqueueNamed creates a task under a client-chosen ID on the node that owns
+// that ID, where the existence check and the write share one lock.
+func (r *TaskRouter) enqueueNamed(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if r.ring.IsLocal(id) {
+		t, ready, err := r.local.EnqueueNamed(ctx, id, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+		if err == nil && t != nil && r.localBloom != nil {
+			r.localBloom.Add(t.ID)
+		}
+		return t, ready, err
+	}
+	owner := r.ring.Owner(id)
+	c, err := r.pool.Client(owner)
+	if err != nil {
+		return nil, false, fmt.Errorf("dial owner %s: %w", owner.ID, err)
+	}
+	var visible int64
+	if !visibleAt.IsZero() {
+		visible = visibleAt.Unix()
+	}
+	resp, err := c.Enqueue(ctx, &clusterpb.EnqueueRequest{
+		Id:            id,
+		Command:       string(cmd),
+		Payload:       []byte(payload),
+		Priority:      safeint.Int32(priority),
+		Webhook:       webhook,
+		MaxAttempts:   safeint.Int32(maxAttempts),
+		VisibleAtUnix: visible,
+		TenantId:      tenantID,
+		Named:         true,
+	})
+	if err != nil {
+		// Restore the sentinel so the HTTP layer answers 409 with no task.
+		if errMessageHas(err, domain.ErrTaskIDConflict.Error()) {
+			return nil, false, domain.ErrTaskIDConflict
 		}
 		return nil, false, err
 	}

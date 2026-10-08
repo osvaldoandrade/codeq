@@ -59,6 +59,7 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 	// router pre-picked the task ID at the hash boundary, we MUST honour it.
 	local, ok := s.Tasks.(interface {
 		EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
+		EnqueueNamed(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, bool, error)
 	})
 	if !ok {
 		return nil, errors.New("local TaskRepository does not support EnqueueWithID; cannot serve cluster Enqueue")
@@ -67,17 +68,27 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 	if req.VisibleAtUnix > 0 {
 		visibleAt = time.Unix(req.VisibleAtUnix, 0)
 	}
-	task, ready, err := local.EnqueueWithID(ctx,
-		req.Id,
-		domain.Command(req.Command),
-		string(req.Payload),
-		int(req.Priority),
-		req.Webhook,
-		int(req.MaxAttempts),
-		req.IdempotencyKey,
-		visibleAt,
-		req.TenantId,
+	var (
+		task  *domain.Task
+		ready bool
+		err   error
 	)
+	if req.Named {
+		task, ready, err = local.EnqueueNamed(ctx, req.Id, domain.Command(req.Command), string(req.Payload),
+			int(req.Priority), req.Webhook, int(req.MaxAttempts), visibleAt, req.TenantId)
+	} else {
+		task, ready, err = local.EnqueueWithID(ctx,
+			req.Id,
+			domain.Command(req.Command),
+			string(req.Payload),
+			int(req.Priority),
+			req.Webhook,
+			int(req.MaxAttempts),
+			req.IdempotencyKey,
+			visibleAt,
+			req.TenantId,
+		)
+	}
 	if err != nil {
 		return nil, err
 	}

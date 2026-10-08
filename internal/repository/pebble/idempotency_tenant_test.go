@@ -25,19 +25,19 @@ func assertTenantBoundIdempotency(t *testing.T, repo repository.TaskRepository) 
 	t.Helper()
 	ctx := context.Background()
 	cmd := domain.CmdGenerateMaster
-	first, err := repo.Enqueue(ctx, cmd, `{"secret":1}`, 5, "", 3, idemKey, time.Time{}, idemTenantA)
+	first, err := repo.Enqueue(ctx, cmd, `{"secret":1}`, 5, "", 3, idemKey, "", time.Time{}, idemTenantA)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	got, err := repo.Enqueue(ctx, cmd, `{}`, 5, "", 3, idemKey, time.Time{}, idemTenantB)
+	got, err := repo.Enqueue(ctx, cmd, `{}`, 5, "", 3, idemKey, "", time.Time{}, idemTenantB)
 	if !errors.Is(err, domain.ErrIdempotencyConflict) || got != nil {
 		t.Fatalf("cross-tenant: got %v, %v; want nil, ErrIdempotencyConflict", got, err)
 	}
-	got, err = repo.Enqueue(ctx, cmd, `{}`, 5, "", 3, idemKey, time.Time{}, "")
+	got, err = repo.Enqueue(ctx, cmd, `{}`, 5, "", 3, idemKey, "", time.Time{}, "")
 	if !errors.Is(err, domain.ErrIdempotencyConflict) || got != nil {
 		t.Fatalf("legacy empty tenant: got %v, %v; want nil, ErrIdempotencyConflict", got, err)
 	}
-	again, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 5, "", 3, idemKey, time.Time{}, idemTenantA)
+	again, err := repo.Enqueue(ctx, cmd, `{"x":2}`, 5, "", 3, idemKey, "", time.Time{}, idemTenantA)
 	if err != nil || again.ID != first.ID || again.Payload != first.Payload {
 		t.Fatalf("same-tenant replay: got %v, %v; want original %s", again, err, first.ID)
 	}
@@ -81,7 +81,7 @@ func TestConcurrentIdempotentCreateStoresOneTask(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 0, "", 3, "same-key", time.Time{}, idemTenantA)
+			task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 0, "", 3, "same-key", "", time.Time{}, idemTenantA)
 			if err != nil {
 				t.Errorf("enqueue: %v", err)
 				return
@@ -101,7 +101,7 @@ func TestConcurrentIdempotentCreateStoresOneTask(t *testing.T) {
 func TestTTLKeepsPendingTaskBody(t *testing.T) {
 	ctx := context.Background()
 	repo := NewTaskRepository(openTestDB(t), time.UTC, "fixed", 1, 5)
-	task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{"keep":true}`, 0, "", 3, "", time.Time{}, idemTenantA)
+	task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{"keep":true}`, 0, "", 3, "", "", time.Time{}, idemTenantA)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

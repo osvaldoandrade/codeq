@@ -1662,6 +1662,9 @@ type EnqueueRequest struct {
 	// visible_at_unix=0 means "available immediately" (i.e. not delayed).
 	VisibleAtUnix int64  `protobuf:"varint,8,opt,name=visible_at_unix,json=visibleAtUnix,proto3" json:"visible_at_unix,omitempty"`
 	TenantId      string `protobuf:"bytes,9,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// named marks an id the client chose: the owner checks that it is free
+	// (or replays it to the same tenant) instead of trusting it as fresh.
+	Named         bool `protobuf:"varint,11,opt,name=named,proto3" json:"named,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1757,6 +1760,13 @@ func (x *EnqueueRequest) GetTenantId() string {
 		return x.TenantId
 	}
 	return ""
+}
+
+func (x *EnqueueRequest) GetNamed() bool {
+	if x != nil {
+		return x.Named
+	}
+	return false
 }
 
 type EnqueueResponse struct {
@@ -1936,7 +1946,7 @@ const file_clusterpb_proto_rawDesc = "" +
 	"num_hashes\x18\x02 \x01(\rR\tnumHashes\x12\x1b\n" +
 	"\tnum_items\x18\x03 \x01(\x04R\bnumItems\x12\x1a\n" +
 	"\bsequence\x18\x04 \x01(\x04R\bsequence\x12\x17\n" +
-	"\anode_id\x18\x05 \x01(\tR\x06nodeId\"\x9b\x02\n" +
+	"\anode_id\x18\x05 \x01(\tR\x06nodeId\"\xb1\x02\n" +
 	"\x0eEnqueueRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\acommand\x18\x02 \x01(\tR\acommand\x12\x18\n" +
@@ -1946,7 +1956,8 @@ const file_clusterpb_proto_rawDesc = "" +
 	"\fmax_attempts\x18\x06 \x01(\x05R\vmaxAttempts\x12'\n" +
 	"\x0fidempotency_key\x18\a \x01(\tR\x0eidempotencyKey\x12&\n" +
 	"\x0fvisible_at_unix\x18\b \x01(\x03R\rvisibleAtUnix\x12\x1b\n" +
-	"\ttenant_id\x18\t \x01(\tR\btenantId\"L\n" +
+	"\ttenant_id\x18\t \x01(\tR\btenantId\x12\x14\n" +
+	"\x05named\x18\v \x01(\bR\x05named\"L\n" +
 	"\x0fEnqueueResponse\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.clusterpb.TaskR\x04task\x12\x14\n" +
 	"\x05ready\x18\x02 \x01(\bR\x05ready2\xcd\a\n" +

@@ -27,6 +27,9 @@ type createReq struct {
 	Idempotency string         `json:"idempotencyKey,omitempty"`
 	RunAt       string         `json:"runAt,omitempty"`
 	DelaySecs   int            `json:"delaySeconds,omitempty"`
+	// TaskID names the task instead of letting the server generate its ID
+	// (ADR 0008).
+	TaskID string `json:"taskId,omitempty"`
 }
 
 func (h *createTaskController) Handle(c *gin.Context) {
@@ -71,9 +74,13 @@ func (h *createTaskController) Handle(c *gin.Context) {
 	}
 
 	idempotencyKey := storageIdempotencyKey(scope, req.Idempotency)
-	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, idempotencyKey, runAt, req.DelaySecs, tenantID)
+	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, idempotencyKey, req.TaskID, runAt, req.DelaySecs, tenantID)
 	if errors.Is(err, domain.ErrIdempotencyConflict) || (err == nil && !bindingMayReplay(scope, task)) {
 		respondIdempotencyConflict(c, tenantID)
+		return
+	}
+	if errors.Is(err, domain.ErrTaskIDConflict) {
+		c.JSON(http.StatusConflict, gin.H{errorField: domain.ErrTaskIDConflict.Error()})
 		return
 	}
 	if err != nil {

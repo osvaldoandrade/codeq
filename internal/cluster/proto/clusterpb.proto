@@ -187,6 +187,9 @@ message EnqueueRequest {
   // visible_at_unix=0 means "available immediately" (i.e. not delayed).
   int64 visible_at_unix = 8;
   string tenant_id = 9;
+  // named marks an id the client chose: the owner checks that it is free
+  // (or replays it to the same tenant) instead of trusting it as fresh.
+  bool named = 11;
 }
 message EnqueueResponse {
   Task task = 1;
