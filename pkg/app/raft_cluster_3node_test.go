@@ -179,6 +179,8 @@ func startRaftNode(t *testing.T, id string, peers map[string]string, bootstrap b
 			CommitMS:             10,
 			ApplyTimeoutSeconds:  3,
 			TopicCatalogProtocol: "v1",
+
+			ScheduleCatalogProtocol: "v1",
 		},
 	}
 	if err := cfg.Validate(); err != nil {
