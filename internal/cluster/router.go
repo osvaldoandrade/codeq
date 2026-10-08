@@ -32,6 +32,8 @@ import (
 //   - MoveDueDelayed / CleanupExpired → local only (each node owns its
 //     own delayed/dlq buckets for the ids it hashes to).
 //   - PendingLength / QueueStats / AdminQueues → scatter-gather + sum.
+//   - RequeueDLQTask / DeleteTask → ID hash routes directly; RequeueDLQ
+//     walks every node in ring order (dlq_operations.go, ADR 0009).
 //
 // Errors: remote calls translate the structured response flags
 // (NotFound / NotOwner / NotInProgress) back into the same "not-found"

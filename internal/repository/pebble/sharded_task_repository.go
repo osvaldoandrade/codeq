@@ -257,5 +257,60 @@ func (s *ShardedTaskRepository) CleanupExpired(ctx context.Context, limit int, b
 	return total, nil
 }
 
+// RequeueDLQTask routes to the shard that owns taskID.
+func (s *ShardedTaskRepository) RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error) {
+	return s.shards[s.shardOf(taskID)].RequeueDLQTask(ctx, taskID)
+}
+
+// DeleteTask routes to the shard that owns taskID.
+func (s *ShardedTaskRepository) DeleteTask(ctx context.Context, taskID string) error {
+	return s.shards[s.shardOf(taskID)].DeleteTask(ctx, taskID)
+}
+
+// RequeueDLQ walks the shards in order, requeueing up to limit tasks on the
+// shards this node leads. A shard led elsewhere is skipped but still counts
+// toward Remaining. When the led shards moved nothing and a shard led
+// elsewhere still holds entries, its not-leader error is returned so the
+// HTTP layer forwards the call to that shard's leader: a client repeating
+// the call while Remaining is true always reaches a node that can progress.
+func (s *ShardedTaskRepository) RequeueDLQ(ctx context.Context, cmd domain.Command, tenantID string, limit int) (*domain.DLQRequeue, error) {
+	out := &domain.DLQRequeue{}
+	var elsewhere error
+	for _, sh := range s.shards {
+		res, redirect, err := requeueOrDefer(ctx, sh, cmd, tenantID, limit-out.Requeued)
+		if err != nil {
+			return nil, err
+		}
+		if elsewhere == nil {
+			elsewhere = redirect
+		}
+		out.Requeued += res.Requeued
+		out.Remaining = out.Remaining || res.Remaining
+	}
+	if out.Requeued == 0 && elsewhere != nil {
+		return nil, elsewhere
+	}
+	return out, nil
+}
+
+// requeueOrDefer requeues on a shard this node leads. On a shard led
+// elsewhere it moves nothing, reports whether that shard still holds
+// entries and, when it does, returns the shard's not-leader error as
+// redirect.
+func requeueOrDefer(ctx context.Context, sh *TaskRepository, cmd domain.Command, tenantID string, limit int) (res *domain.DLQRequeue, redirect, err error) {
+	res, notLeader := sh.RequeueDLQ(ctx, cmd, tenantID, limit)
+	if !isNotLeader(notLeader) {
+		return res, nil, notLeader
+	}
+	waiting, err := sh.hasDLQ(cmd, tenantID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if waiting {
+		redirect = notLeader
+	}
+	return &domain.DLQRequeue{Remaining: waiting}, redirect, nil
+}
+
 // ---- compile-time check ----
 var _ repository.TaskRepository = (*ShardedTaskRepository)(nil)

@@ -45,10 +45,13 @@ const (
 	TaskNode_SaveResult_FullMethodName       = "/clusterpb.TaskNode/SaveResult"
 	TaskNode_GetResult_FullMethodName        = "/clusterpb.TaskNode/GetResult"
 	TaskNode_UpdateOnComplete_FullMethodName = "/clusterpb.TaskNode/UpdateOnComplete"
+	TaskNode_RequeueTask_FullMethodName      = "/clusterpb.TaskNode/RequeueTask"
+	TaskNode_DeleteTask_FullMethodName       = "/clusterpb.TaskNode/DeleteTask"
 	TaskNode_LocalClaim_FullMethodName       = "/clusterpb.TaskNode/LocalClaim"
 	TaskNode_PendingLength_FullMethodName    = "/clusterpb.TaskNode/PendingLength"
 	TaskNode_QueueStats_FullMethodName       = "/clusterpb.TaskNode/QueueStats"
 	TaskNode_AdminQueues_FullMethodName      = "/clusterpb.TaskNode/AdminQueues"
+	TaskNode_RequeueDLQ_FullMethodName       = "/clusterpb.TaskNode/RequeueDLQ"
 	TaskNode_BloomSnapshot_FullMethodName    = "/clusterpb.TaskNode/BloomSnapshot"
 )
 
@@ -65,11 +68,15 @@ type TaskNodeClient interface {
 	SaveResult(ctx context.Context, in *SaveResultRequest, opts ...grpc.CallOption) (*SaveResultResponse, error)
 	GetResult(ctx context.Context, in *GetResultRequest, opts ...grpc.CallOption) (*GetResultResponse, error)
 	UpdateOnComplete(ctx context.Context, in *UpdateOnCompleteRequest, opts ...grpc.CallOption) (*UpdateOnCompleteResponse, error)
+	RequeueTask(ctx context.Context, in *RequeueTaskRequest, opts ...grpc.CallOption) (*RequeueTaskResponse, error)
+	DeleteTask(ctx context.Context, in *DeleteTaskRequest, opts ...grpc.CallOption) (*DeleteTaskResponse, error)
 	// Scatter-gather (caller broadcasts to every node):
 	LocalClaim(ctx context.Context, in *LocalClaimRequest, opts ...grpc.CallOption) (*LocalClaimResponse, error)
 	PendingLength(ctx context.Context, in *PendingLengthRequest, opts ...grpc.CallOption) (*PendingLengthResponse, error)
 	QueueStats(ctx context.Context, in *QueueStatsRequest, opts ...grpc.CallOption) (*QueueStatsResponse, error)
 	AdminQueues(ctx context.Context, in *AdminQueuesRequest, opts ...grpc.CallOption) (*AdminQueuesResponse, error)
+	// Node-walked (caller visits every node in ring order):
+	RequeueDLQ(ctx context.Context, in *RequeueDLQRequest, opts ...grpc.CallOption) (*RequeueDLQResponse, error)
 	// Bloom gossip (poll-style; a streaming version can be added later):
 	BloomSnapshot(ctx context.Context, in *BloomSnapshotRequest, opts ...grpc.CallOption) (*BloomSnapshotResponse, error)
 }
@@ -162,6 +169,26 @@ func (c *taskNodeClient) UpdateOnComplete(ctx context.Context, in *UpdateOnCompl
 	return out, nil
 }
 
+func (c *taskNodeClient) RequeueTask(ctx context.Context, in *RequeueTaskRequest, opts ...grpc.CallOption) (*RequeueTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequeueTaskResponse)
+	err := c.cc.Invoke(ctx, TaskNode_RequeueTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskNodeClient) DeleteTask(ctx context.Context, in *DeleteTaskRequest, opts ...grpc.CallOption) (*DeleteTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteTaskResponse)
+	err := c.cc.Invoke(ctx, TaskNode_DeleteTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskNodeClient) LocalClaim(ctx context.Context, in *LocalClaimRequest, opts ...grpc.CallOption) (*LocalClaimResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LocalClaimResponse)
@@ -202,6 +229,16 @@ func (c *taskNodeClient) AdminQueues(ctx context.Context, in *AdminQueuesRequest
 	return out, nil
 }
 
+func (c *taskNodeClient) RequeueDLQ(ctx context.Context, in *RequeueDLQRequest, opts ...grpc.CallOption) (*RequeueDLQResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequeueDLQResponse)
+	err := c.cc.Invoke(ctx, TaskNode_RequeueDLQ_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *taskNodeClient) BloomSnapshot(ctx context.Context, in *BloomSnapshotRequest, opts ...grpc.CallOption) (*BloomSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BloomSnapshotResponse)
@@ -225,11 +262,15 @@ type TaskNodeServer interface {
 	SaveResult(context.Context, *SaveResultRequest) (*SaveResultResponse, error)
 	GetResult(context.Context, *GetResultRequest) (*GetResultResponse, error)
 	UpdateOnComplete(context.Context, *UpdateOnCompleteRequest) (*UpdateOnCompleteResponse, error)
+	RequeueTask(context.Context, *RequeueTaskRequest) (*RequeueTaskResponse, error)
+	DeleteTask(context.Context, *DeleteTaskRequest) (*DeleteTaskResponse, error)
 	// Scatter-gather (caller broadcasts to every node):
 	LocalClaim(context.Context, *LocalClaimRequest) (*LocalClaimResponse, error)
 	PendingLength(context.Context, *PendingLengthRequest) (*PendingLengthResponse, error)
 	QueueStats(context.Context, *QueueStatsRequest) (*QueueStatsResponse, error)
 	AdminQueues(context.Context, *AdminQueuesRequest) (*AdminQueuesResponse, error)
+	// Node-walked (caller visits every node in ring order):
+	RequeueDLQ(context.Context, *RequeueDLQRequest) (*RequeueDLQResponse, error)
 	// Bloom gossip (poll-style; a streaming version can be added later):
 	BloomSnapshot(context.Context, *BloomSnapshotRequest) (*BloomSnapshotResponse, error)
 	mustEmbedUnimplementedTaskNodeServer()
@@ -266,6 +307,12 @@ func (UnimplementedTaskNodeServer) GetResult(context.Context, *GetResultRequest)
 func (UnimplementedTaskNodeServer) UpdateOnComplete(context.Context, *UpdateOnCompleteRequest) (*UpdateOnCompleteResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateOnComplete not implemented")
 }
+func (UnimplementedTaskNodeServer) RequeueTask(context.Context, *RequeueTaskRequest) (*RequeueTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequeueTask not implemented")
+}
+func (UnimplementedTaskNodeServer) DeleteTask(context.Context, *DeleteTaskRequest) (*DeleteTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteTask not implemented")
+}
 func (UnimplementedTaskNodeServer) LocalClaim(context.Context, *LocalClaimRequest) (*LocalClaimResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method LocalClaim not implemented")
 }
@@ -277,6 +324,9 @@ func (UnimplementedTaskNodeServer) QueueStats(context.Context, *QueueStatsReques
 }
 func (UnimplementedTaskNodeServer) AdminQueues(context.Context, *AdminQueuesRequest) (*AdminQueuesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminQueues not implemented")
+}
+func (UnimplementedTaskNodeServer) RequeueDLQ(context.Context, *RequeueDLQRequest) (*RequeueDLQResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequeueDLQ not implemented")
 }
 func (UnimplementedTaskNodeServer) BloomSnapshot(context.Context, *BloomSnapshotRequest) (*BloomSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BloomSnapshot not implemented")
@@ -446,6 +496,42 @@ func _TaskNode_UpdateOnComplete_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskNode_RequeueTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequeueTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskNodeServer).RequeueTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskNode_RequeueTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskNodeServer).RequeueTask(ctx, req.(*RequeueTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskNode_DeleteTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskNodeServer).DeleteTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskNode_DeleteTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskNodeServer).DeleteTask(ctx, req.(*DeleteTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskNode_LocalClaim_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LocalClaimRequest)
 	if err := dec(in); err != nil {
@@ -518,6 +604,24 @@ func _TaskNode_AdminQueues_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskNode_RequeueDLQ_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequeueDLQRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskNodeServer).RequeueDLQ(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskNode_RequeueDLQ_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskNodeServer).RequeueDLQ(ctx, req.(*RequeueDLQRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskNode_BloomSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BloomSnapshotRequest)
 	if err := dec(in); err != nil {
@@ -576,6 +680,14 @@ var TaskNode_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TaskNode_UpdateOnComplete_Handler,
 		},
 		{
+			MethodName: "RequeueTask",
+			Handler:    _TaskNode_RequeueTask_Handler,
+		},
+		{
+			MethodName: "DeleteTask",
+			Handler:    _TaskNode_DeleteTask_Handler,
+		},
+		{
 			MethodName: "LocalClaim",
 			Handler:    _TaskNode_LocalClaim_Handler,
 		},
@@ -590,6 +702,10 @@ var TaskNode_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminQueues",
 			Handler:    _TaskNode_AdminQueues_Handler,
+		},
+		{
+			MethodName: "RequeueDLQ",
+			Handler:    _TaskNode_RequeueDLQ_Handler,
 		},
 		{
 			MethodName: "BloomSnapshot",

@@ -160,6 +160,35 @@ message AdminQueuesResponse {
   map<string, int64> counts = 1;
 }
 
+// Dead-letter administration (ADR 0009). RequeueTask and DeleteTask are
+// ID-routed to the owner; RequeueDLQ acts on the receiving node's local
+// shard and the caller walks every node.
+message RequeueTaskRequest { string task_id = 1; }
+message RequeueTaskResponse {
+  Task task = 1;
+  bool not_found = 2;
+  bool not_in_dlq = 3;
+}
+
+message DeleteTaskRequest { string task_id = 1; }
+message DeleteTaskResponse {
+  bool not_found = 1;
+  bool in_progress = 2;
+}
+
+// RequeueDLQRequest requeues up to limit tasks of a (command, tenant)
+// dead-letter queue held by the receiving node; limit 0 only reports
+// whether entries remain.
+message RequeueDLQRequest {
+  string command = 1;
+  string tenant_id = 2;
+  int32 limit = 3;
+}
+message RequeueDLQResponse {
+  int32 requeued = 1;
+  bool remaining = 2;
+}
+
 // Bloom snapshot transferred between nodes. m_bits is the bloom's bit
 // array (raw bytes), num_hashes the configured k, num_items the count of
 // items currently inserted, sequence is an incrementing version for
@@ -205,12 +234,16 @@ service TaskNode {
   rpc SaveResult(SaveResultRequest) returns (SaveResultResponse);
   rpc GetResult(GetResultRequest) returns (GetResultResponse);
   rpc UpdateOnComplete(UpdateOnCompleteRequest) returns (UpdateOnCompleteResponse);
+  rpc RequeueTask(RequeueTaskRequest) returns (RequeueTaskResponse);
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
 
   // Scatter-gather (caller broadcasts to every node):
   rpc LocalClaim(LocalClaimRequest) returns (LocalClaimResponse);
   rpc PendingLength(PendingLengthRequest) returns (PendingLengthResponse);
   rpc QueueStats(QueueStatsRequest) returns (QueueStatsResponse);
   rpc AdminQueues(AdminQueuesRequest) returns (AdminQueuesResponse);
+  // Node-walked (caller visits every node in ring order):
+  rpc RequeueDLQ(RequeueDLQRequest) returns (RequeueDLQResponse);
 
   // Bloom gossip (poll-style; a streaming version can be added later):
   rpc BloomSnapshot(BloomSnapshotRequest) returns (BloomSnapshotResponse);

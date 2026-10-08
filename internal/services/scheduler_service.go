@@ -33,6 +33,15 @@ type SchedulerService interface {
 	GetTask(ctx context.Context, id string) (*domain.Task, error)
 	AdminQueues(ctx context.Context) (map[string]any, error)
 	QueueStats(ctx context.Context, cmd domain.Command, tenantID string) (*domain.QueueStats, error)
+	// RequeueDLQTask moves one dead-lettered task back to the ready queue
+	// as a fresh run (ADR 0009).
+	RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error)
+	// RequeueDLQ requeues up to limit tasks of a (cmd, tenant) dead-letter
+	// queue. limit 0 means DefaultDLQRequeueLimit; a limit outside
+	// 1..MaxDLQRequeueLimit fails with domain.ErrInvalidRequeueLimit.
+	RequeueDLQ(ctx context.Context, cmd domain.Command, tenantID string, limit int) (*domain.DLQRequeue, error)
+	// DeleteTask removes a task that is not in progress (ADR 0009).
+	DeleteTask(ctx context.Context, taskID string) error
 
 	// Novo: limpeza administrativa por índice Z
 	CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error)
@@ -288,4 +297,57 @@ func (s *schedulerService) CleanupExpired(ctx context.Context, limit int, before
 		limit = 1000
 	}
 	return s.repo.CleanupExpired(ctx, limit, before)
+}
+
+const (
+	// DefaultDLQRequeueLimit is the number of tasks a bulk requeue moves
+	// when the caller sets no limit.
+	DefaultDLQRequeueLimit = 100
+	// MaxDLQRequeueLimit bounds one bulk requeue call. The repository
+	// commits in small chunks; this caps how long one HTTP call runs.
+	MaxDLQRequeueLimit = 1000
+)
+
+// RequeueDLQTask requeues one dead-lettered task and wakes the workers
+// subscribed to its command.
+func (s *schedulerService) RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error) {
+	task, err := s.repo.RequeueDLQTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	s.notifyReady(ctx, task.Command)
+	return task, nil
+}
+
+// RequeueDLQ validates the request, requeues one page of the dead-letter
+// queue and wakes the subscribed workers when anything moved.
+func (s *schedulerService) RequeueDLQ(ctx context.Context, cmd domain.Command, tenantID string, limit int) (*domain.DLQRequeue, error) {
+	if strings.TrimSpace(string(cmd)) == "" {
+		return nil, errors.New("invalid command")
+	}
+	if limit == 0 {
+		limit = DefaultDLQRequeueLimit
+	}
+	if limit < 1 || limit > MaxDLQRequeueLimit {
+		return nil, domain.ErrInvalidRequeueLimit
+	}
+	out, err := s.repo.RequeueDLQ(ctx, cmd, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	if out.Requeued > 0 {
+		s.notifyReady(ctx, cmd)
+	}
+	return out, nil
+}
+
+// DeleteTask deletes a task that is not in progress.
+func (s *schedulerService) DeleteTask(ctx context.Context, taskID string) error {
+	return s.repo.DeleteTask(ctx, taskID)
+}
+
+func (s *schedulerService) notifyReady(ctx context.Context, cmd domain.Command) {
+	if s.notifier != nil {
+		s.notifier.NotifyQueueReady(ctx, cmd)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +23,11 @@ import (
 type mockSchedulerService struct {
 	createFunc func(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
 	claimFunc  func(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error)
+	// DLQ administration (ADR 0009).
+	getTaskFunc     func(ctx context.Context, id string) (*domain.Task, error)
+	requeueTaskFunc func(ctx context.Context, taskID string) (*domain.Task, error)
+	requeueDLQFunc  func(ctx context.Context, cmd domain.Command, tenantID string, limit int) (*domain.DLQRequeue, error)
+	deleteTaskFunc  func(ctx context.Context, taskID string) error
 }
 
 func (m *mockSchedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
@@ -60,7 +66,10 @@ func (m *mockSchedulerService) Abandon(context.Context, string, string) error { 
 func (m *mockSchedulerService) NackTask(context.Context, string, string, int, string) (int, bool, error) {
 	return 0, false, nil
 }
-func (m *mockSchedulerService) GetTask(context.Context, string) (*domain.Task, error) {
+func (m *mockSchedulerService) GetTask(ctx context.Context, id string) (*domain.Task, error) {
+	if m.getTaskFunc != nil {
+		return m.getTaskFunc(ctx, id)
+	}
 	return nil, nil
 }
 func (m *mockSchedulerService) AdminQueues(context.Context) (map[string]any, error) {
@@ -69,6 +78,27 @@ func (m *mockSchedulerService) AdminQueues(context.Context) (map[string]any, err
 func (m *mockSchedulerService) QueueStats(context.Context, domain.Command, string) (*domain.QueueStats, error) {
 	return nil, nil
 }
+func (m *mockSchedulerService) RequeueDLQTask(ctx context.Context, taskID string) (*domain.Task, error) {
+	if m.requeueTaskFunc != nil {
+		return m.requeueTaskFunc(ctx, taskID)
+	}
+	return nil, errors.New("not-found")
+}
+
+func (m *mockSchedulerService) RequeueDLQ(ctx context.Context, cmd domain.Command, tenantID string, limit int) (*domain.DLQRequeue, error) {
+	if m.requeueDLQFunc != nil {
+		return m.requeueDLQFunc(ctx, cmd, tenantID, limit)
+	}
+	return &domain.DLQRequeue{}, nil
+}
+
+func (m *mockSchedulerService) DeleteTask(ctx context.Context, taskID string) error {
+	if m.deleteTaskFunc != nil {
+		return m.deleteTaskFunc(ctx, taskID)
+	}
+	return errors.New("not-found")
+}
+
 func (m *mockSchedulerService) CleanupExpired(context.Context, int, time.Time) (int, error) {
 	return 0, nil
 }
