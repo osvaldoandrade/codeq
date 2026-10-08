@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -192,5 +193,49 @@ func TestRouterClaimScatterGather(t *testing.T) {
 	}
 	if claimed.ID != "b-only-task" {
 		t.Fatalf("expected b-only-task, got %s", claimed.ID)
+	}
+}
+
+// TestRouterNamedCreateRunsOnTheIDOwner checks that a client-chosen ID is
+// created, replayed and protected on the node that owns it, including across
+// the gRPC hop (which must carry the named flag and the conflict sentinel).
+func TestRouterNamedCreateRunsOnTheIDOwner(t *testing.T) {
+	ctx := context.Background()
+	a := newTestNode(t, "node-a")
+	b := newTestNode(t, "node-b")
+	t.Cleanup(a.stop)
+	t.Cleanup(b.stop)
+	pool := poolWithBufnet([]*testNode{a, b})
+	defer pool.Close()
+	ring := NewLocalRing(NewRing([]Node{a.node, b.node}), "node-a")
+	for i := range ring.nodes {
+		ring.nodes[i].GRPCAddr = "passthrough:///" + ring.nodes[i].GRPCAddr
+		ring.byID[ring.nodes[i].ID] = ring.nodes[i]
+	}
+	router := NewTaskRouter(a.repo, ring, pool)
+
+	ids := map[string]string{} // owner → an id it owns
+	for i := 0; len(ids) < 2 && i < 1000; i++ {
+		id := fmt.Sprintf("ws-1.job-%d", i)
+		if _, ok := ids[ring.Owner(id).ID]; !ok {
+			ids[ring.Owner(id).ID] = id
+		}
+	}
+	repos := map[string]*pebblerepo.TaskRepository{"node-a": a.repo, "node-b": b.repo}
+	for owner, id := range ids {
+		task, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":1}`, 5, "", 3, "", id, time.Time{}, "tenant-a")
+		if err != nil || task.ID != id {
+			t.Fatalf("named create of %s (owner %s) = %+v, %v", id, owner, task, err)
+		}
+		if _, err := repos[owner].Get(ctx, id); err != nil {
+			t.Fatalf("task %s not on its owner %s: %v", id, owner, err)
+		}
+		replay, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":2}`, 5, "", 3, "", id, time.Time{}, "tenant-a")
+		if err != nil || replay.ID != id || replay.Payload != `{"n":1}` {
+			t.Fatalf("replay of %s = %+v, %v", id, replay, err)
+		}
+		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", id, time.Time{}, "tenant-b"); !errors.Is(err, domain.ErrTaskIDConflict) {
+			t.Fatalf("cross-tenant create of %s (owner %s): err %v, want ErrTaskIDConflict", id, owner, err)
+		}
 	}
 }

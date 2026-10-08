@@ -368,3 +368,50 @@ func TestProduceBatch_RejectsInvalid(t *testing.T) {
 		t.Errorf("results[2] should succeed: %+v", results[2])
 	}
 }
+
+// TestProduce_TaskID creates a named task over the producer stream, replays
+// it, and reads it back over REST by the client's ID.
+func TestProduce_TaskID(t *testing.T) {
+	f := newFixture(t)
+	defer f.stop()
+	c, err := producerclient.New(producerclient.Config{Addr: f.streamAddr, Token: "dev-token"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer c.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	sess, err := c.Connect(ctx)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer sess.Close()
+
+	req := producerclient.CreateRequest{Command: "GENERATE_MASTER", Payload: []byte(`{"n":1}`), TaskID: "ws-1.export-42"}
+	for i := range 2 {
+		id, err := sess.Produce(ctx, req)
+		if err != nil || id != "ws-1.export-42" {
+			t.Fatalf("Produce %d = %q, %v; want the client's id", i, id, err)
+		}
+	}
+	httpReq, _ := http.NewRequest(http.MethodGet, f.httpURL+"/v1/codeq/tasks/ws-1.export-42", nil)
+	httpReq.Header.Set("Authorization", "Bearer dev-token")
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("GET task: %v", err)
+	}
+	defer resp.Body.Close()
+	var task struct {
+		ID      string `json:"id"`
+		Payload string `json:"payload"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil || resp.StatusCode != http.StatusOK || task.Payload != `{"n":1}` {
+		t.Fatalf("GET by client id = %d %+v (%v)", resp.StatusCode, task, err)
+	}
+
+	bad := req
+	bad.TaskID = "no/slash"
+	if _, err := sess.Produce(ctx, bad); err == nil {
+		t.Fatal("Produce with an invalid task id must fail")
+	}
+}
