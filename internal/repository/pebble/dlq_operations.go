@@ -147,6 +147,12 @@ func (r *TaskRepository) requeueReserved(ctx context.Context, taskID string) (*d
 // stageRequeue rewrites task as a fresh PENDING run and adds to b the writes
 // that move it from dlqKey to the tail of its ready bucket. It returns the
 // pending sequence of the new entry.
+//
+// The deduplication key (ADR 0004) is not re-acquired: a requeue retries the
+// task, like a nack retry, and is not a new create. The key was released when
+// the task was first claimed and may now be held by a newer waiting task of
+// the same key; DeduplicationKey stays on the body as a record, and
+// releaseDedupe leaves the mapping alone unless it names this task.
 func (r *TaskRepository) stageRequeue(b *pebbledb.Batch, task *domain.Task, dlqKey []byte) (uint64, error) {
 	task.Status = domain.StatusPending
 	task.LastKnownLocation = domain.LocationPending
@@ -344,7 +350,8 @@ func indexedID(key []byte) string {
 // replicated batch. The task is reserved like a claim for the whole
 // read-check-write, and a delayed task also holds the delayed-move flag of
 // its bucket, so neither a claim nor the delayed sweep can bring it back.
-// The TTL and idempotency entries stay; ADR 0009 explains why.
+// A deduplication mapping the task holds goes in the same batch. The TTL and
+// idempotency entries stay; ADR 0009 explains why.
 func (r *TaskRepository) DeleteTask(ctx context.Context, taskID string) error {
 	if err := r.ensureLeaderDispatch(ctx); err != nil {
 		return err
@@ -380,6 +387,10 @@ func (r *TaskRepository) deleteReserved(ctx context.Context, taskID string) (*re
 		b.Delete(KeyResult(taskID), nil),
 		b.Delete(KeyDLQ(task.Command, task.TenantID, taskID), nil),
 		b.Delete(KeyInprog(task.Command, task.TenantID, taskID), nil),
+		// A waiting task that holds its deduplication key (ADR 0004)
+		// releases it here. A create would already treat the key as free
+		// once the body is gone, but nothing else ever removes the mapping.
+		r.releaseDedupe(b, task),
 	)
 	switch {
 	case err != nil:
