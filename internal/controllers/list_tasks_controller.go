@@ -26,7 +26,7 @@ func NewListTasksController(svc services.SchedulerService) *listTasksController 
 func (h *listTasksController) Handle(c *gin.Context) {
 	cmd := strings.TrimSpace(c.Param("command"))
 	if cmd == "" {
-		c.JSON(http.StatusBadRequest, gin.H{errorField: "command is required"})
+		c.JSON(http.StatusBadRequest, gin.H{errorField: errCommandRequired})
 		return
 	}
 	state, err := domain.ParseQueueState(c.Query("state"))

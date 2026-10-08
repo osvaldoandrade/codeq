@@ -122,7 +122,7 @@ func NewRequeueDLQController(svc services.SchedulerService) *requeueDLQControlle
 func (h *requeueDLQController) Handle(c *gin.Context) {
 	cmd := strings.TrimSpace(c.Param("command"))
 	if cmd == "" {
-		c.JSON(http.StatusBadRequest, gin.H{errorField: "command is required"})
+		c.JSON(http.StatusBadRequest, gin.H{errorField: errCommandRequired})
 		return
 	}
 	limit := 0
