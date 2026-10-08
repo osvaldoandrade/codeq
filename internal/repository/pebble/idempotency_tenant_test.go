@@ -3,6 +3,7 @@ package pebble
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,5 +68,52 @@ func TestEnqueueWithIDIdempotencyIsTenantBound(t *testing.T) {
 	}
 	if _, err := repo.Get(ctx, "id-b"); err == nil {
 		t.Fatal("refused cross-tenant create stored a task")
+	}
+}
+
+func TestConcurrentIdempotentCreateStoresOneTask(t *testing.T) {
+	ctx := context.Background()
+	repo := NewTaskRepository(openTestDB(t), time.UTC, "fixed", 1, 5)
+	const n = 16
+	ids := make([]string, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 0, "", 3, "same-key", time.Time{}, idemTenantA)
+			if err != nil {
+				t.Errorf("enqueue: %v", err)
+				return
+			}
+			ids[i] = task.ID
+		}()
+	}
+	wg.Wait()
+	first := ids[0]
+	for _, id := range ids[1:] {
+		if id != first {
+			t.Fatalf("concurrent creates stored %s and %s", first, id)
+		}
+	}
+}
+
+func TestTTLKeepsPendingTaskBody(t *testing.T) {
+	ctx := context.Background()
+	repo := NewTaskRepository(openTestDB(t), time.UTC, "fixed", 1, 5)
+	task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{"keep":true}`, 0, "", 3, "", time.Time{}, idemTenantA)
+	if err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	deleted, err := repo.CleanupExpired(ctx, 10, time.Now().Add(48*time.Hour))
+	if err != nil {
+		t.Fatalf("cleanup: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("pending body deleted: %d", deleted)
+	}
+	got, err := repo.Get(ctx, task.ID)
+	if err != nil || got.Payload != task.Payload {
+		t.Fatalf("body after ttl sweep: %+v err=%v", got, err)
 	}
 }

@@ -195,27 +195,27 @@ func TestDelayedCounterFastPath(t *testing.T) {
 		t.Fatalf("delayed enqueue must bump counter to 1, got %d", got)
 	}
 
-	// Claim the pending task, then Nack it back with delay=0. Nack
-	// always routes through the delayed bucket so the counter must rise.
 	claimed, ok, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
 	if err != nil || !ok {
 		t.Fatalf("claim: ok=%v err=%v", ok, err)
 	}
-	if _, _, err := repo.Nack(ctx, claimed.ID, "w", 0, 3, "EPHEMERAL"); err != nil {
-		t.Fatalf("nack: %v", err)
-	}
-	if got := counter.Load(); got != 2 {
-		t.Fatalf("after nack counter must be 2, got %d", got)
-	}
 
-	// Sweep: a Claim runs moveDueDelayedForTenant which should drain
-	// every due-now entry (the Nack one, score=now). The hour-out one
-	// stays delayed.
-	if _, _, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, ""); err != nil {
-		t.Fatalf("re-claim: %v", err)
+	// delaySeconds 0 returns the task to the ready queue. It must not
+	// enter the delayed bucket.
+	if applied, _, err := repo.Nack(ctx, claimed.ID, "w", 0, 3, "EPHEMERAL"); err != nil {
+		t.Fatalf("nack: %v", err)
+	} else if applied != 0 {
+		t.Fatalf("nack delay: got %d, want 0", applied)
 	}
 	if got := counter.Load(); got != 1 {
-		t.Fatalf("after sweep counter must drop to 1 (the future-delayed one remains), got %d", got)
+		t.Fatalf("immediate nack must not bump the delayed counter, got %d", got)
+	}
+	again, ok, err := repo.Claim(ctx, "w", []domain.Command{cmd}, 60, 50, 3, "")
+	if err != nil || !ok || again.ID != claimed.ID {
+		t.Fatalf("immediate requeue: ok=%v id=%v err=%v", ok, again, err)
+	}
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("future delayed task must remain, got %d", got)
 	}
 }
 

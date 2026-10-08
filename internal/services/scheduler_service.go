@@ -3,12 +3,10 @@ package services
 import (
 	"context"
 	"errors"
-	"math/rand"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/osvaldoandrade/codeq/internal/backoff"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/repository"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
@@ -56,24 +54,15 @@ type schedulerService struct {
 	defaultLease        int
 	requeueInspectLimit int
 	maxAttemptsDefault  int
-	backoffPolicy       string
-	backoffBaseSeconds  int
 	backoffMaxSeconds   int
-	rng                 *rand.Rand
 }
 
 func NewSchedulerService(repo repository.TaskRepository, notifier NotifierService, callback ResultCallbackService, tz *time.Location, now func() time.Time, defaultLease, inspectLimit, maxAttemptsDefault int, backoffPolicy string, backoffBaseSeconds int, backoffMaxSeconds int) SchedulerService {
 	if maxAttemptsDefault <= 0 {
 		maxAttemptsDefault = 5
 	}
-	if backoffBaseSeconds <= 0 {
-		backoffBaseSeconds = 5
-	}
 	if backoffMaxSeconds <= 0 {
 		backoffMaxSeconds = 900
-	}
-	if backoffPolicy == "" {
-		backoffPolicy = "exp_full_jitter"
 	}
 	return &schedulerService{
 		repo:                repo,
@@ -84,11 +73,7 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 		defaultLease:        defaultLease,
 		requeueInspectLimit: inspectLimit,
 		maxAttemptsDefault:  maxAttemptsDefault,
-		backoffPolicy:       backoffPolicy,
-		backoffBaseSeconds:  backoffBaseSeconds,
 		backoffMaxSeconds:   backoffMaxSeconds,
-		// #nosec G404 -- retry scheduling jitter is not security-sensitive randomness.
-		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -257,8 +242,8 @@ func (s *schedulerService) NackTask(ctx context.Context, taskID, workerID string
 	if t.Status != domain.StatusInProgress {
 		return 0, false, errors.New("not-in-progress")
 	}
-	if delaySeconds <= 0 {
-		delaySeconds = s.computeBackoff(t.Attempts)
+	if delaySeconds < 0 {
+		delaySeconds = 0
 	}
 	if delaySeconds > s.backoffMaxSeconds {
 		delaySeconds = s.backoffMaxSeconds
@@ -303,8 +288,4 @@ func (s *schedulerService) CleanupExpired(ctx context.Context, limit int, before
 		limit = 1000
 	}
 	return s.repo.CleanupExpired(ctx, limit, before)
-}
-
-func (s *schedulerService) computeBackoff(attempts int) int {
-	return backoff.Compute(s.backoffPolicy, s.backoffBaseSeconds, s.backoffMaxSeconds, attempts, s.rng)
 }

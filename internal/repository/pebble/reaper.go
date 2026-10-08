@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -294,45 +293,10 @@ func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
 	upper := make([]byte, 0, len(pTTL)+8)
 	upper = append(upper, pTTL...)
 	upper = append(upper, be8(unixSeconds(before)+1)...)
-	it, err := r.db.Iter(lower, upper)
-	if err != nil {
+	hits, err := collectTTLHits(r.db, lower, upper, r.ttlBatch)
+	if err != nil || len(hits) == 0 {
 		return 0, err
 	}
-	defer it.Close()
-
-	type cand struct {
-		ttlKey []byte
-		id     string
-	}
-	bucket := make([]cand, 0, r.ttlBatch)
-	for valid := it.First(); valid && len(bucket) < r.ttlBatch; valid = it.Next() {
-		k := append([]byte(nil), it.Key()...)
-		idx := strings.LastIndexByte(string(k), '/')
-		if idx < 0 || idx+1 >= len(k) {
-			continue
-		}
-		bucket = append(bucket, cand{ttlKey: k, id: string(k[idx+1:])})
-	}
-	if len(bucket) == 0 {
-		return 0, nil
-	}
-
-	b := r.db.Batch()
-	defer b.Close()
-	for _, c := range bucket {
-		if err := b.Delete(KeyTask(c.id), nil); err != nil {
-			return 0, err
-		}
-		// Phase 6 / M2: KeyLease eliminated; in-memory drop below.
-		if err := b.Delete(c.ttlKey, nil); err != nil {
-			return 0, err
-		}
-	}
-	if err := r.db.CommitBatch(b); err != nil {
-		return 0, err
-	}
-	for _, c := range bucket {
-		r.db.Leases.Delete(c.id)
-	}
-	return len(bucket), nil
+	n, err := dropExpiredBodies(r.db, hits)
+	return n, err
 }

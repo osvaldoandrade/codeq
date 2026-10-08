@@ -90,20 +90,3 @@ persistence:
     size: 4Gi
     storageClass: ""
     path: /var/lib/codeq/pebble
-
-kvrocks:
-  enabled: false
-  image:
-    repository: apache/kvrocks
-    tag: "2.7.0"
-    pullPolicy: IfNotPresent
-  service:
-    port: 6666
-  persistence:
-    enabled: true
-    size: 4Gi
-    storageClass: ""
-  resources: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}

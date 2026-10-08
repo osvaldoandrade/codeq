@@ -61,7 +61,7 @@ groups:
           description: >-
             The 95th-percentile end-to-end latency for command
             {{ $labels.command }} is {{ $value | humanizeDuration }}.
-            Check worker performance and KVRocks health.
+            Check worker performance and the Pebble volume.
 
       - alert: CodeqHighFailureRate
         expr: >-

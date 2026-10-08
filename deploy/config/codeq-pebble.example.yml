@@ -6,8 +6,8 @@
 # - Testing and CI/CD pipelines
 # - Small single-machine deployments
 #
-# For distributed deployments with multiple codeQ instances, use Redis/KVRocks instead.
-# See codeq.example.yml for a full Redis configuration.
+# Several codeQ processes share state through Raft. Each process keeps its
+# own Pebble directory. Persistence is selected with persistenceProvider.
 
 # Core Settings
 port: 8080

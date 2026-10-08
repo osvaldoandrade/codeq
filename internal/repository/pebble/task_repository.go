@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,6 +76,11 @@ type TaskRepository struct {
 	// don't dereference through r.db on every claim. Initialized in
 	// NewTaskRepository.
 	leases *leaseTable
+
+	// idempoStripes serialize create-with-key on this process. The lookup
+	// and the batch that records the key are not one Pebble compare-and-swap,
+	// so two creates that both miss the key would both commit a task.
+	idempoStripes [32]sync.Mutex
 
 	// dispatchMu guards the hint channel, queued/inflight sets, and the
 	// leadership-rebuild flag. Lock order: dispatchMu, then leaseTable.mu.
@@ -220,6 +226,11 @@ func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Comman
 // uuid.NewString() and get the original semantics.
 func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
 	if idempotencyKey != "" {
+		mu := r.idempoStripe(idempotencyKey)
+		mu.Lock()
+		defer mu.Unlock()
+	}
+	if idempotencyKey != "" {
 		// Look up existing task for this idempotency key. If present, return
 		// the original task to a caller of the same tenant only (mirrors the
 		// Redis behavior so SDKs see the same idempotent contract regardless
@@ -317,6 +328,12 @@ func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domai
 		metrics.QueueDepth.WithLabelValues(string(cmd), "ready").Inc()
 	}
 	return task, ready, nil
+}
+
+func (r *TaskRepository) idempoStripe(key string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return &r.idempoStripes[h.Sum32()%uint32(len(r.idempoStripes))]
 }
 
 // publishPending pushes a (seq, id) hint onto the per-queue channel
@@ -1038,9 +1055,10 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 		return 0, true, nil
 	}
 
-	if delaySeconds < 0 {
-		delaySeconds = 0
+	if delaySeconds <= 0 {
+		return r.requeueNow(&t, taskID)
 	}
+
 	visibleAt := now.Add(time.Duration(delaySeconds) * time.Second).UTC()
 	t.Status = domain.StatusPending
 	t.LastKnownLocation = domain.LocationDelayed
@@ -1069,6 +1087,39 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 	r.leases.Delete(taskID)
 	r.NoteDelayed(t.Command, t.TenantID)
 	return delaySeconds, false, nil
+}
+
+// requeueNow puts a nacked task back on the ready queue. delaySeconds 0
+// is the proto contract: the task is claimable as soon as this commit lands.
+func (r *TaskRepository) requeueNow(t *domain.Task, taskID string) (int, bool, error) {
+	now := r.now()
+	t.Status = domain.StatusPending
+	t.LastKnownLocation = domain.LocationPending
+	t.WorkerID = ""
+	t.LeaseUntil = ""
+	t.Error = ""
+	t.UpdatedAt = now
+	updated, _ := sonic.Marshal(t)
+	prio := normalizePriority(t.Priority)
+	seq := r.db.NextSeq()
+
+	b := r.db.Batch()
+	defer b.Close()
+	if err := b.Delete(KeyInprog(t.Command, t.TenantID, taskID), nil); err != nil {
+		return 0, false, err
+	}
+	if err := b.Set(KeyPending(t.Command, t.TenantID, prio, seq, taskID), nil, nil); err != nil {
+		return 0, false, err
+	}
+	if err := b.Set(KeyTask(taskID), updated, nil); err != nil {
+		return 0, false, err
+	}
+	if err := r.db.CommitBatch(b); err != nil {
+		return 0, false, err
+	}
+	r.leases.Delete(taskID)
+	r.publishPending(t.Command, t.TenantID, prio, seq, taskID)
+	return 0, false, nil
 }
 
 // ---------- MoveDueDelayed ----------
@@ -1386,67 +1437,84 @@ func (r *TaskRepository) countPrefix(lower, upper []byte) (int64, error) {
 	return n, nil
 }
 
-// CleanupExpired sweeps the ttl_index for entries older than `before`,
-// removing the task and any queue references. Bounded by `limit` per call.
+// CleanupExpired sweeps the ttl_index for entries older than `before`.
+// A terminal task loses its body. A task still pending or in progress
+// keeps the body; only the due index entry is removed.
 func (r *TaskRepository) CleanupExpired(ctx context.Context, limit int, before time.Time) (int, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	lower, _ := PrefixTTL()
 	_, upperFull := PrefixTTL()
-	// Restrict upper bound to keys with expire <= before.
 	upper := make([]byte, 0, len(pTTL)+8)
 	upper = append(upper, pTTL...)
 	upper = append(upper, be8(unixSeconds(before)+1)...)
 	if string(upper) > string(upperFull) {
 		upper = upperFull
 	}
-	it, err := r.db.Iter(lower, upper)
-	if err != nil {
+	hits, err := collectTTLHits(r.db, lower, upper, limit)
+	if err != nil || len(hits) == 0 {
 		return 0, err
+	}
+	return dropExpiredBodies(r.db, hits)
+}
+
+type ttlHit struct {
+	key []byte
+	id  string
+}
+
+func collectTTLHits(db *DB, lower, upper []byte, limit int) ([]ttlHit, error) {
+	it, err := db.Iter(lower, upper)
+	if err != nil {
+		return nil, err
 	}
 	defer it.Close()
-
-	type cand struct {
-		ttlKey []byte
-		id     string
-	}
-	cands := make([]cand, 0, limit)
-	for valid := it.First(); valid && len(cands) < limit; valid = it.Next() {
+	hits := make([]ttlHit, 0, limit)
+	for valid := it.First(); valid && len(hits) < limit; valid = it.Next() {
 		k := append([]byte(nil), it.Key()...)
-		// ttl/<be8>/<id>
 		idx := strings.LastIndexByte(string(k), '/')
-		if idx < 0 {
+		if idx < 0 || idx+1 >= len(k) {
 			continue
 		}
-		cands = append(cands, cand{ttlKey: k, id: string(k[idx+1:])})
+		hits = append(hits, ttlHit{key: k, id: string(k[idx+1:])})
 	}
-	if len(cands) == 0 {
-		return 0, nil
-	}
+	return hits, nil
+}
 
-	b := r.db.Batch()
+// dropExpiredBodies removes a due TTL index entry. The task body goes
+// with it only when the task is already terminal (completed or failed).
+func dropExpiredBodies(db *DB, hits []ttlHit) (int, error) {
+	b := db.Batch()
 	defer b.Close()
-	deleted := 0
-	for _, c := range cands {
-		// Remove the task body itself; queue references (if any) are
-		// orphaned but reaped lazily by the ghost-detection path in Claim.
-		if err := b.Delete(KeyTask(c.id), nil); err != nil {
-			return deleted, err
+	dropped := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		if err := b.Delete(hit.key, nil); err != nil {
+			return 0, err
 		}
-		if err := b.Delete(c.ttlKey, nil); err != nil {
-			return deleted, err
+		body, err := db.Get(KeyTask(hit.id))
+		if err != nil {
+			continue
 		}
-		// Phase 6 / M2: KeyLease eliminated.
-		deleted++
+		var task domain.Task
+		if uerr := sonic.Unmarshal(body, &task); uerr != nil {
+			continue
+		}
+		if task.Status != domain.StatusCompleted && task.Status != domain.StatusFailed {
+			continue
+		}
+		if err := b.Delete(KeyTask(hit.id), nil); err != nil {
+			return 0, err
+		}
+		dropped = append(dropped, hit.id)
 	}
-	if err := r.db.CommitBatch(b); err != nil {
+	if err := db.CommitBatch(b); err != nil {
 		return 0, err
 	}
-	for _, c := range cands {
-		r.db.Leases.Delete(c.id)
+	for _, id := range dropped {
+		db.Leases.Delete(id)
 	}
-	return deleted, nil
+	return len(dropped), nil
 }
 
 // ParseDelayedKey extracts the id from a delayed key. Mirrors

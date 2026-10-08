@@ -360,6 +360,13 @@ func TestNackTaskSuccess(t *testing.T) {
 	if delay < 0 {
 		t.Errorf("Expected non-negative delay, got %d", delay)
 	}
+	if delay != 0 {
+		t.Errorf("delaySeconds 0 must requeue immediately, got %d", delay)
+	}
+	again, ok, err := svc.ClaimTask(ctx, "worker-1", []domain.Command{domain.CmdGenerateMaster}, 60, 0, "")
+	if err != nil || !ok || again.ID != task.ID {
+		t.Fatalf("immediate requeue claim: ok=%v id=%v err=%v", ok, again, err)
+	}
 }
 
 func TestNackTaskEmptyWorkerID(t *testing.T) {

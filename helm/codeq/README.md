@@ -1,8 +1,7 @@
 # codeQ Helm Chart
 
-This chart deploys the codeQ API and, optionally, a single-node KVRocks instance.
-For production, use a size profile and override identity, worker auth, secrets,
-and Redis/KVRocks settings for your environment.
+This chart deploys codeQ. Persistence is Pebble, configured as the
+persistence provider. The chart does not deploy a separate database.
 
 ## Quick install
 
@@ -17,17 +16,10 @@ helm upgrade --install codeq ./helm/codeq \
   --set config.workerIssuer=https://issuer
 ```
 
-By default, `values-small.yaml` deploys embedded KVRocks. For medium and large
-profiles, use an external KVRocks/Redis-compatible service.
-
 ## Size profiles
 
-| Profile | File | Intent |
-| --- | --- | --- |
-| `dev` | `values-dev.yaml` | Local or ephemeral namespaces with static dev tokens |
-| `small` | `values-small.yaml` | Small production server, embedded KVRocks |
-| `medium` | `values-medium.yaml` | Multi-replica production, external KVRocks recommended |
-| `large` | `values-large.yaml` | Higher traffic production, external KVRocks required |
+The `codeq install` command emits a values file for `dev`, `small`, `medium`,
+or `large`. Every profile persists on Pebble.
 
 Example:
 

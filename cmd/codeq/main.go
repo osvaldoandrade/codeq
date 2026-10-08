@@ -107,26 +107,20 @@ type installOptions struct {
 }
 
 type installProfile struct {
-	Name                 string
-	Description          string
-	Replicas             int
-	MinReplicas          int
-	MaxReplicas          int
-	TargetCPU            int
-	CPURequest           string
-	MemoryRequest        string
-	CPULimit             string
-	MemoryLimit          string
-	KVRocksSize          string
-	KVRocksCPURequest    string
-	KVRocksMemoryRequest string
-	KVRocksCPULimit      string
-	KVRocksMemoryLimit   string
-	ArtifactsEnabled     bool
-	ArtifactsSize        string
-	RequeueInspectLimit  int
-	EmbeddedKVRocks      bool
-	DevAuth              bool
+	Name                string
+	Description         string
+	Replicas            int
+	MinReplicas         int
+	MaxReplicas         int
+	TargetCPU           int
+	CPURequest          string
+	MemoryRequest       string
+	CPULimit            string
+	MemoryLimit         string
+	ArtifactsEnabled    bool
+	ArtifactsSize       string
+	RequeueInspectLimit int
+	DevAuth             bool
 }
 
 type installBundle struct {
@@ -1131,49 +1125,37 @@ func installCmd(ui *ui) *cobra.Command {
 func installProfiles() map[string]installProfile {
 	return map[string]installProfile{
 		"dev": {
-			Name:                 "dev",
-			Description:          "single-node development stack with static dev tokens",
-			Replicas:             1,
-			MinReplicas:          1,
-			MaxReplicas:          1,
-			TargetCPU:            80,
-			CPURequest:           "100m",
-			MemoryRequest:        "256Mi",
-			CPULimit:             "500m",
-			MemoryLimit:          "512Mi",
-			KVRocksSize:          "2Gi",
-			KVRocksCPURequest:    "100m",
-			KVRocksMemoryRequest: "256Mi",
-			KVRocksCPULimit:      "500m",
-			KVRocksMemoryLimit:   "512Mi",
-			ArtifactsSize:        "1Gi",
-			RequeueInspectLimit:  200,
-			EmbeddedKVRocks:      true,
-			DevAuth:              true,
+			Name:                "dev",
+			Description:         "single-node development stack with static dev tokens",
+			Replicas:            1,
+			MinReplicas:         1,
+			MaxReplicas:         1,
+			TargetCPU:           80,
+			CPURequest:          "100m",
+			MemoryRequest:       "256Mi",
+			CPULimit:            "500m",
+			MemoryLimit:         "512Mi",
+			ArtifactsSize:       "1Gi",
+			RequeueInspectLimit: 200,
+			DevAuth:             true,
 		},
 		"small": {
-			Name:                 "small",
-			Description:          "small production install with embedded KVRocks",
-			Replicas:             2,
-			MinReplicas:          2,
-			MaxReplicas:          4,
-			TargetCPU:            75,
-			CPURequest:           "250m",
-			MemoryRequest:        "512Mi",
-			CPULimit:             "1",
-			MemoryLimit:          "1Gi",
-			KVRocksSize:          "20Gi",
-			KVRocksCPURequest:    "250m",
-			KVRocksMemoryRequest: "512Mi",
-			KVRocksCPULimit:      "1",
-			KVRocksMemoryLimit:   "1Gi",
-			ArtifactsSize:        "5Gi",
-			RequeueInspectLimit:  200,
-			EmbeddedKVRocks:      true,
+			Name:                "small",
+			Description:         "small production install",
+			Replicas:            2,
+			MinReplicas:         2,
+			MaxReplicas:         4,
+			TargetCPU:           75,
+			CPURequest:          "250m",
+			MemoryRequest:       "512Mi",
+			CPULimit:            "1",
+			MemoryLimit:         "1Gi",
+			ArtifactsSize:       "5Gi",
+			RequeueInspectLimit: 200,
 		},
 		"medium": {
 			Name:                "medium",
-			Description:         "multi-replica production install; external KVRocks recommended",
+			Description:         "multi-replica production install",
 			Replicas:            3,
 			MinReplicas:         3,
 			MaxReplicas:         8,
@@ -1182,14 +1164,13 @@ func installProfiles() map[string]installProfile {
 			MemoryRequest:       "1Gi",
 			CPULimit:            "2",
 			MemoryLimit:         "2Gi",
-			KVRocksSize:         "50Gi",
 			ArtifactsEnabled:    true,
 			ArtifactsSize:       "20Gi",
 			RequeueInspectLimit: 500,
 		},
 		"large": {
 			Name:                "large",
-			Description:         "larger production install; external KVRocks required",
+			Description:         "larger production install",
 			Replicas:            5,
 			MinReplicas:         5,
 			MaxReplicas:         20,
@@ -1198,7 +1179,6 @@ func installProfiles() map[string]installProfile {
 			MemoryRequest:       "2Gi",
 			CPULimit:            "4",
 			MemoryLimit:         "4Gi",
-			KVRocksSize:         "100Gi",
 			ArtifactsEnabled:    true,
 			ArtifactsSize:       "100Gi",
 			RequeueInspectLimit: 1000,
@@ -1440,7 +1420,6 @@ func renderDockerInstallEnv(opts installOptions, profile installProfile) string 
 func renderHelmInstallValues(opts installOptions, profile installProfile) (string, []string) {
 	var warnings []string
 	imageRepo, imageTag := splitImageRef(opts.Image)
-	embeddedKVRocks := false
 
 	envMode := "prod"
 	logLevel := "info"
@@ -1516,19 +1495,6 @@ resources:
     cpu: %q
     memory: %q
 
-kvrocks:
-  enabled: %t
-  persistence:
-    enabled: true
-    size: %q
-  resources:
-    requests:
-      cpu: %q
-      memory: %q
-    limits:
-      cpu: %q
-      memory: %q
-
 persistence:
   artifacts:
     enabled: %t
@@ -1540,9 +1506,7 @@ persistence:
 		allowProducerAsWorker, profile.RequeueInspectLimit, opts.WebhookHmacSecret,
 		profile.Name != "dev", profile.MinReplicas, profile.MaxReplicas, profile.TargetCPU,
 		profile.CPURequest, profile.MemoryRequest, profile.CPULimit, profile.MemoryLimit,
-		embeddedKVRocks, profile.KVRocksSize, emptyOr(profile.KVRocksCPURequest, "250m"),
-		emptyOr(profile.KVRocksMemoryRequest, "512Mi"), emptyOr(profile.KVRocksCPULimit, "1"),
-		emptyOr(profile.KVRocksMemoryLimit, "1Gi"), profile.ArtifactsEnabled, emptyOr(profile.ArtifactsSize, "1Gi"),
+		profile.ArtifactsEnabled, emptyOr(profile.ArtifactsSize, "1Gi"),
 		ingressBlock, extraEnv), warnings
 }
 
