@@ -17,7 +17,7 @@ const (
 
 // dedupeRecorder records the deduplication key of every create it serves.
 func dedupeRecorder(seen *[]string, err error) *mockSchedulerService {
-	return &mockSchedulerService{createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, _ string, key string, _ time.Time, _ int, _ string) (*domain.Task, error) {
+	return &mockSchedulerService{createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, _ string, key string, _ string, _ time.Time, _ int, _ string) (*domain.Task, error) {
 		*seen = append(*seen, key)
 		if err != nil {
 			return nil, err

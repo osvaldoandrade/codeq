@@ -19,7 +19,7 @@ import (
 )
 
 type SchedulerService interface {
-	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
+	CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error)
 	ClaimTask(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, waitSeconds int, tenantID string) (*domain.Task, bool, error)
 	// ClaimManyTasks pops up to max tasks in one round-trip when the
 	// underlying repo supports batched claim (Pebble does via Phase 7's
@@ -89,7 +89,7 @@ func NewSchedulerService(repo repository.TaskRepository, notifier NotifierServic
 // command, a webhook that is not an absolute http(s) URL, or both an
 // idempotency and a deduplication key. It marks the span the same way the
 // inline checks it replaces did.
-func validateCreate(span trace.Span, cmd domain.Command, webhook, idempotencyKey, deduplicationKey string) error {
+func validateCreate(span trace.Span, cmd domain.Command, webhook, idempotencyKey, deduplicationKey, taskID string) error {
 	if strings.TrimSpace(string(cmd)) == "" {
 		span.SetStatus(codes.Error, "invalid command")
 		return errors.New("invalid command")
@@ -105,6 +105,27 @@ func validateCreate(span trace.Span, cmd domain.Command, webhook, idempotencyKey
 	if idempotencyKey != "" && deduplicationKey != "" {
 		span.SetStatus(codes.Error, domain.ErrDeduplicationWithIdempotency.Error())
 		return domain.ErrDeduplicationWithIdempotency
+	}
+	return validateTaskID(span, idempotencyKey, deduplicationKey, taskID)
+}
+
+// validateTaskID rejects a client-chosen ID that is malformed or combined
+// with another create key. An empty ID means the server chooses one.
+func validateTaskID(span trace.Span, idempotencyKey, deduplicationKey, taskID string) error {
+	if taskID == "" {
+		return nil
+	}
+	if !domain.ValidTaskID(taskID) {
+		span.SetStatus(codes.Error, domain.ErrInvalidTaskID.Error())
+		return domain.ErrInvalidTaskID
+	}
+	if idempotencyKey != "" {
+		span.SetStatus(codes.Error, domain.ErrTaskIDWithIdempotency.Error())
+		return domain.ErrTaskIDWithIdempotency
+	}
+	if deduplicationKey != "" {
+		span.SetStatus(codes.Error, domain.ErrTaskIDWithDeduplication.Error())
+		return domain.ErrTaskIDWithDeduplication
 	}
 	return nil
 }
@@ -123,7 +144,7 @@ func (s *schedulerService) visibleAt(runAt time.Time, delaySeconds int) time.Tim
 
 // CreateTask validates and enqueues a task, or returns the task an
 // idempotency or deduplication key resolves to.
-func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
+func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, runAt time.Time, delaySeconds int, tenantID string) (*domain.Task, error) {
 	ctx, span := otel.Tracer("codeq/scheduler").Start(ctx, "codeq.task.create",
 		trace.WithAttributes(
 			attribute.String("codeq.command", string(cmd)),
@@ -140,7 +161,7 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 		span.SetAttributes(attribute.Bool("codeq.has_deduplication_key", true))
 	}
 
-	if err := validateCreate(span, cmd, webhook, idempotencyKey, deduplicationKey); err != nil {
+	if err := validateCreate(span, cmd, webhook, idempotencyKey, deduplicationKey, taskID); err != nil {
 		return nil, err
 	}
 	if maxAttempts <= 0 {
@@ -148,7 +169,7 @@ func (s *schedulerService) CreateTask(ctx context.Context, cmd domain.Command, p
 	}
 	visibleAt := s.visibleAt(runAt, delaySeconds)
 
-	task, ready, err := s.repo.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
+	task, ready, err := s.repo.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

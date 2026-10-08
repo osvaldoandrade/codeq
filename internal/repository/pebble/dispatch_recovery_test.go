@@ -15,11 +15,11 @@ func TestRebuildDispatchRestoresPendingHints(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	first, err := repo.Enqueue(ctx, cmd, `{"n":1}`, 5, "", 3, "", "", time.Time{}, "")
+	first, err := repo.Enqueue(ctx, cmd, `{"n":1}`, 5, "", 3, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	second, err := repo.Enqueue(ctx, cmd, `{"n":2}`, 5, "", 3, "", "", time.Time{}, "")
+	second, err := repo.Enqueue(ctx, cmd, `{"n":2}`, 5, "", 3, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestRequeueExpiredAdoptsLiveLease(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 5, "", 3, "", "", time.Time{}, "")
+	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 5, "", 3, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestRequeueExpiredWithoutMemoryLeaseRequeues(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 5, "", 3, "", "", time.Time{}, "")
+	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 5, "", 3, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

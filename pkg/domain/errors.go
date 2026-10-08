@@ -1,6 +1,9 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // LeaderHint is satisfied by errors that carry a hint pointing at the
 // raft group's current leader (HTTP base URL, e.g. "http://node-2:8080").
@@ -27,3 +30,50 @@ var ErrIdempotencyConflict = errors.New("idempotency_conflict")
 // create writes a new task, so together they would contradict each other
 // (ADR 0004). The HTTP layer answers it with 400.
 var ErrDeduplicationWithIdempotency = errors.New("'idempotencyKey' and 'deduplicationKey' are mutually exclusive")
+
+// ErrTaskIDConflict is returned when a create names a task ID that another
+// tenant's task already uses. Like ErrIdempotencyConflict, the caller gets
+// neither the task nor its data; the message is the wire code the HTTP layer
+// answers with 409.
+var ErrTaskIDConflict = errors.New("task_id_conflict")
+
+// ErrTaskIDWithIdempotency rejects a create that carries both a task ID and
+// an idempotency key: a named task is already idempotent by its ID. The HTTP
+// layer answers it with 400.
+var ErrTaskIDWithIdempotency = errors.New("'taskId' and 'idempotencyKey' are mutually exclusive")
+
+// ErrTaskIDWithDeduplication rejects a create that carries both a task ID and
+// a deduplication key. Each one decides whether the create writes, so
+// together they would contradict each other. The HTTP layer answers 400.
+var ErrTaskIDWithDeduplication = errors.New("'taskId' and 'deduplicationKey' are mutually exclusive")
+
+// ErrInvalidTaskID rejects a client-chosen task ID outside the allowed shape
+// (see ValidTaskID). The HTTP layer answers it with 400.
+var ErrInvalidTaskID = errors.New("invalid 'taskId' (1-200 characters from [A-Za-z0-9._:@+-], starting with a letter or digit)")
+
+// ValidTaskID reports whether id may name a task: 1 to 200 characters from
+// [A-Za-z0-9._:@+-], starting with a letter or digit. '/' is excluded
+// because storage keys end in "/<task id>", and NUL because it separates
+// binding namespaces.
+func ValidTaskID(id string) bool {
+	if id == "" || len(id) > maxTaskIDLength {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		if !taskIDByte(id[i], i == 0) {
+			return false
+		}
+	}
+	return true
+}
+
+// taskIDByte reports whether c may appear in a task ID; punctuation is
+// allowed anywhere but first.
+func taskIDByte(c byte, first bool) bool {
+	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+		return true
+	}
+	return !first && strings.IndexByte("._:@+-", c) >= 0
+}
+
+const maxTaskIDLength = 200

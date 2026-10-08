@@ -216,15 +216,49 @@ func normalizePriority(p int) int {
 
 // Enqueue creates a task and returns it, or returns the task an idempotency
 // or deduplication key resolves to. See EnqueueWithID.
-func (r *TaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	task, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
+func (r *TaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
 	return task, err
 }
 
-// EnqueueWithReady is Enqueue with a fresh task ID; it also reports whether
-// the new task is immediately ready to claim.
-func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// EnqueueWithReady is Enqueue with a fresh task ID, unless taskID names the
+// task. It also reports whether the new task is immediately ready to claim.
+func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if taskID != "" {
+		if idempotencyKey != "" {
+			return nil, false, domain.ErrTaskIDWithIdempotency
+		}
+		if deduplicationKey != "" {
+			return nil, false, domain.ErrTaskIDWithDeduplication
+		}
+		return r.EnqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+	}
 	return r.EnqueueWithID(ctx, uuid.NewString(), cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
+}
+
+// EnqueueNamed creates a task under an ID the client chose. If a task with
+// that ID exists, a caller of its tenant gets it back unchanged and any other
+// caller gets domain.ErrTaskIDConflict without the task. The ID's stripe is
+// held from the lookup to the commit, so two creates of one ID never both write.
+func (r *TaskRepository) EnqueueNamed(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	mu := r.idempoStripe(string(KeyTask(id)))
+	mu.Lock()
+	defer mu.Unlock()
+	existing, err := r.db.Get(KeyTask(id))
+	switch {
+	case err == nil:
+		var task domain.Task
+		if uerr := sonic.Unmarshal(existing, &task); uerr != nil {
+			return nil, false, fmt.Errorf("decode task %s: %w", id, uerr)
+		}
+		if task.TenantID != tenantID {
+			return nil, false, domain.ErrTaskIDConflict
+		}
+		return &task, false, nil
+	case !errors.Is(err, ErrNotFound):
+		return nil, false, fmt.Errorf("task id lookup: %w", err)
+	}
+	return r.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, "", "", visibleAt, tenantID)
 }
 
 // EnqueueWithID is the cluster-aware variant: callers (cluster.Router) pre-pick

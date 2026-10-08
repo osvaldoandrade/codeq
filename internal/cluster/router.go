@@ -87,14 +87,17 @@ func (r *TaskRouter) peerHasLikely(ownerID, key string) bool {
 // ---------------- Enqueue ----------------
 
 // Enqueue creates a task on the node that owns its ID. See EnqueueWithReady.
-func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	t, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
+func (r *TaskRouter) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	t, _, err := r.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
 	return t, err
 }
 
 // EnqueueWithReady is Enqueue that also reports whether the new task is
 // immediately ready to claim.
-func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if taskID != "" {
+		return r.enqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+	}
 	// Pre-pick the ID so the hash → owner decision is deterministic.
 	// Bias toward local ownership: the producer-side router would
 	// otherwise pay a cross-node gRPC for (N-1)/N of all creates, which
@@ -139,6 +142,49 @@ func (r *TaskRouter) EnqueueWithReady(ctx context.Context, cmd domain.Command, p
 		// restore the sentinel so the HTTP layer answers 409 with no task.
 		if errMessageHas(err, domain.ErrIdempotencyConflict.Error()) {
 			return nil, false, domain.ErrIdempotencyConflict
+		}
+		if errMessageHas(err, domain.ErrTaskIDConflict.Error()) {
+			return nil, false, domain.ErrTaskIDConflict
+		}
+		return nil, false, err
+	}
+	return protoToDomainTask(resp.Task), resp.Ready, nil
+}
+
+// enqueueNamed stores a task under an ID the client chose, on the node that
+// owns that ID. The owner runs the existence check, so a replay and a
+// cross-tenant conflict are decided once.
+func (r *TaskRouter) enqueueNamed(ctx context.Context, taskID string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if r.ring.IsLocal(taskID) {
+		t, ready, err := r.local.EnqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+		if err == nil && t != nil && r.localBloom != nil {
+			r.localBloom.Add(t.ID)
+		}
+		return t, ready, err
+	}
+	owner := r.ring.Owner(taskID)
+	c, err := r.pool.Client(owner)
+	if err != nil {
+		return nil, false, fmt.Errorf("dial owner %s: %w", owner.ID, err)
+	}
+	var visible int64
+	if !visibleAt.IsZero() {
+		visible = visibleAt.Unix()
+	}
+	resp, err := c.Enqueue(ctx, &clusterpb.EnqueueRequest{
+		Id:            taskID,
+		Command:       string(cmd),
+		Payload:       []byte(payload),
+		Priority:      safeint.Int32(priority),
+		Webhook:       webhook,
+		MaxAttempts:   safeint.Int32(maxAttempts),
+		VisibleAtUnix: visible,
+		TenantId:      tenantID,
+		Named:         true,
+	})
+	if err != nil {
+		if errMessageHas(err, domain.ErrTaskIDConflict.Error()) {
+			return nil, false, domain.ErrTaskIDConflict
 		}
 		return nil, false, err
 	}

@@ -216,6 +216,9 @@ message EnqueueRequest {
   int64 visible_at_unix = 8;
   string tenant_id = 9;
   string deduplication_key = 10;
+  // named is true when id was chosen by the client. The owner then runs the
+  // existence check instead of writing the id unconditionally.
+  bool named = 11;
 }
 message EnqueueResponse {
   Task task = 1;

@@ -30,6 +30,9 @@ type createReq struct {
 	// Deduplication collapses this create into a waiting task of the same
 	// tenant, command and key (ADR 0004).
 	Deduplication string `json:"deduplicationKey,omitempty"`
+	// TaskID is the ID the client chose (ADR 0008). Exclusive with
+	// Idempotency and Deduplication.
+	TaskID string `json:"taskId,omitempty"`
 }
 
 func (h *createTaskController) Handle(c *gin.Context) {
@@ -74,7 +77,11 @@ func (h *createTaskController) Handle(c *gin.Context) {
 	}
 
 	idempotencyKey := storageIdempotencyKey(scope, req.Idempotency)
-	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, idempotencyKey, req.Deduplication, runAt, req.DelaySecs, tenantID)
+	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, idempotencyKey, req.Deduplication, req.TaskID, runAt, req.DelaySecs, tenantID)
+	if errors.Is(err, domain.ErrTaskIDConflict) {
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": domain.ErrTaskIDConflict.Error()})
+		return
+	}
 	if errors.Is(err, domain.ErrIdempotencyConflict) || (err == nil && !bindingMayReplay(scope, task)) {
 		respondIdempotencyConflict(c, tenantID)
 		return

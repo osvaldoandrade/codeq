@@ -41,8 +41,8 @@ func (c *captureCallback) snapshot() []captureEntry {
 func TestBatchSubmitFiresCallbackPerItem(t *testing.T) {
 	stores := openPebbleStores(t)
 	taskRepo := stores.tasks
-	t1, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"k":1}`, 0, "https://hook.example/1", 5, "", "", time.Time{}, "")
-	t2, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"k":2}`, 0, "https://hook.example/2", 5, "", "", time.Time{}, "")
+	t1, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"k":1}`, 0, "https://hook.example/1", 5, "", "", "", time.Time{}, "")
+	t2, _ := taskRepo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{"k":2}`, 0, "https://hook.example/2", 5, "", "", "", time.Time{}, "")
 	cmds := []domain.Command{domain.CmdGenerateMaster}
 	_, _, _ = taskRepo.Claim(context.Background(), "w1", cmds, 30, 1, 5, "")
 	_, _, _ = taskRepo.Claim(context.Background(), "w1", cmds, 30, 1, 5, "")
@@ -84,7 +84,7 @@ func TestNackTerminalFiresCallback(t *testing.T) {
 	// maxAttemptsDefault=1 so the first Nack lands the task in DLQ.
 	svc := NewSchedulerService(taskRepo, notifier, cb, time.UTC, time.Now, 60, 50, 1, "exp_full_jitter", 5, 900)
 
-	created, err := svc.CreateTask(context.Background(), domain.CmdGenerateMaster, `{"k":1}`, 0, "https://hook.example/x", 1, "", "", time.Time{}, 0, "")
+	created, err := svc.CreateTask(context.Background(), domain.CmdGenerateMaster, `{"k":1}`, 0, "https://hook.example/x", 1, "", "", "", time.Time{}, 0, "")
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestNackNonTerminalDoesNotFireCallback(t *testing.T) {
 	// maxAttempts=5; first Nack should retry, not DLQ.
 	svc := NewSchedulerService(taskRepo, notifier, cb, time.UTC, time.Now, 60, 50, 5, "exp_full_jitter", 5, 900)
 
-	created, _ := svc.CreateTask(context.Background(), domain.CmdGenerateMaster, `{"k":1}`, 0, "https://hook.example/y", 5, "", "", time.Time{}, 0, "")
+	created, _ := svc.CreateTask(context.Background(), domain.CmdGenerateMaster, `{"k":1}`, 0, "https://hook.example/y", 5, "", "", "", time.Time{}, 0, "")
 	_, _, _ = svc.ClaimTask(context.Background(), "w1", []domain.Command{domain.CmdGenerateMaster}, 30, 0, "")
 	_, terminal, _ := svc.NackTask(context.Background(), created.ID, "w1", 1, "retry-me")
 	if terminal {

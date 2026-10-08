@@ -23,7 +23,7 @@ func TestReaperDLQCallbackOnLeaseExpired(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 0, "https://hook.example/z", 1, "", "", time.Time{}, "")
+	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 0, "https://hook.example/z", 1, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestReaperDLQCallbackOnlyOnTerminal(t *testing.T) {
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
 
-	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 0, "https://hook.example/q", 5, "", "", time.Time{}, "")
+	task, err := repo.Enqueue(ctx, cmd, `{"k":1}`, 0, "https://hook.example/q", 5, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

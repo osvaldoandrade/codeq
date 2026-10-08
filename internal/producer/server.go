@@ -255,6 +255,7 @@ func (s *Server) processCreate(ctx context.Context, sess *streamSession, req *pr
 		int(req.MaxAttempts),
 		req.IdempotencyKey,
 		req.DeduplicationKey,
+		req.TaskId,
 		runAt,
 		int(req.DelaySeconds),
 		sess.tenantID,

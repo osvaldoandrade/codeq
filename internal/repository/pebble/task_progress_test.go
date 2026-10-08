@@ -21,7 +21,7 @@ const (
 func claimForProgress(t *testing.T, repo repository.TaskRepository, workerID string) *domain.Task {
 	t.Helper()
 	ctx := context.Background()
-	enq, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", time.Time{}, "")
+	enq, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", "", time.Time{}, "")
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

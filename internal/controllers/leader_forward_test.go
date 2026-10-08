@@ -24,7 +24,7 @@ func notLeader(url string) error { return &pebble.NotLeaderError{LeaderURL: url}
 // retryable on every write controller; no controller answers 307.
 func TestNotLeaderWithoutForwarderIs503(t *testing.T) {
 	sched := &mockSchedulerService{
-		createFunc: func(context.Context, domain.Command, string, int, string, int, string, string, time.Time, int, string) (*domain.Task, error) {
+		createFunc: func(context.Context, domain.Command, string, int, string, int, string, string, string, time.Time, int, string) (*domain.Task, error) {
 			return nil, notLeader("http://codeq-1:8080")
 		},
 		claimFunc: func(context.Context, string, []domain.Command, int, int, string) (*domain.Task, bool, error) {

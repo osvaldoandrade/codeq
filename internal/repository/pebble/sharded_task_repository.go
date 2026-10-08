@@ -76,14 +76,24 @@ func (s *ShardedTaskRepository) nextStart() int {
 
 // Enqueue creates a task on the shard its ID (or its idempotency or
 // deduplication key) routes to. See EnqueueWithReady.
-func (s *ShardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
-	task, _, err := s.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, visibleAt, tenantID)
+func (s *ShardedTaskRepository) Enqueue(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, error) {
+	task, _, err := s.EnqueueWithReady(ctx, cmd, payload, priority, webhook, maxAttempts, idempotencyKey, deduplicationKey, taskID, visibleAt, tenantID)
 	return task, err
 }
 
 // EnqueueWithReady is Enqueue that also reports whether the new task is
-// immediately ready to claim.
-func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+// immediately ready to claim. A client-chosen task ID is stored on the shard
+// that owns that ID, and the existence check runs there.
+func (s *ShardedTaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey, taskID string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if taskID != "" {
+		if idempotencyKey != "" {
+			return nil, false, domain.ErrTaskIDWithIdempotency
+		}
+		if deduplicationKey != "" {
+			return nil, false, domain.ErrTaskIDWithDeduplication
+		}
+		return s.shards[s.shardOf(taskID)].EnqueueNamed(ctx, taskID, cmd, payload, priority, webhook, maxAttempts, visibleAt, tenantID)
+	}
 	// Idempotency check against its own shard first.
 	if idempotencyKey != "" {
 		idShard := s.shardOf(idempotencyKey)

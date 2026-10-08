@@ -33,7 +33,7 @@ func newShardedDedupeRepo(t *testing.T) *ShardedTaskRepository {
 
 func enqueueDedupe(t *testing.T, repo repository.TaskRepository, cmd domain.Command, tenant, key string, visibleAt time.Time) *domain.Task {
 	t.Helper()
-	task, err := repo.Enqueue(context.Background(), cmd, `{"n":1}`, 5, "", 3, "", key, visibleAt, tenant)
+	task, err := repo.Enqueue(context.Background(), cmd, `{"n":1}`, 5, "", 3, "", key, "", visibleAt, tenant)
 	if err != nil {
 		t.Fatalf("enqueue %s/%s/%s: %v", tenant, cmd, key, err)
 	}
@@ -222,7 +222,7 @@ func TestDedupeConcurrentCreatesWriteOneTask(t *testing.T) {
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					task, err := repo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{}`, 5, "", 3, "", dedupeKey, time.Time{}, dedupeTenant)
+					task, err := repo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{}`, 5, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
 					if err == nil {
 						ids[i] = task.ID
 					}
@@ -326,7 +326,7 @@ func TestDedupeReclaimOfARetryKeepsTheNewerHolder(t *testing.T) {
 			}
 			return got
 		}
-		first, err := repo.Enqueue(ctx, cmd, `{"run":1}`, 5, "", 3, "", dedupeKey, time.Time{}, dedupeTenant)
+		first, err := repo.Enqueue(ctx, cmd, `{"run":1}`, 5, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
 		if err != nil {
 			t.Fatalf("create first: %v", err)
 		}
@@ -334,7 +334,7 @@ func TestDedupeReclaimOfARetryKeepsTheNewerHolder(t *testing.T) {
 			t.Fatalf("claimed %s, want %s", got.ID, first.ID)
 		}
 		// A lower priority keeps the newer task waiting while the retry runs.
-		newer, err := repo.Enqueue(ctx, cmd, `{"run":2}`, 1, "", 3, "", dedupeKey, time.Time{}, dedupeTenant)
+		newer, err := repo.Enqueue(ctx, cmd, `{"run":2}`, 1, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
 		if err != nil || newer.ID == first.ID {
 			t.Fatalf("create after the claim = %v, %v; want a new task", newer, err)
 		}
@@ -344,7 +344,7 @@ func TestDedupeReclaimOfARetryKeepsTheNewerHolder(t *testing.T) {
 		if got := claim(); got.ID != first.ID {
 			t.Fatalf("re-claimed %s, want the retried %s", got.ID, first.ID)
 		}
-		joined, err := repo.Enqueue(ctx, cmd, `{"run":3}`, 5, "", 3, "", dedupeKey, time.Time{}, dedupeTenant)
+		joined, err := repo.Enqueue(ctx, cmd, `{"run":3}`, 5, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
 		if err != nil || joined.ID != newer.ID {
 			t.Fatalf("create while the newer task waits (many=%v) = %v, %v; want it to join %s", claimMany, joined, err, newer.ID)
 		}
@@ -374,14 +374,14 @@ func TestDedupeJoinIsSideEffectFree(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
 	cmd := domain.CmdGenerateMaster
-	first, ready, err := repo.EnqueueWithReady(context.Background(), cmd, `{"n":1}`, 5, "", 3, "", dedupeKey, time.Time{}, dedupeTenant)
+	first, ready, err := repo.EnqueueWithReady(context.Background(), cmd, `{"n":1}`, 5, "", 3, "", dedupeKey, "", time.Time{}, dedupeTenant)
 	if err != nil || !ready {
 		t.Fatalf("first create: ready=%v err=%v", ready, err)
 	}
 	before := snapshotStore(t, db)
 
 	for i := range 3 {
-		again, ready, err := repo.EnqueueWithReady(context.Background(), cmd, `{"n":2}`, 9, "", 3, "", dedupeKey, time.Now().Add(time.Hour), dedupeTenant)
+		again, ready, err := repo.EnqueueWithReady(context.Background(), cmd, `{"n":2}`, 9, "", 3, "", dedupeKey, "", time.Now().Add(time.Hour), dedupeTenant)
 		if err != nil || ready || again.ID != first.ID || again.Payload != first.Payload || again.Priority != first.Priority {
 			t.Fatalf("join %d = %+v ready=%v err=%v; want the unchanged first task, not ready", i, again, ready, err)
 		}

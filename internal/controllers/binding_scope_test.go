@@ -72,7 +72,7 @@ func TestCreateTaskBindingRefusalsSkipScheduler(t *testing.T) {
 	}
 	for name, tc := range cases {
 		called := false
-		svc := &mockSchedulerService{createFunc: func(context.Context, domain.Command, string, int, string, int, string, string, time.Time, int, string) (*domain.Task, error) {
+		svc := &mockSchedulerService{createFunc: func(context.Context, domain.Command, string, int, string, int, string, string, string, time.Time, int, string) (*domain.Task, error) {
 			called = true
 			return nil, nil
 		}}
@@ -87,7 +87,7 @@ func TestCreateTaskBindingRefusalsSkipScheduler(t *testing.T) {
 
 func TestBatchCreateBindingIsAllOrNothing(t *testing.T) {
 	var calls int32
-	svc := &mockSchedulerService{createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, _ string, _ string, _ time.Time, _ int, tenant string) (*domain.Task, error) {
+	svc := &mockSchedulerService{createFunc: func(_ context.Context, cmd domain.Command, _ string, _ int, _ string, _ int, _ string, _ string, _ string, _ time.Time, _ int, tenant string) (*domain.Task, error) {
 		atomic.AddInt32(&calls, 1)
 		return &domain.Task{ID: "t", Command: cmd, TenantID: tenant}, nil
 	}}

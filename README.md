@@ -178,6 +178,26 @@ discarded. `deduplicationKey` is also accepted per item in `POST /tasks/batch`
 and on the producer stream, and cannot be combined with `idempotencyKey`
 (`400`). See [ADR 0004](docs/adr/0004-deduplicate-waiting-tasks.md).
 
+### Name the task yourself
+
+Pass `taskId` to create the task under your own identifier and read it back
+by it later. Creating an ID that already exists returns that task to its own
+tenant, so a retried create is safe. Another tenant gets `409` and no task.
+
+```bash
+curl -X POST http://localhost:8080/v1/codeq/tasks \
+  -H 'Authorization: Bearer <producer-token>' \
+  -H 'Content-Type: application/json' \
+  -d '{"command":"EXPORT","payload":{"exportId":"42"},"taskId":"ws-1.export-42"}'
+curl http://localhost:8080/v1/codeq/tasks/ws-1.export-42 -H 'Authorization: Bearer <producer-token>'
+```
+
+IDs have 1–200 characters from `[A-Za-z0-9._:@+-]` and start with a letter or
+digit. `taskId` is also accepted per item in `POST /tasks/batch` and on the
+producer stream. It cannot be combined with `idempotencyKey` or
+`deduplicationKey` (`400`). See
+[ADR 0008](docs/adr/0008-client-chosen-task-ids.md).
+
 ### Queue topic administration
 
 An authenticated admin can reconcile the provider policy for a tenant-scoped

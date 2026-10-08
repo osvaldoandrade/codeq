@@ -22,7 +22,7 @@ type lister interface {
 
 func mustEnqueue(t *testing.T, repo repository.TaskRepository, prio int, visibleAt time.Time, tenant string) *domain.Task {
 	t.Helper()
-	task, err := repo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{}`, prio, "", 3, "", "", visibleAt, tenant)
+	task, err := repo.Enqueue(context.Background(), domain.CmdGenerateMaster, `{}`, prio, "", 3, "", "", "", visibleAt, tenant)
 	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}

@@ -99,7 +99,7 @@ func TestRouterEnqueueBiasesLocal(t *testing.T) {
 	// see TestRouterEnqueueForwardsCrossNodeID below.
 	const N = 200
 	for range N {
-		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"x":1}`, 5, "", 3, "", "", time.Time{}, ""); err != nil {
+		if _, err := router.Enqueue(ctx, domain.CmdGenerateMaster, `{"x":1}`, 5, "", 3, "", "", "", time.Time{}, ""); err != nil {
 			t.Fatalf("enqueue: %v", err)
 		}
 	}
@@ -214,7 +214,7 @@ func TestRouterListTasksWalksEveryNode(t *testing.T) {
 
 	want := map[string]bool{}
 	for i, repo := range []*pebblerepo.TaskRepository{a.repo, a.repo, b.repo, b.repo, b.repo} {
-		task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", time.Time{}, "tenant-a")
+		task, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", "", "", time.Time{}, "tenant-a")
 		if err != nil {
 			t.Fatalf("enqueue %d: %v", i, err)
 		}
@@ -299,7 +299,7 @@ func TestRouterDeduplicationKeyRoutesToKeyOwner(t *testing.T) {
 		entries := []string{dedupeNodeA, dedupeNodeB, dedupeNodeA}
 		ids := make([]string, 0, len(entries))
 		for _, entry := range entries {
-			task, err := routers[entry].Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", key, time.Time{}, "tenant-a")
+			task, err := routers[entry].Enqueue(ctx, domain.CmdGenerateMaster, `{}`, 5, "", 3, "", key, "", time.Time{}, "tenant-a")
 			if err != nil {
 				t.Fatalf("enqueue via %s: %v", entry, err)
 			}

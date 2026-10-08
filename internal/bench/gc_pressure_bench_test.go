@@ -18,7 +18,7 @@ func BenchmarkGCPressure_SustainedEnqueue(b *testing.B) {
 
 	// Warm up: let the runtime settle.
 	for i := 0; i < 50; i++ {
-		_, _ = a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"warmup":true}`, 0, "", 0, "", "", time.Time{}, 0, benchTenant)
+		_, _ = a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"warmup":true}`, 0, "", 0, "", "", "", time.Time{}, 0, benchTenant)
 	}
 	runtime.GC()
 
@@ -28,7 +28,7 @@ func BenchmarkGCPressure_SustainedEnqueue(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"gc":true}`, 0, "", 0, "", "", time.Time{}, 0, benchTenant)
+		_, err := a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"gc":true}`, 0, "", 0, "", "", "", time.Time{}, 0, benchTenant)
 		if err != nil {
 			b.Fatalf("CreateTask: %v", err)
 		}
@@ -51,7 +51,7 @@ func BenchmarkGCPressure_ClaimSubmitCycle(b *testing.B) {
 	// Keep queue filled so claims always succeed.
 	const prefill = 500
 	for i := 0; i < prefill; i++ {
-		_, err := a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"pre":true}`, 0, "", 0, "", "", time.Time{}, 0, benchTenant)
+		_, err := a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"pre":true}`, 0, "", 0, "", "", "", time.Time{}, 0, benchTenant)
 		if err != nil {
 			b.Fatalf("prefill CreateTask: %v", err)
 		}
@@ -65,7 +65,7 @@ func BenchmarkGCPressure_ClaimSubmitCycle(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		// Replenish queue to keep depth > 0.
-		_, _ = a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"gc":true}`, 0, "", 0, "", "", time.Time{}, 0, benchTenant)
+		_, _ = a.Scheduler.CreateTask(ctx, domain.CmdGenerateMaster, `{"gc":true}`, 0, "", 0, "", "", "", time.Time{}, 0, benchTenant)
 
 		task, ok, err := a.Scheduler.ClaimTask(ctx, benchWorkerSub, []domain.Command{domain.CmdGenerateMaster}, 60, 0, benchTenant)
 		if err != nil || !ok || task == nil {

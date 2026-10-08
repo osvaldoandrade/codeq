@@ -104,6 +104,9 @@ type CreateRequest struct {
 	// command and key that still waits to be claimed; the server then acks
 	// with that task's ID. Exclusive with IdempotencyKey (ADR 0004).
 	DeduplicationKey string
+	// TaskID is the ID the client chose for this task. Exclusive with
+	// IdempotencyKey and DeduplicationKey (ADR 0008).
+	TaskID string
 }
 
 // Session is one authenticated stream. Produce on it is safe to call
@@ -330,6 +333,7 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 			TraceState:     req.TraceState,
 
 			DeduplicationKey: req.DeduplicationKey,
+			TaskId:           req.TaskID,
 		},
 	}}
 	if err := s.send(ev); err != nil {
@@ -398,6 +402,7 @@ func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]Bat
 			TraceState:     req.TraceState,
 
 			DeduplicationKey: req.DeduplicationKey,
+			TaskId:           req.TaskID,
 		}
 	}
 

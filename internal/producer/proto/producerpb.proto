@@ -53,6 +53,9 @@ message CreateTask {
   // command and key that still waits to be claimed (ADR 0004). Exclusive
   // with idempotency_key.
   string deduplication_key = 12;
+  // task_id, when set, is the ID the client chose for this task (ADR 0008).
+  // Exclusive with idempotency_key and deduplication_key.
+  string task_id = 13;
 }
 
 // CreateTaskBatch is a producer pipelining N CreateTasks into a single
