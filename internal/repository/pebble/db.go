@@ -156,6 +156,13 @@ func Open(opts Options) (*DB, error) {
 		// on the ghost path). Bits-per-key 10 is the standard trade-off
 		// (~1% FP rate, ~10 bits per key memory).
 		Cache: pebbledb.NewCache(256 << 20), // 256 MiB block cache
+		// A 4 MiB memtable fills in a fraction of a second at the create
+		// rate, and Pebble stops writes once 12 L0 files are waiting on
+		// compaction. The 6s profile spent its Pebble time in compaction
+		// while commitLoop was under 3%. A larger memtable and a higher
+		// stop keep that ingest from waiting on the compactor.
+		MemTableSize:          64 << 20,
+		L0StopWritesThreshold: 64,
 	}
 	// Single L0 level option to favor write throughput in our queue workload.
 	for i := range pOpts.Levels {
