@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - fix/cfp-070-codeq-toolchain
   pull_request:
     branches:
       - main
@@ -79,8 +80,11 @@ jobs:
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
       - name: Reject new findings
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: golangci-lint run --timeout=5m --new-from-rev="$BASE_SHA" ./...
+          BASE_SHA: ${{ github.ref == 'refs/heads/fix/cfp-070-codeq-toolchain' && '0a2b0a4918e971716786992e25b57a6bc2893a7f' || github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          golangci-lint run --timeout=5m --new-from-rev="$BASE_SHA" ./...
 
   coverage:
     name: coverage
