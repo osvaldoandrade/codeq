@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - work/managed-logs
       - fix/cfp-070-codeq-toolchain
   pull_request:
     branches:
