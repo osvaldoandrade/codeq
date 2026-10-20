@@ -43,6 +43,8 @@ named task ID retries the same command and payload, returning the original
 `createdAt` and `expiresAt` even if the retry proposes a later deadline. Changed
 content or a conflicting tenant returns 409. Missing/malformed/beyond-policy
 deadlines return 400; an expired task identity returns 410 (`task_expired`).
+Absolute-task HTTP and batch payloads preserve JSON numeric precision, including
+integers above 2^53; legacy topics keep their previous numeric normalization.
 
 Claims, heartbeat, result, retry, abandon and DLQ requeue never extend expiry.
 Leases are capped at the effective deadline. Reads/listing/claims hide expired

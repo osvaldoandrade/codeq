@@ -189,6 +189,43 @@ func TestAbsoluteExpiryStrictBindingJWKSHTTPWorkerLifecycle(t *testing.T) {
 	}
 }
 
+func TestAbsoluteExpiryHTTPKeepsLargeJSONNumbersSingleAndBatch(t *testing.T) {
+	s := newBindingSuite(t, true)
+	policy := map[string]any{logsPrioritiesKey: []int{0}, logsAttemptsKey: 100, logsDLQKey: logsTestDLQ, logsRetentionKey: 3600, logsAbsoluteFlag: true}
+	s.expect(s.call(http.MethodPut, "/v1/codeq/admin/topics/cf-logs", s.adminToken(tenantConveste), policy), http.StatusCreated, "", "absolute policy")
+	publish := s.bindingToken(policyPublish, tenantConveste, logsTestTopic, "precision", nil)
+	const payload = `{"large":9007199254740993,"nested":[9223372036854775807,0.1234567890123456789]}`
+	for _, batch := range []bool{false, true} {
+		id := "logs-precision-single"
+		path := pathTasks
+		if batch {
+			id, path = "logs-precision-batch", pathTasks+"/batch"
+		}
+		item := map[string]any{keyCommand: logsTestTopic, fwdTaskID: id, keyPayload: json.RawMessage(payload), logsExpiryKey: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}
+		var body any = item
+		if batch {
+			body = map[string]any{"tasks": []any{item}}
+		}
+		response := s.call(http.MethodPost, path, publish, body)
+		if batch {
+			s.expect(response, http.StatusOK, "", "batch precision")
+			response.body = response.body["results"].([]any)[0].(map[string]any)["task"].(map[string]any)
+		} else {
+			s.expect(response, http.StatusAccepted, "", "single precision")
+		}
+		if response.body[keyPayload] != payload {
+			t.Errorf("batch=%v payload precision lost: %v", batch, response.body[keyPayload])
+		}
+	}
+	// Legacy JSON normalization and null rejection remain unchanged.
+	legacy := s.call(http.MethodPost, pathTasks, s.adminToken(tenantConveste), map[string]any{keyCommand: "ordinary", keyPayload: json.RawMessage(payload)})
+	s.expect(legacy, http.StatusAccepted, "", "legacy precision compatibility")
+	if !strings.Contains(legacy.body[keyPayload].(string), "9007199254740992") {
+		t.Fatal("legacy payload normalization changed")
+	}
+	s.expect(s.call(http.MethodPost, pathTasks, publish, map[string]any{keyCommand: logsTestTopic, keyPayload: nil, logsExpiryKey: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}), http.StatusBadRequest, "", "null payload")
+}
+
 func newAbsoluteExpiryServer(t *testing.T, budget int) *httptest.Server {
 	t.Helper()
 	path := t.TempDir() + "/pebble"

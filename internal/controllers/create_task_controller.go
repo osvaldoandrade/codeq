@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -19,15 +21,15 @@ func NewCreateTaskController(svc services.SchedulerService) *createTaskControlle
 }
 
 type createReq struct {
-	Command     domain.Command `json:"command" binding:"required"`
-	Payload     any            `json:"payload" binding:"required"`
-	Priority    int            `json:"priority"`
-	Webhook     string         `json:"webhook,omitempty"`
-	MaxAttempts int            `json:"maxAttempts,omitempty"`
-	Idempotency string         `json:"idempotencyKey,omitempty"`
-	RunAt       string         `json:"runAt,omitempty"`
-	DelaySecs   int            `json:"delaySeconds,omitempty"`
-	ExpiresAt   string         `json:"expiresAt,omitempty"`
+	Command     domain.Command  `json:"command" binding:"required"`
+	Payload     json.RawMessage `json:"payload" binding:"required"`
+	Priority    int             `json:"priority"`
+	Webhook     string          `json:"webhook,omitempty"`
+	MaxAttempts int             `json:"maxAttempts,omitempty"`
+	Idempotency string          `json:"idempotencyKey,omitempty"`
+	RunAt       string          `json:"runAt,omitempty"`
+	DelaySecs   int             `json:"delaySeconds,omitempty"`
+	ExpiresAt   string          `json:"expiresAt,omitempty"`
 	// Deduplication collapses this create into a waiting task of the same
 	// tenant, command and key (ADR 0004).
 	Deduplication string `json:"deduplicationKey,omitempty"`
@@ -38,7 +40,7 @@ type createReq struct {
 
 func (h *createTaskController) Handle(c *gin.Context) {
 	var req createReq
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil || bytes.Equal(bytes.TrimSpace(req.Payload), []byte("null")) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
 		return
 	}
@@ -53,7 +55,11 @@ func (h *createTaskController) Handle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{errorField: errInvalidIdempotency})
 		return
 	}
-	payloadJSON, _ := jsonMarshal(req.Payload)
+	payloadJSON, err := canonicalPayload(req.Payload, req.ExpiresAt != "")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
 
 	var runAt time.Time
 	if req.RunAt != "" {
