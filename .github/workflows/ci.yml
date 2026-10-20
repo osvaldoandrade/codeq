@@ -83,6 +83,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.ref == 'refs/heads/fix/cfp-070-codeq-toolchain' && '0a2b0a4918e971716786992e25b57a6bc2893a7f' || github.event.pull_request.base.sha || github.event.before }}
         run: |
+          if [[ "$BASE_SHA" == 0000000000000000000000000000000000000000 ]]; then
+            BASE_SHA=$(git rev-parse --verify refs/remotes/origin/main)
+          fi
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git merge-base --is-ancestor "$BASE_SHA" HEAD
           golangci-lint run --timeout=5m --new-from-rev="$BASE_SHA" ./...
