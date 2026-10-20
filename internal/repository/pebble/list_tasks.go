@@ -163,6 +163,12 @@ func (r *TaskRepository) indexedTask(key []byte, want domain.TaskStatus) (*domai
 	if !decoded || t.Status != want {
 		return nil, nil
 	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		if errors.Is(err, domain.ErrTaskExpired) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	return &t, nil
 }
 

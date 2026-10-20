@@ -40,6 +40,9 @@ func (r *ResultRepository) GetTask(ctx context.Context, id string) (*domain.Task
 	if err := sonic.Unmarshal(v, &t); err != nil {
 		return nil, fmt.Errorf("unmarshal task: %w", err)
 	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return nil, err
+	}
 	return &t, nil
 }
 
@@ -59,6 +62,9 @@ func (r *ResultRepository) SaveResult(ctx context.Context, rec domain.ResultReco
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return err
+	}
 	t.ResultKey = "codeq:results" // mirrors the Redis sentinel for API compat
 	taskUpdated, _ := sonic.Marshal(&t)
 	resJSON, _ := sonic.Marshal(rec)
@@ -71,7 +77,7 @@ func (r *ResultRepository) SaveResult(ctx context.Context, rec domain.ResultReco
 	if err := b.Set(KeyTask(rec.TaskID), taskUpdated, nil); err != nil {
 		return err
 	}
-	ttlScore := unixSeconds(r.now().Add(taskRetention))
+	ttlScore := taskTTLScore(&t, r.now().Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, rec.TaskID), nil, nil); err != nil {
 		return err
 	}
@@ -79,6 +85,15 @@ func (r *ResultRepository) SaveResult(ctx context.Context, rec domain.ResultReco
 }
 
 func (r *ResultRepository) GetResult(ctx context.Context, id string) (*domain.ResultRecord, error) {
+	// Legacy orphan-result behavior is preserved. Absolute results are visible
+	// only while their accepted task remains live.
+	if identity, err := r.db.readAbsoluteIdentity(id); err != nil {
+		return nil, err
+	} else if identity != nil {
+		if _, err := r.GetTask(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	v, err := r.db.Get(KeyResult(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -120,6 +135,9 @@ func (r *ResultRepository) UpdateTaskOnComplete(ctx context.Context, id string, 
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return err
+	}
 	t.Status = status
 	t.LastKnownLocation = domain.LocationNone
 	t.WorkerID = ""
@@ -140,7 +158,7 @@ func (r *ResultRepository) UpdateTaskOnComplete(ctx context.Context, id string, 
 	}
 	// Phase 6 / M2: KeyLease eliminated; the in-memory lease is
 	// cleared below after the durable commit.
-	ttlScore := unixSeconds(r.now().Add(taskRetention))
+	ttlScore := taskTTLScore(&t, r.now().Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return err
 	}
@@ -188,6 +206,12 @@ func (r *ResultRepository) GetTasksBatch(ctx context.Context, ids []string) (map
 		if err := sonic.Unmarshal(v, &t); err != nil {
 			return nil, fmt.Errorf("unmarshal %s: %w", id, err)
 		}
+		if err := r.db.checkTaskExpiry(&t); err != nil {
+			if errors.Is(err, domain.ErrTaskExpired) {
+				continue
+			}
+			return nil, err
+		}
 		out[id] = &t
 	}
 	return out, nil
@@ -209,7 +233,6 @@ func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updat
 	}
 
 	now := r.now()
-	ttlScore := unixSeconds(now.Add(taskRetention))
 	b := r.db.Batch()
 	defer b.Close()
 	for _, u := range updates {
@@ -233,7 +256,7 @@ func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updat
 			return err
 		}
 		// Phase 6 / M2: KeyLease eliminated.
-		if err := b.Set(KeyTTLIndex(ttlScore, u.ID), nil, nil); err != nil {
+		if err := b.Set(KeyTTLIndex(taskTTLScore(t, now.Add(taskRetention)), u.ID), nil, nil); err != nil {
 			return err
 		}
 	}

@@ -21,7 +21,8 @@ import (
 // StoreLogs with batches of new entries and never interleaves writers
 // with itself, so we don't need internal locking.
 type logStore struct {
-	pebble *pebbledb.DB
+	pebble       *pebbledb.DB
+	writeOptions *pebbledb.WriteOptions
 }
 
 var (
@@ -39,7 +40,9 @@ var (
 	msgpackHandle = &codec.MsgpackHandle{}
 )
 
-func newLogStore(p *pebbledb.DB) *logStore { return &logStore{pebble: p} }
+func newLogStore(p *pebbledb.DB) *logStore {
+	return &logStore{pebble: p, writeOptions: pebbledb.NoSync}
+}
 
 func logKey(index uint64) []byte {
 	out := make([]byte, len(logKeyPrefix)+8)
@@ -131,7 +134,7 @@ func (s *logStore) StoreLog(log *hraft.Log) error {
 	if err != nil {
 		return err
 	}
-	return s.pebble.Set(logKey(log.Index), enc, pebbledb.NoSync)
+	return s.pebble.Set(logKey(log.Index), enc, s.writeOptions)
 }
 
 // StoreLogs appends a batch of log entries atomically. raft calls this
@@ -152,7 +155,7 @@ func (s *logStore) StoreLogs(logs []*hraft.Log) error {
 			return err
 		}
 	}
-	return b.Commit(pebbledb.NoSync)
+	return b.Commit(s.writeOptions)
 }
 
 // DeleteRange removes log entries in [min, max] inclusive. raft calls
@@ -175,5 +178,5 @@ func (s *logStore) DeleteRange(min, max uint64) error {
 			break
 		}
 	}
-	return s.pebble.DeleteRange(logKey(min), endNext, pebbledb.NoSync)
+	return s.pebble.DeleteRange(logKey(min), endNext, s.writeOptions)
 }

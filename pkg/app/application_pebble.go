@@ -6,15 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"net"
-
 	"google.golang.org/grpc"
 
 	schedulesapp "github.com/osvaldoandrade/codeq/internal/application/schedules"
@@ -105,6 +104,7 @@ type pebbleRuntime struct {
 	grpcLis      net.Listener
 	pool         *cluster.ClientPool
 	limiter      *ratelimit.InMemoryLimiter
+	topicStore   *topicpebble.TopicStore
 }
 
 // newPebbleApplication constructs the Application stack on embedded Pebble.
@@ -242,6 +242,7 @@ func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux
 	}
 	raftCfg := raftpkg.Config{
 		Path:          shardPath,
+		FsyncOnCommit: pc.FsyncOnCommit,
 		SelfID:        cfg.Raft.SelfID,
 		Bootstrap:     cfg.Raft.Bootstrap,
 		PeerHTTPAddrs: cfg.Raft.PeerHTTPAddrs,
@@ -298,6 +299,13 @@ func applyOffsetShard(cfg *config.Config, idx int, raftCfg *raftpkg.Config) erro
 }
 
 func (rt *pebbleRuntime) routeRepositories() error {
+	rt.topicStore = topicpebble.NewTopicStore(rt.dbs[0], rt.dbs[1:]...)
+	for i, db := range rt.dbs {
+		db.SetTopicPolicyReader(rt.topicStore)
+		if err := db.SetAbsoluteExpiryCapacity(rt.cfg.AbsoluteIdentityBudget, strconv.Itoa(i)); err != nil {
+			return err
+		}
+	}
 	rt.taskShards = make([]*pebblerepo.TaskRepository, len(rt.dbs))
 	rt.resultShards = make([]*pebblerepo.ResultRepository, len(rt.dbs))
 	for i, db := range rt.dbs {
@@ -468,7 +476,7 @@ func (rt *pebbleRuntime) httpEngine() *gin.Engine {
 }
 
 func (rt *pebbleRuntime) newApplication(engine *gin.Engine, scheduler services.SchedulerService, results services.ResultsService) *Application {
-	topicService := topicsapp.NewService(topicpebble.NewTopicStore(rt.dbs[0]), time.Now)
+	topicService := topicsapp.NewService(rt.topicStore, time.Now)
 	if rt.cfg.Raft.Enabled && strings.TrimSpace(rt.cfg.Raft.TopicCatalogProtocol) != "v1" {
 		topicService = topicsapp.NewUnavailableService(
 			"raft.topicCatalogProtocol=v1 is required for replicated topic catalog writes",

@@ -448,7 +448,7 @@ func protoToTask(p *workerpb.Task) Task {
 	if p == nil {
 		return Task{}
 	}
-	return Task{
+	result := Task{
 		ID:          p.Id,
 		Command:     p.Command,
 		Payload:     p.Payload,
@@ -459,4 +459,12 @@ func protoToTask(p *workerpb.Task) Task {
 		Webhook:     p.Webhook,
 		LeaseUntil:  p.LeaseUntil,
 	}
+	if p.CreatedAt != nil {
+		result.CreatedAt = p.CreatedAt.AsTime()
+	}
+	if p.ExpiresAt != nil {
+		value := p.ExpiresAt.AsTime()
+		result.ExpiresAt = &value
+	}
+	return result
 }

@@ -23,12 +23,13 @@
 package producerpb
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -111,7 +112,8 @@ type CreateTask struct {
 	DeduplicationKey string `protobuf:"bytes,12,opt,name=deduplication_key,json=deduplicationKey,proto3" json:"deduplication_key,omitempty"`
 	// task_id, when set, is the ID the client chose for this task (ADR 0008).
 	// Exclusive with idempotency_key and deduplication_key.
-	TaskId        string `protobuf:"bytes,13,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	TaskId        string                 `protobuf:"bytes,13,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -235,6 +237,13 @@ func (x *CreateTask) GetTaskId() string {
 		return x.TaskId
 	}
 	return ""
+}
+
+func (x *CreateTask) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
 }
 
 // CreateTaskBatch is a producer pipelining N CreateTasks into a single
@@ -727,7 +736,7 @@ const file_producerpb_proto_rawDesc = "" +
 	"\x10producerpb.proto\x12\n" +
 	"producerpb\x1a\x1fgoogle/protobuf/timestamp.proto\"\x1d\n" +
 	"\x05Hello\x12\x14\n" +
-	"\x05token\x18\x01 \x01(\tR\x05token\"\xb6\x03\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"\xf1\x03\n" +
 	"\n" +
 	"CreateTask\x12\x10\n" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x18\n" +
@@ -744,7 +753,9 @@ const file_producerpb_proto_rawDesc = "" +
 	"\vtrace_state\x18\v \x01(\tR\n" +
 	"traceState\x12+\n" +
 	"\x11deduplication_key\x18\f \x01(\tR\x10deduplicationKey\x12\x17\n" +
-	"\atask_id\x18\r \x01(\tR\x06taskId\"?\n" +
+	"\atask_id\x18\r \x01(\tR\x06taskId\x129\n" +
+	"\n" +
+	"expires_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"?\n" +
 	"\x0fCreateTaskBatch\x12,\n" +
 	"\x05tasks\x18\x01 \x03(\v2\x16.producerpb.CreateTaskR\x05tasks\"\xb7\x01\n" +
 	"\rProducerEvent\x12)\n" +
@@ -787,37 +798,41 @@ func file_producerpb_proto_rawDescGZIP() []byte {
 	return file_producerpb_proto_rawDescData
 }
 
-var file_producerpb_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_producerpb_proto_goTypes = []any{
-	(*Hello)(nil),                 // 0: producerpb.Hello
-	(*CreateTask)(nil),            // 1: producerpb.CreateTask
-	(*CreateTaskBatch)(nil),       // 2: producerpb.CreateTaskBatch
-	(*ProducerEvent)(nil),         // 3: producerpb.ProducerEvent
-	(*HelloAck)(nil),              // 4: producerpb.HelloAck
-	(*CreateAck)(nil),             // 5: producerpb.CreateAck
-	(*ServerError)(nil),           // 6: producerpb.ServerError
-	(*CreateAckBatch)(nil),        // 7: producerpb.CreateAckBatch
-	(*ServerEvent)(nil),           // 8: producerpb.ServerEvent
-	(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
-}
+var (
+	file_producerpb_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+	file_producerpb_proto_goTypes  = []any{
+		(*Hello)(nil),                 // 0: producerpb.Hello
+		(*CreateTask)(nil),            // 1: producerpb.CreateTask
+		(*CreateTaskBatch)(nil),       // 2: producerpb.CreateTaskBatch
+		(*ProducerEvent)(nil),         // 3: producerpb.ProducerEvent
+		(*HelloAck)(nil),              // 4: producerpb.HelloAck
+		(*CreateAck)(nil),             // 5: producerpb.CreateAck
+		(*ServerError)(nil),           // 6: producerpb.ServerError
+		(*CreateAckBatch)(nil),        // 7: producerpb.CreateAckBatch
+		(*ServerEvent)(nil),           // 8: producerpb.ServerEvent
+		(*timestamppb.Timestamp)(nil), // 9: google.protobuf.Timestamp
+	}
+)
+
 var file_producerpb_proto_depIdxs = []int32{
 	9,  // 0: producerpb.CreateTask.run_at:type_name -> google.protobuf.Timestamp
-	1,  // 1: producerpb.CreateTaskBatch.tasks:type_name -> producerpb.CreateTask
-	0,  // 2: producerpb.ProducerEvent.hello:type_name -> producerpb.Hello
-	1,  // 3: producerpb.ProducerEvent.create:type_name -> producerpb.CreateTask
-	2,  // 4: producerpb.ProducerEvent.create_batch:type_name -> producerpb.CreateTaskBatch
-	5,  // 5: producerpb.CreateAckBatch.acks:type_name -> producerpb.CreateAck
-	4,  // 6: producerpb.ServerEvent.hello_ack:type_name -> producerpb.HelloAck
-	5,  // 7: producerpb.ServerEvent.create_ack:type_name -> producerpb.CreateAck
-	6,  // 8: producerpb.ServerEvent.error:type_name -> producerpb.ServerError
-	7,  // 9: producerpb.ServerEvent.create_ack_batch:type_name -> producerpb.CreateAckBatch
-	3,  // 10: producerpb.ProducerStream.Stream:input_type -> producerpb.ProducerEvent
-	8,  // 11: producerpb.ProducerStream.Stream:output_type -> producerpb.ServerEvent
-	11, // [11:12] is the sub-list for method output_type
-	10, // [10:11] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	9,  // 1: producerpb.CreateTask.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 2: producerpb.CreateTaskBatch.tasks:type_name -> producerpb.CreateTask
+	0,  // 3: producerpb.ProducerEvent.hello:type_name -> producerpb.Hello
+	1,  // 4: producerpb.ProducerEvent.create:type_name -> producerpb.CreateTask
+	2,  // 5: producerpb.ProducerEvent.create_batch:type_name -> producerpb.CreateTaskBatch
+	5,  // 6: producerpb.CreateAckBatch.acks:type_name -> producerpb.CreateAck
+	4,  // 7: producerpb.ServerEvent.hello_ack:type_name -> producerpb.HelloAck
+	5,  // 8: producerpb.ServerEvent.create_ack:type_name -> producerpb.CreateAck
+	6,  // 9: producerpb.ServerEvent.error:type_name -> producerpb.ServerError
+	7,  // 10: producerpb.ServerEvent.create_ack_batch:type_name -> producerpb.CreateAckBatch
+	3,  // 11: producerpb.ProducerStream.Stream:input_type -> producerpb.ProducerEvent
+	8,  // 12: producerpb.ProducerStream.Stream:output_type -> producerpb.ServerEvent
+	12, // [12:13] is the sub-list for method output_type
+	11, // [11:12] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_producerpb_proto_init() }

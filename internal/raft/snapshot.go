@@ -112,9 +112,23 @@ func writeSnapshot(w io.Writer, snap *pebbledb.Snapshot) error {
 // readSnapshot drains r and applies every (k, v) pair to db. Before
 // streaming new keys in it wipes the existing codeq/ range so the
 // follower's state ends up exactly matching the leader at snapshot time.
-func readSnapshot(r io.Reader, db *pebbledb.DB) error {
+func readSnapshot(r io.Reader, db *pebbledb.DB, options ...*pebbledb.WriteOptions) error {
+	writeOptions := pebbledb.NoSync
+	if len(options) > 0 && options[0] != nil {
+		writeOptions = options[0]
+	}
 	br := bufio.NewReader(r)
+	if err := validateSnapshotHeader(br); err != nil {
+		return err
+	}
+	// Replace, not merge: restore the leader's entire state range.
+	if err := db.DeleteRange([]byte(snapshotStatePrefix), []byte(snapshotStateEnd), writeOptions); err != nil {
+		return fmt.Errorf("snapshot wipe: %w", err)
+	}
+	return restoreSnapshotEntries(br, db, writeOptions)
+}
 
+func validateSnapshotHeader(br *bufio.Reader) error {
 	header := make([]byte, len(snapshotMagic))
 	if _, err := io.ReadFull(br, header); err != nil {
 		return fmt.Errorf("snapshot header: %w", err)
@@ -129,63 +143,71 @@ func readSnapshot(r io.Reader, db *pebbledb.DB) error {
 	if version != snapshotVersionV1 {
 		return fmt.Errorf("snapshot version %d not supported (this build expects %d)", version, snapshotVersionV1)
 	}
+	return nil
+}
 
-	// Replace, not merge: wipe the codeq/ range so the restored state
-	// is exactly the leader's at snapshot time.
-	if err := db.DeleteRange([]byte(snapshotStatePrefix), []byte(snapshotStateEnd), pebbledb.NoSync); err != nil {
-		return fmt.Errorf("snapshot wipe: %w", err)
-	}
-
+func restoreSnapshotEntries(br *bufio.Reader, db *pebbledb.DB, options *pebbledb.WriteOptions) error {
 	batch := db.NewBatch()
-	defer batch.Close()
+	defer func() { _ = batch.Close() }()
 	const flushEvery = 1024
 	pending := 0
-
-	var lenBuf [4]byte
 	for {
-		tag, err := br.ReadByte()
+		key, value, eof, err := readSnapshotEntry(br)
 		if err != nil {
-			return fmt.Errorf("snapshot tag: %w", err)
+			return err
 		}
-		if tag == snapshotTagEOF {
+		if eof {
 			break
 		}
-		if tag != snapshotTagEntry {
-			return fmt.Errorf("snapshot: unknown tag 0x%02x", tag)
-		}
-		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
-			return fmt.Errorf("snapshot klen: %w", err)
-		}
-		klen := binary.BigEndian.Uint32(lenBuf[:])
-		key := make([]byte, klen)
-		if _, err := io.ReadFull(br, key); err != nil {
-			return fmt.Errorf("snapshot key: %w", err)
-		}
-		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
-			return fmt.Errorf("snapshot vlen: %w", err)
-		}
-		vlen := binary.BigEndian.Uint32(lenBuf[:])
-		val := make([]byte, vlen)
-		if _, err := io.ReadFull(br, val); err != nil {
-			return fmt.Errorf("snapshot val: %w", err)
-		}
-		if err := batch.Set(key, val, nil); err != nil {
+		if err := batch.Set(key, value, nil); err != nil {
 			return fmt.Errorf("snapshot batch set: %w", err)
 		}
 		pending++
 		if pending >= flushEvery {
-			if err := batch.Commit(pebbledb.NoSync); err != nil {
+			if err := batch.Commit(options); err != nil {
 				return fmt.Errorf("snapshot batch commit: %w", err)
 			}
-			batch.Close()
+			_ = batch.Close()
 			batch = db.NewBatch()
 			pending = 0
 		}
 	}
-	if pending > 0 {
-		if err := batch.Commit(pebbledb.NoSync); err != nil {
-			return fmt.Errorf("snapshot final commit: %w", err)
-		}
+	if pending == 0 {
+		return nil
+	}
+	if err := batch.Commit(options); err != nil {
+		return fmt.Errorf("snapshot final commit: %w", err)
 	}
 	return nil
+}
+
+func readSnapshotEntry(br *bufio.Reader) ([]byte, []byte, bool, error) {
+	tag, err := br.ReadByte()
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("snapshot tag: %w", err)
+	}
+	if tag == snapshotTagEOF {
+		return nil, nil, true, nil
+	}
+	if tag != snapshotTagEntry {
+		return nil, nil, false, fmt.Errorf("snapshot: unknown tag 0x%02x", tag)
+	}
+	key, err := readSnapshotValue(br, "key")
+	if err != nil {
+		return nil, nil, false, err
+	}
+	value, err := readSnapshotValue(br, "val")
+	return key, value, false, err
+}
+
+func readSnapshotValue(br *bufio.Reader, field string) ([]byte, error) {
+	var length uint32
+	if err := binary.Read(br, binary.BigEndian, &length); err != nil {
+		return nil, fmt.Errorf("snapshot %s length: %w", field, err)
+	}
+	value := make([]byte, length)
+	if _, err := io.ReadFull(br, value); err != nil {
+		return nil, fmt.Errorf("snapshot %s: %w", field, err)
+	}
+	return value, nil
 }

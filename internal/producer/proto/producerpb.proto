@@ -56,6 +56,7 @@ message CreateTask {
   // task_id, when set, is the ID the client chose for this task (ADR 0008).
   // Exclusive with idempotency_key and deduplication_key.
   string task_id = 13;
+  google.protobuf.Timestamp expires_at = 14;
 }
 
 // CreateTaskBatch is a producer pipelining N CreateTasks into a single

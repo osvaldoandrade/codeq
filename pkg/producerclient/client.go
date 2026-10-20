@@ -106,7 +106,8 @@ type CreateRequest struct {
 	DeduplicationKey string
 	// TaskID is the ID the client chose for this task. Exclusive with
 	// IdempotencyKey and DeduplicationKey (ADR 0008).
-	TaskID string
+	TaskID    string
+	ExpiresAt time.Time
 }
 
 // Session is one authenticated stream. Produce on it is safe to call
@@ -336,6 +337,9 @@ func (s *Session) Produce(ctx context.Context, req CreateRequest) (string, error
 			TaskId:           req.TaskID,
 		},
 	}}
+	if !req.ExpiresAt.IsZero() {
+		ev.GetCreate().ExpiresAt = timestamppb.New(req.ExpiresAt)
+	}
 	if err := s.send(ev); err != nil {
 		s.pending.Delete(seq)
 		return "", fmt.Errorf("producerclient: send create: %w", err)
@@ -403,6 +407,9 @@ func (s *Session) ProduceBatch(ctx context.Context, reqs []CreateRequest) ([]Bat
 
 			DeduplicationKey: req.DeduplicationKey,
 			TaskId:           req.TaskID,
+		}
+		if !req.ExpiresAt.IsZero() {
+			pbTasks[i].ExpiresAt = timestamppb.New(req.ExpiresAt)
 		}
 	}
 

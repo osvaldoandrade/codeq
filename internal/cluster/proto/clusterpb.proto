@@ -48,6 +48,7 @@ message Task {
   string deduplication_key = 20;
   // progress is the raw JSON reported by the lease holder. Empty when never reported.
   bytes progress = 21;
+  google.protobuf.Timestamp expires_at = 22;
 }
 
 message ResultRecord {
@@ -248,6 +249,7 @@ message EnqueueRequest {
   // named is true when id was chosen by the client. The owner then runs the
   // existence check instead of writing the id unconditionally.
   bool named = 11;
+  google.protobuf.Timestamp expires_at = 12;
 }
 message EnqueueResponse {
   Task task = 1;

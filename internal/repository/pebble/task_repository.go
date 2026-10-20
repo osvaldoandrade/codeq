@@ -241,6 +241,10 @@ func (r *TaskRepository) EnqueueWithReady(ctx context.Context, cmd domain.Comman
 // caller gets domain.ErrTaskIDConflict without the task. The ID's stripe is
 // held from the lookup to the commit, so two creates of one ID never both write.
 func (r *TaskRepository) EnqueueNamed(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	absolute, err := r.db.validateExpiryIntent(ctx, cmd, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
 	mu := r.idempoStripe(string(KeyTask(id)))
 	mu.Lock()
 	defer mu.Unlock()
@@ -254,9 +258,22 @@ func (r *TaskRepository) EnqueueNamed(ctx context.Context, id string, cmd domain
 		if task.TenantID != tenantID {
 			return nil, false, domain.ErrTaskIDConflict
 		}
+		if absolute || task.ExpiresAt != nil {
+			if task.ExpiresAt == nil || task.Command != cmd || task.Payload != payload {
+				return nil, false, domain.ErrTaskIDConflict
+			}
+			if err := r.db.checkTaskExpiry(&task); err != nil {
+				return nil, false, err
+			}
+			confirmed, err := r.confirmAbsoluteReplay(ctx, &task)
+			return confirmed, false, err
+		}
 		return &task, false, nil
 	case !errors.Is(err, ErrNotFound):
 		return nil, false, fmt.Errorf("task id lookup: %w", err)
+	}
+	if err := r.db.replayRetired(id, tenantID, cmd, payload); err != nil {
+		return nil, false, err
 	}
 	return r.EnqueueWithID(ctx, id, cmd, payload, priority, webhook, maxAttempts, "", "", visibleAt, tenantID)
 }
@@ -266,6 +283,9 @@ func (r *TaskRepository) EnqueueNamed(ctx context.Context, id string, cmd domain
 // resolved by the consistent-hash ring is honoured. Local callers can pass
 // uuid.NewString() and get the original semantics.
 func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domain.Command, payload string, priority int, webhook string, maxAttempts int, idempotencyKey, deduplicationKey string, visibleAt time.Time, tenantID string) (*domain.Task, bool, error) {
+	if _, err := r.db.validateExpiryIntent(ctx, cmd, tenantID); err != nil {
+		return nil, false, err
+	}
 	var dedupeKey []byte
 	if deduplicationKey != "" {
 		dedupeKey = KeyDedupe(cmd, tenantID, deduplicationKey)
@@ -275,7 +295,7 @@ func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domai
 		return nil, false, err
 	}
 	defer unlock()
-	if existing, found, err := r.precheckCreate(ctx, cmd, tenantID, idempotencyKey, deduplicationKey, dedupeKey); found || err != nil {
+	if existing, found, err := r.precheckCreate(ctx, cmd, payload, tenantID, idempotencyKey, deduplicationKey, dedupeKey); found || err != nil {
 		return existing, false, err
 	}
 
@@ -293,6 +313,9 @@ func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domai
 		UpdatedAt:   now,
 
 		DeduplicationKey: deduplicationKey,
+	}
+	if err := r.db.acceptTaskExpiry(ctx, task); err != nil {
+		return nil, false, err
 	}
 	delayed := !visibleAt.IsZero() && visibleAt.After(now)
 	task.LastKnownLocation = enqueueLocation(delayed)
@@ -332,9 +355,12 @@ func (r *TaskRepository) announceEnqueue(task *domain.Task, delayed bool, pendin
 // makes before writing: an idempotent replay, the leader gate, then a task
 // already waiting with the deduplication key. found reports that the create
 // must return existing instead of writing a task.
-func (r *TaskRepository) precheckCreate(ctx context.Context, cmd domain.Command, tenantID, idempotencyKey, deduplicationKey string, dedupeKey []byte) (*domain.Task, bool, error) {
+func (r *TaskRepository) precheckCreate(ctx context.Context, cmd domain.Command, payload, tenantID, idempotencyKey, deduplicationKey string, dedupeKey []byte) (*domain.Task, bool, error) {
 	if idempotencyKey != "" {
 		if replay, found, err := r.replayIdempotencyKey(ctx, idempotencyKey, tenantID); found || err != nil {
+			if err == nil && absoluteReplayChanged(replay, cmd, payload) {
+				return nil, false, domain.ErrTaskIDConflict
+			}
 			return replay, found, err
 		}
 	}
@@ -345,7 +371,24 @@ func (r *TaskRepository) precheckCreate(ctx context.Context, cmd domain.Command,
 		return nil, false, nil
 	}
 	existing, err := r.waitingDuplicate(dedupeKey, cmd, tenantID, deduplicationKey)
+	if err == nil {
+		existing, err = r.confirmWaitingReplay(ctx, existing, cmd, payload)
+	}
 	return existing, existing != nil, err
+}
+
+func (r *TaskRepository) confirmWaitingReplay(ctx context.Context, existing *domain.Task, cmd domain.Command, payload string) (*domain.Task, error) {
+	if existing == nil || existing.ExpiresAt == nil {
+		return existing, nil
+	}
+	if absoluteReplayChanged(existing, cmd, payload) {
+		return nil, domain.ErrTaskIDConflict
+	}
+	return r.confirmAbsoluteReplay(ctx, existing)
+}
+
+func absoluteReplayChanged(task *domain.Task, cmd domain.Command, payload string) bool {
+	return task != nil && task.ExpiresAt != nil && (task.Command != cmd || task.Payload != payload)
 }
 
 // replayIdempotencyKey looks up the task an idempotency key maps to. If it
@@ -364,6 +407,9 @@ func (r *TaskRepository) replayIdempotencyKey(ctx context.Context, idempotencyKe
 	}
 	if task, ferr := r.Get(ctx, string(existing)); ferr == nil {
 		replay, rerr := repository.ReplayIdempotent(task, tenantID)
+		if rerr == nil && replay.ExpiresAt != nil {
+			replay, rerr = r.confirmAbsoluteReplay(ctx, replay)
+		}
 		return replay, true, rerr
 	}
 	// Idempo points to a deleted task: fall through and recreate.
@@ -399,7 +445,7 @@ func (r *TaskRepository) commitEnqueue(task *domain.Task, visibleAt time.Time, d
 		return 0, err
 	}
 	// TTL index (used by CleanupExpired reaper).
-	ttlScore := unixSeconds(task.CreatedAt.Add(taskRetention))
+	ttlScore := taskTTLScore(task, task.CreatedAt.Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, task.ID), nil, nil); err != nil {
 		return 0, err
 	}
@@ -482,6 +528,9 @@ func (r *TaskRepository) Get(ctx context.Context, taskID string) (*domain.Task, 
 	var t domain.Task
 	if err := sonic.Unmarshal(v, &t); err != nil {
 		return nil, fmt.Errorf("unmarshal task: %w", err)
+	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return nil, err
 	}
 	return &t, nil
 }
@@ -730,6 +779,15 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 		_ = r.db.Delete(pendingKey)
 		return nil, false, nil
 	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		if errors.Is(err, domain.ErrTaskExpired) {
+			if err = r.db.purgeAbsoluteRow(&t); err != nil {
+				return nil, false, err
+			}
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
 
 	// Defense in depth: only PENDING tasks may transition to INPROG.
 	// If we got here with the task already INPROG / COMPLETED / FAILED,
@@ -744,10 +802,14 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 
 	now := r.now()
 	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
+	leaseUntil, err = r.db.limitTaskLease(&t, leaseUntil)
+	if err != nil {
+		return nil, false, err
+	}
 	t.Status = domain.StatusInProgress
 	t.LastKnownLocation = domain.LocationInProgress
 	t.WorkerID = workerID
-	t.LeaseUntil = leaseUntil.Format(time.RFC3339)
+	t.LeaseUntil = taskLeaseText(&t, leaseUntil)
 	t.Attempts++
 	t.UpdatedAt = now
 	updatedJSON, _ := sonic.Marshal(&t)
@@ -768,14 +830,14 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	}
 	// Phase 6 / M2: lease lives in memory; task body's LeaseUntil
 	// stays as the durable source of truth for recovery.
-	ttlScore := unixSeconds(now.Add(taskRetention))
+	ttlScore := taskTTLScore(&t, now.Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return nil, false, err
 	}
 	if err := r.db.CommitBatch(b); err != nil {
 		return nil, false, fmt.Errorf("commit claim: %w", err)
 	}
-	r.leases.Set(id, workerID, cmd, tenantID, leaseUntil.Unix())
+	r.leases.Set(id, workerID, cmd, tenantID, taskLeaseUnix(&t, leaseUntil))
 	metrics.QueueDepth.WithLabelValues(string(cmd), "ready").Dec()
 	return &t, true, nil
 }
@@ -858,9 +920,6 @@ collect:
 
 	now := r.now()
 	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
-	leaseUntilStr := leaseUntil.Format(time.RFC3339)
-	leaseUntilU := leaseUntil.Unix()
-	ttlScore := unixSeconds(now.Add(taskRetention))
 
 	out := make([]*domain.Task, 0, len(hints))
 	b := r.db.Batch()
@@ -884,6 +943,15 @@ collect:
 			_ = b.Delete(pendingKey, nil)
 			continue
 		}
+		if err := r.db.checkTaskExpiry(&t); err != nil {
+			if errors.Is(err, domain.ErrTaskExpired) {
+				if err = r.db.purgeAbsoluteRow(&t); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			return nil, err
+		}
 		if t.Status != domain.StatusPending {
 			// Stale hint — duplicate publication or recovery race. Drop
 			// the pending key; the rightful claimer already owns it.
@@ -893,7 +961,11 @@ collect:
 		t.Status = domain.StatusInProgress
 		t.LastKnownLocation = domain.LocationInProgress
 		t.WorkerID = workerID
-		t.LeaseUntil = leaseUntilStr
+		taskLease, err := r.db.limitTaskLease(&t, leaseUntil)
+		if err != nil {
+			return nil, err
+		}
+		t.LeaseUntil = taskLeaseText(&t, taskLease)
 		t.Attempts++
 		t.UpdatedAt = now
 		updatedJSON, _ := sonic.Marshal(&t)
@@ -912,7 +984,7 @@ collect:
 		// Phase 6 / M2: lease lives in-memory, recovered from task body
 		// on restart. Set deferred until after the durable commit so
 		// failed commits don't strand the in-memory entry ahead of disk.
-		if err := b.Set(KeyTTLIndex(ttlScore, h.id), nil, nil); err != nil {
+		if err := b.Set(KeyTTLIndex(taskTTLScore(&t, now.Add(taskRetention)), h.id), nil, nil); err != nil {
 			return nil, err
 		}
 		// Stash a value copy so all returned pointers are independent and
@@ -927,7 +999,11 @@ collect:
 	// Lease table updates happen post-commit so a failed Pebble commit
 	// doesn't leave the in-memory state ahead of disk.
 	for _, t := range out {
-		r.leases.Set(t.ID, workerID, t.Command, tenantID, leaseUntilU)
+		until, err := time.Parse(time.RFC3339Nano, t.LeaseUntil)
+		if err != nil {
+			return nil, err
+		}
+		r.leases.Set(t.ID, workerID, t.Command, tenantID, taskLeaseUnix(t, until))
 		metrics.QueueDepth.WithLabelValues(string(t.Command), "ready").Dec()
 	}
 	return out, nil
@@ -1025,13 +1101,20 @@ func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID 
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
 	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return err
+	}
 	if t.WorkerID != workerID {
 		return fmt.Errorf("not-owner")
 	}
 
 	now := r.now()
 	until := now.Add(time.Duration(extendSeconds) * time.Second).UTC()
-	t.LeaseUntil = until.Format(time.RFC3339)
+	until, err = r.db.limitTaskLease(&t, until)
+	if err != nil {
+		return err
+	}
+	t.LeaseUntil = taskLeaseText(&t, until)
 	t.UpdatedAt = now
 	t.LastKnownLocation = domain.LocationInProgress
 	updated, _ := sonic.Marshal(&t)
@@ -1042,7 +1125,7 @@ func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID 
 		return err
 	}
 	// Phase 6 / M2: KeyLease eliminated; lease lives in memory.
-	ttlScore := unixSeconds(now.Add(taskRetention))
+	ttlScore := taskTTLScore(&t, now.Add(taskRetention))
 	if err := b.Set(KeyTTLIndex(ttlScore, taskID), nil, nil); err != nil {
 		return err
 	}
@@ -1053,7 +1136,7 @@ func (r *TaskRepository) Heartbeat(ctx context.Context, taskID string, workerID 
 	// returns false if reaper requeued the task between Get and now.
 	// We tolerate that and let the caller see no error (matches the
 	// pre-M2 behavior where Heartbeat blind-set the lease key).
-	r.leases.Extend(taskID, workerID, until.Unix())
+	r.leases.Extend(taskID, workerID, taskLeaseUnix(&t, until))
 	return nil
 }
 
@@ -1077,6 +1160,9 @@ func (r *TaskRepository) Progress(ctx context.Context, taskID string, workerID s
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
+	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return err
 	}
 	if t.WorkerID != workerID {
 		return fmt.Errorf("not-owner")
@@ -1116,6 +1202,9 @@ func (r *TaskRepository) Abandon(ctx context.Context, taskID string, workerID st
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 		return fmt.Errorf("unmarshal task: %w", err)
+	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return err
 	}
 	if workerID != "" && t.WorkerID != workerID {
 		return fmt.Errorf("not-owner")
@@ -1170,6 +1259,9 @@ func (r *TaskRepository) Nack(ctx context.Context, taskID string, workerID strin
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 		return 0, false, fmt.Errorf("unmarshal task: %w", err)
+	}
+	if err := r.db.checkTaskExpiry(&t); err != nil {
+		return 0, false, err
 	}
 	if workerID != "" && t.WorkerID != workerID {
 		return 0, false, fmt.Errorf("not-owner")
@@ -1376,6 +1468,15 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 		if err := sonic.Unmarshal(taskJSON, &t); err != nil {
 			_ = b.Delete(e.delayedKey, nil)
 			continue
+		}
+		if err := r.db.checkTaskExpiry(&t); err != nil {
+			if errors.Is(err, domain.ErrTaskExpired) {
+				if err = r.db.purgeAbsoluteRow(&t); err != nil {
+					return moved, err
+				}
+				continue
+			}
+			return moved, err
 		}
 		prio := normalizePriority(t.Priority)
 		seq := r.db.NextSeq()
@@ -1610,6 +1711,10 @@ func (r *TaskRepository) CleanupExpired(ctx context.Context, limit int, before t
 	if limit <= 0 {
 		limit = 100
 	}
+	absoluteRemoved, err := r.db.sweepAbsolute(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
 	lower, _ := PrefixTTL()
 	_, upperFull := PrefixTTL()
 	upper := make([]byte, 0, len(pTTL)+8)
@@ -1620,9 +1725,10 @@ func (r *TaskRepository) CleanupExpired(ctx context.Context, limit int, before t
 	}
 	hits, err := collectTTLHits(r.db, lower, upper, limit)
 	if err != nil || len(hits) == 0 {
-		return 0, err
+		return absoluteRemoved, err
 	}
-	return dropExpiredBodies(r.db, hits)
+	n, err := dropExpiredBodies(r.db, hits)
+	return absoluteRemoved + n, err
 }
 
 type ttlHit struct {
@@ -1655,16 +1761,37 @@ func dropExpiredBodies(db *DB, hits []ttlHit) (int, error) {
 	defer b.Close()
 	dropped := make([]string, 0, len(hits))
 	for _, hit := range hits {
-		if err := b.Delete(hit.key, nil); err != nil {
-			return 0, err
-		}
 		body, err := db.Get(KeyTask(hit.id))
 		if err != nil {
+			if !errors.Is(err, ErrNotFound) {
+				return 0, err
+			}
+			if err = b.Delete(hit.key, nil); err != nil {
+				return 0, err
+			}
 			continue
 		}
 		var task domain.Task
 		if uerr := sonic.Unmarshal(body, &task); uerr != nil {
 			continue
+		}
+		if task.ExpiresAt != nil {
+			if err = db.checkTaskExpiry(&task); err == nil {
+				continue
+			} else if !errors.Is(err, domain.ErrTaskExpired) {
+				return 0, err
+			}
+			if err = db.purgeAbsoluteRow(&task); err != nil {
+				return 0, err
+			}
+			if err = b.Delete(hit.key, nil); err != nil {
+				return 0, err
+			}
+			dropped = append(dropped, hit.id)
+			continue
+		}
+		if err = b.Delete(hit.key, nil); err != nil {
+			return 0, err
 		}
 		if task.Status != domain.StatusCompleted && task.Status != domain.StatusFailed {
 			continue

@@ -227,11 +227,18 @@ func openInternal(ctx context.Context, cfg Config, pdb *pebbledb.DB, ownPebble b
 
 	logs := newLogStore(pdb)
 	stable := newStableStore(pdb)
+	if cfg.FsyncOnCommit {
+		logs.writeOptions = pebbledb.Sync
+		stable.writeOptions = pebbledb.Sync
+	}
 	snaps, err := newSnapshotStore(cfg.Path + "/snapshots")
 	if err != nil {
 		return nil, fmt.Errorf("snapshot store: %w", err)
 	}
 	d.fsm = newFSM(pdb)
+	if cfg.FsyncOnCommit {
+		d.fsm.writeOptions = pebbledb.Sync
+	}
 
 	var trans hraft.Transport
 	if cfg.StreamLayer != nil {

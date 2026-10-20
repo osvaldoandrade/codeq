@@ -6,6 +6,8 @@
 // on this client to bypass the per-call HTTP middleware tax.
 package workerclient
 
+import "time"
+
 // Task is the unit of work the handler receives. It mirrors the
 // server-side domain.Task but exposes only the fields a handler
 // usually needs.
@@ -19,6 +21,8 @@ type Task struct {
 	TenantID    string
 	Webhook     string
 	LeaseUntil  string
+	CreatedAt   time.Time
+	ExpiresAt   *time.Time
 }
 
 // resultKind discriminates the four ways a handler can dispose of a task.

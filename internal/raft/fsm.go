@@ -26,11 +26,12 @@ import (
 // with Apply (raft creates the pebble.Snapshot inside our Snapshot()
 // before returning the FSMSnapshot, so the view is point-in-time).
 type fsm struct {
-	pebble *pebbledb.DB
+	pebble       *pebbledb.DB
+	writeOptions *pebbledb.WriteOptions
 }
 
 func newFSM(pebble *pebbledb.DB) *fsm {
-	return &fsm{pebble: pebble}
+	return &fsm{pebble: pebble, writeOptions: pebbledb.NoSync}
 }
 
 // Apply turns a committed raft log entry into a Pebble batch commit.
@@ -55,7 +56,7 @@ func (f *fsm) Apply(log *hraft.Log) any {
 	if err := batch.SetRepr(repr); err != nil {
 		return fmt.Errorf("fsm apply: SetRepr: %w", err)
 	}
-	if err := batch.Commit(pebbledb.NoSync); err != nil {
+	if err := batch.Commit(f.writeOptions); err != nil {
 		return fmt.Errorf("fsm apply: commit: %w", err)
 	}
 	return nil
@@ -75,7 +76,7 @@ func (f *fsm) Snapshot() (hraft.FSMSnapshot, error) {
 // format produced by writeSnapshot.
 func (f *fsm) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
-	if err := readSnapshot(rc, f.pebble); err != nil {
+	if err := readSnapshot(rc, f.pebble, f.writeOptions); err != nil {
 		return fmt.Errorf("fsm restore: %w", err)
 	}
 	return nil

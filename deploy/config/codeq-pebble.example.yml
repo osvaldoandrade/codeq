@@ -26,8 +26,14 @@ persistenceConfig:
 
   # fsyncOnCommit: Force filesystem sync on every batch commit.
   # false (default): Faster throughput, but data may be lost on unclean shutdown
-  # true: Slower, but guaranteed durability (fsync after every commit)
+  # true: Syncs standalone and Raft log/stable/FSM commits, subject to storage fsync.
+  # Absolute-expiry topics require true on every storage member before activation.
   fsyncOnCommit: false
+
+# Operational metadata budget per shard for opt-in absolute-expiry topics only.
+# No topic is opted in by this setting. See docs/absolute-expiry.md for activation,
+# the 48-hour no-payload replay window, metrics and drain-before-rollback contract.
+absoluteExpiryMaxIdentitiesPerShard: 1000000
 
 # Standalone Pebble persists QueueTopic policies directly. When enabling Raft,
 # leave this empty during the binary rollout, then set v1 on every peer only

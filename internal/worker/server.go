@@ -664,6 +664,9 @@ func taskToProto(t *domain.Task) *workerpb.Task {
 	if !t.UpdatedAt.IsZero() {
 		pt.UpdatedAt = timestamppb.New(t.UpdatedAt)
 	}
+	if t.ExpiresAt != nil {
+		pt.ExpiresAt = timestamppb.New(*t.ExpiresAt)
+	}
 	return pt
 }
 

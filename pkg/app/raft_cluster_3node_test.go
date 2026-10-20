@@ -136,9 +136,9 @@ func (n *raftTestNode) shutdown() error {
 	return nil
 }
 
-func startRaftNode(t *testing.T, id string, peers map[string]string, bootstrap bool) *raftTestNode {
+func startRaftNode(t *testing.T, id string, peers map[string]string, bootstrap bool, fsync ...bool) *raftTestNode {
 	t.Helper()
-	pcfg, _ := json.Marshal(map[string]any{"path": t.TempDir() + "/pebble"})
+	pcfg, _ := json.Marshal(map[string]any{topicPersistencePathKey: t.TempDir() + "/pebble", "fsyncOnCommit": len(fsync) > 0 && fsync[0]})
 
 	cfg := &config.Config{
 		Port:                               0,

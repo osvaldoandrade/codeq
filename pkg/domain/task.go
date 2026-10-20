@@ -57,6 +57,8 @@ type Task struct {
 	DeduplicationKey string    `json:"deduplicationKey,omitempty"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	// ExpiresAt is immutable for opt-in absolute-expiry topics; absent on legacy tasks.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 	// Progress is the last JSON value reported by the worker holding the
 	// lease. It is kept across nack, abandon and retries; absent until the
 	// first report.

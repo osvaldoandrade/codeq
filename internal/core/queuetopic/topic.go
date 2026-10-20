@@ -28,11 +28,13 @@ var (
 
 // Policy is the provider contract stored for a QueueTopic.
 type Policy struct {
-	PriorityTiers      []int  `json:"priorityTiers"`
-	MaxAttempts        int    `json:"maxAttempts"`
-	DeadLetterTopicRef string `json:"deadLetterTopicRef"`
-	RetentionSeconds   int    `json:"retentionSeconds,omitempty"`
-	MaxConsumers       int    `json:"maxConsumers,omitempty"`
+	PriorityTiers      []int      `json:"priorityTiers"`
+	MaxAttempts        int        `json:"maxAttempts"`
+	DeadLetterTopicRef string     `json:"deadLetterTopicRef"`
+	RetentionSeconds   int        `json:"retentionSeconds,omitempty"`
+	MaxConsumers       int        `json:"maxConsumers,omitempty"`
+	AbsoluteExpiry     bool       `json:"absoluteExpiry,omitempty"`
+	VisibilityFloor    *time.Time `json:"visibilityFloor,omitempty"`
 }
 
 // Topic is a persisted, tenant-scoped QueueTopic realization.
@@ -54,9 +56,16 @@ func New(tenantID, topicName string, policy Policy, now time.Time) (Topic, error
 	if err := validatePolicy(topicName, policy); err != nil {
 		return Topic{}, err
 	}
+	if policy.VisibilityFloor != nil && (policy.VisibilityFloor.IsZero() || policy.VisibilityFloor.After(now)) {
+		return Topic{}, &ValidationError{Field: "visibilityFloor", Message: "must be a nonzero timestamp no later than now"}
+	}
 
 	normalized := policy
 	normalized.PriorityTiers = slices.Clone(policy.PriorityTiers)
+	if policy.VisibilityFloor != nil {
+		value := policy.VisibilityFloor.UTC()
+		normalized.VisibilityFloor = &value
+	}
 	slices.Sort(normalized.PriorityTiers)
 
 	return Topic{
@@ -81,7 +90,12 @@ func SamePolicy(left, right Policy) bool {
 		left.DeadLetterTopicRef == right.DeadLetterTopicRef &&
 		left.RetentionSeconds == right.RetentionSeconds &&
 		left.MaxConsumers == right.MaxConsumers &&
+		left.AbsoluteExpiry == right.AbsoluteExpiry && sameFloor(left.VisibilityFloor, right.VisibilityFloor) &&
 		slices.Equal(left.PriorityTiers, right.PriorityTiers)
+}
+
+func sameFloor(left, right *time.Time) bool {
+	return left == nil && right == nil || left != nil && right != nil && left.Equal(*right)
 }
 
 // ValidateIdentity checks the tenant and logical provider name without
@@ -137,6 +151,12 @@ func validateRetryAndDLQ(topicName string, policy Policy) error {
 }
 
 func validateLimits(policy Policy) error {
+	if policy.AbsoluteExpiry && policy.RetentionSeconds <= 0 {
+		return &ValidationError{Field: fieldRetention, Message: "must be positive for absolute expiry"}
+	}
+	if !policy.AbsoluteExpiry && policy.VisibilityFloor != nil {
+		return &ValidationError{Field: "visibilityFloor", Message: "requires absoluteExpiry"}
+	}
 	if policy.RetentionSeconds < 0 || policy.RetentionSeconds > maxRetentionSecond {
 		return &ValidationError{Field: fieldRetention, Message: "must be between 0 and 2147483647"}
 	}

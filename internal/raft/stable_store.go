@@ -17,12 +17,15 @@ import (
 // GetUint64 → (0, nil). raft itself is permissive in api.go but the
 // documented contract is the safer one to honor.
 type stableStore struct {
-	pebble *pebbledb.DB
+	pebble       *pebbledb.DB
+	writeOptions *pebbledb.WriteOptions
 }
 
 var stableKeyPrefix = []byte("raft/stable/")
 
-func newStableStore(p *pebbledb.DB) *stableStore { return &stableStore{pebble: p} }
+func newStableStore(p *pebbledb.DB) *stableStore {
+	return &stableStore{pebble: p, writeOptions: pebbledb.NoSync}
+}
 
 func stableKey(key []byte) []byte {
 	out := make([]byte, len(stableKeyPrefix)+len(key))
@@ -32,7 +35,7 @@ func stableKey(key []byte) []byte {
 }
 
 func (s *stableStore) Set(key, val []byte) error {
-	return s.pebble.Set(stableKey(key), val, pebbledb.NoSync)
+	return s.pebble.Set(stableKey(key), val, s.writeOptions)
 }
 
 func (s *stableStore) Get(key []byte) ([]byte, error) {

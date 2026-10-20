@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -80,6 +81,9 @@ type taskStorage struct {
 }
 
 func (s *taskStorage) Save(ctx context.Context, task *domain.Task) error {
+	if task.ExpiresAt != nil {
+		return errors.New("absoluteExpiry requires durable persistence; memory is test-only")
+	}
 	s.plugin.mu.Lock()
 	defer s.plugin.mu.Unlock()
 
@@ -113,6 +117,9 @@ func (s *taskStorage) Delete(ctx context.Context, id string) error {
 }
 
 func (s *taskStorage) EnqueueTask(ctx context.Context, task *domain.Task) error {
+	if task.ExpiresAt != nil {
+		return errors.New("absoluteExpiry requires durable persistence; memory is test-only")
+	}
 	s.plugin.mu.Lock()
 	defer s.plugin.mu.Unlock()
 

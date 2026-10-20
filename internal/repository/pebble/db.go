@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	pebbledb "github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
@@ -98,6 +100,15 @@ type DB struct {
 	// wiring layer. Recovery from KeyInprog runs in
 	// TaskRepository.recoverLeases at NewTaskRepository time.
 	Leases *leaseTable
+
+	// Absolute-only coordination. Legacy batches never acquire this lock.
+	absoluteMu         sync.Mutex
+	policyReader       TopicPolicyReader
+	expiryNow          func() time.Time
+	absoluteSweepAfter []byte
+	absoluteCapacity   int64
+	absoluteShard      string
+	fsyncOnCommit      bool
 }
 
 // AttachReplicator hooks a replication delegate (typically *raft.DB)
@@ -143,8 +154,8 @@ const (
 // import pebble directly for basic open/close.
 type Options struct {
 	Path string
-	// FsyncOnCommit forces fsync on every batch commit. Defaults to false
-	// (NoSync) for max throughput; the bench can flip it on to compare.
+	// FsyncOnCommit syncs KV/batch commits, including attached Raft storage.
+	// Default false preserves legacy behavior; absoluteExpiry requires true.
 	FsyncOnCommit bool
 }
 
@@ -176,11 +187,12 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	wrapper := &DB{
-		db:       d,
-		commitCh: make(chan *commitReq, commitChanBuf),
-		stopCh:   make(chan struct{}),
-		stopped:  make(chan struct{}),
-		Leases:   newLeaseTable(),
+		db:            d,
+		commitCh:      make(chan *commitReq, commitChanBuf),
+		stopCh:        make(chan struct{}),
+		stopped:       make(chan struct{}),
+		Leases:        newLeaseTable(),
+		fsyncOnCommit: opts.FsyncOnCommit,
 	}
 	if err := wrapper.recoverSeq(); err != nil {
 		_ = d.Close()
@@ -305,7 +317,7 @@ func (d *DB) Has(key []byte) (bool, error) {
 
 // Set writes a single key/value. With a replicator attached the write
 // flows through Replicate (raft) as a 1-op batch; otherwise it commits
-// directly with no-sync.
+// directly with the configured fsync policy.
 func (d *DB) Set(key, value []byte) error {
 	if d.repl != nil {
 		if err := d.RequireWriteLeader(); err != nil {
@@ -318,7 +330,7 @@ func (d *DB) Set(key, value []byte) error {
 		}
 		return d.repl.Replicate(b.Repr())
 	}
-	return d.db.Set(key, value, pebbledb.NoSync)
+	return d.db.Set(key, value, d.writeOptions())
 }
 
 // Delete removes a key. Same semantics as Set re: replication.
@@ -334,7 +346,7 @@ func (d *DB) Delete(key []byte) error {
 		}
 		return d.repl.Replicate(b.Repr())
 	}
-	return d.db.Delete(key, pebbledb.NoSync)
+	return d.db.Delete(key, d.writeOptions())
 }
 
 // Batch returns a fresh batch the caller can populate and commit. Callers
@@ -354,6 +366,22 @@ func (d *DB) Batch() *pebbledb.Batch {
 // returns (typical defer b.Close()). Apply() copies the ops out, so
 // closing the caller's batch does not affect the merged commit.
 func (d *DB) CommitBatch(b *pebbledb.Batch) error {
+	unlock, err := d.prepareAbsoluteBatch(b)
+	if err != nil {
+		return err
+	}
+	if unlock == nil {
+		return d.commitBatchRaw(b)
+	}
+	defer unlock()
+	err = d.commitBatchRaw(b)
+	if err == nil {
+		d.observeAbsoluteCount()
+	}
+	return err
+}
+
+func (d *DB) commitBatchRaw(b *pebbledb.Batch) error {
 	if d.repl != nil {
 		if err := d.RequireWriteLeader(); err != nil {
 			return err
@@ -426,7 +454,7 @@ func (d *DB) commitLoop() {
 			}
 		}
 
-		err := merged.Commit(pebbledb.NoSync)
+		err := merged.Commit(d.writeOptions())
 		_ = merged.Close()
 		for _, r := range reqs {
 			r.done <- err

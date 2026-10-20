@@ -142,6 +142,7 @@ func (r *TaskRouter) enqueueOnOwner(ctx context.Context, id string, cmd domain.C
 		VisibleAtUnix:    visible,
 		TenantId:         tenantID,
 		DeduplicationKey: deduplicationKey,
+		ExpiresAt:        requestedExpiryProto(ctx),
 	})
 	if err != nil {
 		return nil, false, restoreCreateSentinel(err)
@@ -157,6 +158,10 @@ func restoreCreateSentinel(err error) error {
 		return domain.ErrIdempotencyConflict
 	case errMessageHas(err, domain.ErrTaskIDConflict.Error()):
 		return domain.ErrTaskIDConflict
+	case errMessageHas(err, domain.ErrTaskExpired.Error()):
+		return domain.ErrTaskExpired
+	case errMessageHas(err, domain.ErrAbsoluteExpiryCapacity.Error()):
+		return domain.ErrAbsoluteExpiryCapacity
 	default:
 		return err
 	}
@@ -192,11 +197,20 @@ func (r *TaskRouter) enqueueNamed(ctx context.Context, taskID string, cmd domain
 		VisibleAtUnix: visible,
 		TenantId:      tenantID,
 		Named:         true,
+		ExpiresAt:     requestedExpiryProto(ctx),
 	})
 	if err != nil {
 		return nil, false, restoreCreateSentinel(err)
 	}
 	return protoToDomainTask(resp.Task), resp.Ready, nil
+}
+
+func requestedExpiryProto(ctx context.Context) *timestamppb.Timestamp {
+	value := domain.RequestedTaskExpiry(ctx)
+	if value.IsZero() {
+		return nil
+	}
+	return timestamppb.New(value)
 }
 
 // newTaskID picks the ID of a new task. Without a deduplication key it is
@@ -555,5 +569,7 @@ var _ repository.TaskRepository = (*TaskRouter)(nil)
 
 // timeOrNil is here so the import is used even if no helper needs it
 // directly; gen'd proto Get methods already handle nils.
-var _ = func() *timestamppb.Timestamp { return nil }
-var _ = strings.Repeat
+var (
+	_ = func() *timestamppb.Timestamp { return nil }
+	_ = strings.Repeat
+)

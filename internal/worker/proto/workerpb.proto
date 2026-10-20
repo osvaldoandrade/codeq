@@ -34,6 +34,7 @@ message Task {
   string tenant_id = 11;
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
+  google.protobuf.Timestamp expires_at = 14;
 }
 
 // ---------------- Worker → Server messages ----------------

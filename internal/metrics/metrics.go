@@ -8,6 +8,19 @@ const (
 	labelRoute = "route"
 )
 
+const shardLabel = "shard"
+
+var (
+	// AbsoluteIdentityUsage tracks accepted tasks and their no-payload replay metadata.
+	AbsoluteIdentityUsage = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "absolute_identity_usage", Help: "Accepted absolute task identities and replay tombstones held per shard."}, []string{shardLabel})
+	// AbsoluteIdentityCapacity reports the configured per-shard metadata budget.
+	AbsoluteIdentityCapacity = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "absolute_identity_capacity", Help: "Configured absolute identity metadata budget per shard; never increased automatically."}, []string{shardLabel})
+	// AbsoluteIdentityRefused counts new identities refused by the bounded budget.
+	AbsoluteIdentityRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_identity_refused_total", Help: "New absolute task accepts refused by the per-shard metadata budget."}, []string{shardLabel})
+	// AbsoluteExpiredPurged counts physical absolute payload retirement.
+	AbsoluteExpiredPurged = prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_expired_purged_total", Help: "Absolute task payloads retired by bounded cleanup."})
+)
+
 var (
 	TaskCreatedTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -148,6 +161,7 @@ var (
 
 func init() {
 	prometheus.MustRegister(
+		AbsoluteIdentityUsage, AbsoluteIdentityCapacity, AbsoluteIdentityRefused, AbsoluteExpiredPurged,
 		TaskCreatedTotal,
 		TaskClaimedTotal,
 		TaskCompletedTotal,

@@ -23,13 +23,14 @@ type testNode struct {
 	node   Node
 	dialer func(context.Context, string) (net.Conn, error)
 	repo   *pebblerepo.TaskRepository
+	db     *pebblerepo.DB
 	stop   func()
 }
 
-func newTestNode(t *testing.T, id string) *testNode {
+func newTestNode(t *testing.T, id string, fsync ...bool) *testNode {
 	t.Helper()
 	dir := t.TempDir()
-	db, err := pebblerepo.Open(pebblerepo.Options{Path: dir})
+	db, err := pebblerepo.Open(pebblerepo.Options{Path: dir, FsyncOnCommit: len(fsync) > 0 && fsync[0]})
 	if err != nil {
 		t.Fatalf("open pebble: %v", err)
 	}
@@ -45,6 +46,7 @@ func newTestNode(t *testing.T, id string) *testNode {
 		node:   Node{ID: id, GRPCAddr: "bufnet-" + id},
 		dialer: func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) },
 		repo:   repo,
+		db:     db,
 		stop: func() {
 			gs.Stop()
 			_ = db.Close()

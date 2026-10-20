@@ -80,7 +80,7 @@ type bindingSuite struct {
 	prodAddr   string
 }
 
-func newBindingSuite(t *testing.T) *bindingSuite {
+func newBindingSuite(t *testing.T, fsync ...bool) *bindingSuite {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -93,6 +93,12 @@ func newBindingSuite(t *testing.T) *bindingSuite {
 	t.Cleanup(jwks.Close)
 	s := &bindingSuite{t: t, key: key, workerAddr: freeAddr(t), prodAddr: freeAddr(t)}
 	cfg := s.config(jwks.URL)
+	if len(fsync) > 0 && fsync[0] {
+		var persistence map[string]any
+		_ = json.Unmarshal(cfg.PersistenceConfig, &persistence)
+		persistence["fsyncOnCommit"] = true
+		cfg.PersistenceConfig, _ = json.Marshal(persistence)
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config: %v", err)
 	}

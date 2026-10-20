@@ -55,6 +55,12 @@ type Server struct {
 // ---------------- ID-routed methods ----------------
 
 func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*clusterpb.EnqueueResponse, error) {
+	if req.ExpiresAt != nil {
+		if err := req.ExpiresAt.CheckValid(); err != nil {
+			return nil, err
+		}
+		ctx = domain.WithTaskExpiry(ctx, req.ExpiresAt.AsTime())
+	}
 	// Type-assert so we can use the cluster-aware EnqueueWithID — the
 	// router pre-picked the task ID at the hash boundary, we MUST honour it.
 	local, ok := s.Tasks.(interface {
@@ -72,7 +78,8 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 	var ready bool
 	var err error
 	if req.Named {
-		task, ready, err = local.EnqueueNamed(ctx,
+		task, ready, err = local.EnqueueNamed(
+			ctx,
 			req.Id,
 			domain.Command(req.Command),
 			string(req.Payload),
@@ -83,7 +90,8 @@ func (s *Server) Enqueue(ctx context.Context, req *clusterpb.EnqueueRequest) (*c
 			req.TenantId,
 		)
 	} else {
-		task, ready, err = local.EnqueueWithID(ctx,
+		task, ready, err = local.EnqueueWithID(
+			ctx,
 			req.Id,
 			domain.Command(req.Command),
 			string(req.Payload),
@@ -327,7 +335,7 @@ func domainTaskToProto(t *domain.Task) *clusterpb.Task {
 	if t == nil {
 		return nil
 	}
-	return &clusterpb.Task{
+	result := &clusterpb.Task{
 		Id:                t.ID,
 		Command:           string(t.Command),
 		Payload:           []byte(t.Payload),
@@ -349,6 +357,10 @@ func domainTaskToProto(t *domain.Task) *clusterpb.Task {
 		DeduplicationKey:  t.DeduplicationKey,
 		Progress:          t.Progress,
 	}
+	if t.ExpiresAt != nil {
+		result.ExpiresAt = timestamppb.New(*t.ExpiresAt)
+	}
+	return result
 }
 
 func protoToDomainTask(p *clusterpb.Task) *domain.Task {
@@ -380,6 +392,10 @@ func protoToDomainTask(p *clusterpb.Task) *domain.Task {
 	}
 	if p.UpdatedAt != nil {
 		t.UpdatedAt = p.UpdatedAt.AsTime()
+	}
+	if p.ExpiresAt != nil {
+		value := p.ExpiresAt.AsTime()
+		t.ExpiresAt = &value
 	}
 	return t
 }

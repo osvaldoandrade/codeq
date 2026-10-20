@@ -194,6 +194,16 @@ func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
 			r.db.Leases.Delete(id)
 			continue
 		}
+		if err := r.db.checkTaskExpiry(&t); err != nil {
+			if errors.Is(err, domain.ErrTaskExpired) {
+				if err = r.db.purgeAbsoluteRow(&t); err != nil {
+					return moved, err
+				}
+				moved++
+				continue
+			}
+			return moved, err
+		}
 		if t.Status != domain.StatusInProgress {
 			r.db.Leases.Delete(id)
 			continue
@@ -288,6 +298,10 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 // ttlBatch per tick. CleanupExpired on the foreground path is bounded too;
 // the reaper exists so an idle deployment still trims stale data.
 func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
+	absoluteRemoved, err := r.db.sweepAbsolute(ctx, r.ttlBatch)
+	if err != nil {
+		return 0, err
+	}
 	before := time.Now().In(r.tz)
 	lower, _ := PrefixTTL()
 	upper := make([]byte, 0, len(pTTL)+8)
@@ -295,8 +309,8 @@ func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
 	upper = append(upper, be8(unixSeconds(before)+1)...)
 	hits, err := collectTTLHits(r.db, lower, upper, r.ttlBatch)
 	if err != nil || len(hits) == 0 {
-		return 0, err
+		return absoluteRemoved, err
 	}
 	n, err := dropExpiredBodies(r.db, hits)
-	return n, err
+	return absoluteRemoved + n, err
 }

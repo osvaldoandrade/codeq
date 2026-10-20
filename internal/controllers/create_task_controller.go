@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
-
-	"github.com/gin-gonic/gin"
 )
 
 type createTaskController struct{ svc services.SchedulerService }
@@ -27,6 +27,7 @@ type createReq struct {
 	Idempotency string         `json:"idempotencyKey,omitempty"`
 	RunAt       string         `json:"runAt,omitempty"`
 	DelaySecs   int            `json:"delaySeconds,omitempty"`
+	ExpiresAt   string         `json:"expiresAt,omitempty"`
 	// Deduplication collapses this create into a waiting task of the same
 	// tenant, command and key (ADR 0004).
 	Deduplication string `json:"deduplicationKey,omitempty"`
@@ -77,7 +78,21 @@ func (h *createTaskController) Handle(c *gin.Context) {
 	}
 
 	idempotencyKey := storageIdempotencyKey(scope, req.Idempotency)
-	task, err := h.svc.CreateTask(c.Request.Context(), req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, idempotencyKey, req.Deduplication, req.TaskID, runAt, req.DelaySecs, tenantID)
+	ctx, err := createExpiryContext(c.Request.Context(), req.ExpiresAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	task, err := h.svc.CreateTask(ctx, req.Command, payloadJSON, req.Priority, req.Webhook, req.MaxAttempts, idempotencyKey, req.Deduplication, req.TaskID, runAt, req.DelaySecs, tenantID)
+	if errors.Is(err, domain.ErrAbsoluteExpiryCapacity) {
+		c.Header("Retry-After", "30")
+		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "absolute_expiry_capacity", "message": "Log queue metadata capacity is full. Review its configured per-shard budget and cleanup health."})
+		return
+	}
+	if errors.Is(err, domain.ErrTaskExpired) {
+		c.AbortWithStatusJSON(http.StatusGone, gin.H{"error": "task_expired"})
+		return
+	}
 	if errors.Is(err, domain.ErrTaskIDConflict) {
 		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": domain.ErrTaskIDConflict.Error()})
 		return

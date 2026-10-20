@@ -43,6 +43,7 @@ type Config struct {
 	RequeueInspectLimit                int             `yaml:"requeueInspectLimit"`
 	LocalArtifactsDir                  string          `yaml:"localArtifactsDir"`
 	MaxAttemptsDefault                 int             `yaml:"maxAttemptsDefault"`
+	AbsoluteIdentityBudget             int             `yaml:"absoluteExpiryMaxIdentitiesPerShard"`
 	BackoffPolicy                      string          `yaml:"backoffPolicy"`
 	BackoffBaseSeconds                 int             `yaml:"backoffBaseSeconds"`
 	BackoffMaxSeconds                  int             `yaml:"backoffMaxSeconds"`
@@ -402,6 +403,13 @@ func applyEnvAndDefaults(c *Config) {
 			c.MaxAttemptsDefault = n
 		}
 	}
+	if v := os.Getenv("ABSOLUTE_EXPIRY_MAX_IDENTITIES_PER_SHARD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.AbsoluteIdentityBudget = n
+		} else {
+			c.AbsoluteIdentityBudget = -1
+		}
+	}
 	if v := os.Getenv("BACKOFF_POLICY"); v != "" {
 		c.BackoffPolicy = v
 	}
@@ -534,6 +542,9 @@ func applyEnvAndDefaults(c *Config) {
 	if c.SubscriptionMinIntervalSeconds <= 0 {
 		c.SubscriptionMinIntervalSeconds = 5
 	}
+	if c.AbsoluteIdentityBudget == 0 {
+		c.AbsoluteIdentityBudget = 1_000_000
+	}
 	if c.SubscriptionCleanupIntervalSeconds <= 0 {
 		c.SubscriptionCleanupIntervalSeconds = 60
 	}
@@ -607,6 +618,9 @@ func applyEnvAndDefaults(c *Config) {
 }
 
 func (c *Config) Validate() error {
+	if c.AbsoluteIdentityBudget < 0 {
+		return fmt.Errorf("absoluteExpiryMaxIdentitiesPerShard must be positive")
+	}
 	var errs []string
 	env := strings.ToLower(strings.TrimSpace(c.Env))
 	dev := env == "dev"

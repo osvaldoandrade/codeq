@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/osvaldoandrade/codeq/internal/core/queuetopic"
 	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
@@ -24,17 +25,48 @@ type database interface {
 // TopicStore serializes catalog read-modify-write operations on one node. In
 // raft mode the DB rejects followers and replicates the resulting Pebble batch.
 type TopicStore struct {
-	db database
-	mu sync.Mutex
+	db       database
+	mu       sync.Mutex
+	policyMu sync.RWMutex
+	custody  func(context.Context, string, string) (bool, error)
+	durable  func() bool
 }
 
 // NewTopicStore builds a tenant-scoped topic catalog over Pebble.
-func NewTopicStore(db *pebblerepo.DB) *TopicStore {
-	return &TopicStore{db: db}
+func NewTopicStore(db *pebblerepo.DB, otherShards ...*pebblerepo.DB) *TopicStore {
+	dbs := append([]*pebblerepo.DB{db}, otherShards...)
+	return &TopicStore{db: db, durable: func() bool {
+		for _, shard := range dbs {
+			if !shard.DurableWrites() {
+				return false
+			}
+		}
+		return true
+	}, custody: func(ctx context.Context, tenant, name string) (bool, error) {
+		for _, shard := range dbs {
+			active, err := shard.HasAbsoluteTopicCustody(ctx, tenant, name)
+			if err != nil || active {
+				return active, err
+			}
+		}
+		return false, nil
+	}}
+}
+
+// AcquireAbsolutePolicyRead keeps a local acceptance's final policy check and
+// commit on one side of a disable/delete decision across every local shard.
+func (s *TopicStore) AcquireAbsolutePolicyRead() func() {
+	s.policyMu.RLock()
+	return s.policyMu.RUnlock
 }
 
 // Upsert atomically creates, updates, or confirms an identical topic policy.
 func (s *TopicStore) Upsert(ctx context.Context, desired queuetopic.Topic) (queuetopic.Topic, bool, bool, error) {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
+	if desired.Policy.AbsoluteExpiry && (s.durable == nil || !s.durable()) {
+		return queuetopic.Topic{}, false, false, &queuetopic.ValidationError{Field: "absoluteExpiry", Message: "requires fsyncOnCommit=true on every storage member"}
+	}
 	if err := validateDesired(desired); err != nil {
 		return queuetopic.Topic{}, false, false, err
 	}
@@ -50,6 +82,9 @@ func (s *TopicStore) Upsert(ctx context.Context, desired queuetopic.Topic) (queu
 
 	current, exists, err := s.read(desired.TopicID)
 	if err != nil {
+		return queuetopic.Topic{}, false, false, err
+	}
+	if err = s.preserveAbsolutePolicy(ctx, current, &desired, exists); err != nil {
 		return queuetopic.Topic{}, false, false, err
 	}
 	if exists && queuetopic.SamePolicy(current.Policy, desired.Policy) {
@@ -74,6 +109,28 @@ func (s *TopicStore) Upsert(ctx context.Context, desired queuetopic.Topic) (queu
 	return desired, created, changed, nil
 }
 
+func (s *TopicStore) preserveAbsolutePolicy(ctx context.Context, current queuetopic.Topic, desired *queuetopic.Topic, exists bool) error {
+	if !exists || !current.Policy.AbsoluteExpiry {
+		return nil
+	}
+	if !desired.Policy.AbsoluteExpiry {
+		return s.requireEmptyAbsoluteCustody(ctx, current)
+	}
+	floor := current.Policy.VisibilityFloor
+	if desired.Policy.VisibilityFloor != nil && (floor == nil || desired.Policy.VisibilityFloor.After(*floor)) {
+		floor = desired.Policy.VisibilityFloor
+	}
+	if current.Policy.RetentionSeconds != desired.Policy.RetentionSeconds {
+		retention := min(current.Policy.RetentionSeconds, desired.Policy.RetentionSeconds)
+		cutoff := desired.UpdatedAt.Add(-time.Duration(retention) * time.Second)
+		if floor == nil || cutoff.After(*floor) {
+			floor = &cutoff
+		}
+	}
+	desired.Policy.VisibilityFloor = floor
+	return nil
+}
+
 // Get returns one topic within the authenticated tenant.
 func (s *TopicStore) Get(ctx context.Context, tenantID, topicName string) (queuetopic.Topic, error) {
 	if err := ctx.Err(); err != nil {
@@ -93,6 +150,8 @@ func (s *TopicStore) Get(ctx context.Context, tenantID, topicName string) (queue
 // Delete removes a topic catalog entry idempotently. Followers are rejected
 // even when the key is already absent so they never acknowledge local writes.
 func (s *TopicStore) Delete(ctx context.Context, tenantID, topicName string) error {
+	s.policyMu.Lock()
+	defer s.policyMu.Unlock()
 	if err := s.checkWrite(ctx); err != nil {
 		return err
 	}
@@ -102,8 +161,44 @@ func (s *TopicStore) Delete(ctx context.Context, tenantID, topicName string) err
 		return err
 	}
 	topicID := queuetopic.PhysicalID(tenantID, topicName)
+	// Absolute policies retain their monotonic cutoff. Removing it while rows
+	// await cleanup would let a recreated catalog entry expose those rows again.
+	if current, exists, err := s.read(topicID); err != nil {
+		return err
+	} else if exists && current.Policy.AbsoluteExpiry {
+		if err := s.requireEmptyAbsoluteCustody(ctx, current); err != nil {
+			return err
+		}
+	}
 	if err := s.db.Delete(topicKey(topicID)); err != nil {
 		return fmt.Errorf("delete queue topic %q: %w", topicID, err)
+	}
+	return nil
+}
+
+func (s *TopicStore) requireEmptyAbsoluteCustody(ctx context.Context, topic queuetopic.Topic) error {
+	if s.custody != nil {
+		active, err := s.custody(ctx, topic.TenantID, topic.TopicName)
+		if err != nil {
+			return err
+		}
+		if active {
+			return &queuetopic.ConflictError{TopicID: topic.TopicID}
+		}
+		return nil
+	}
+	inspector, ok := s.db.(interface {
+		HasAbsoluteTopicCustody(context.Context, string, string) (bool, error)
+	})
+	if !ok {
+		return &queuetopic.ConflictError{TopicID: topic.TopicID}
+	}
+	active, err := inspector.HasAbsoluteTopicCustody(ctx, topic.TenantID, topic.TopicName)
+	if err != nil {
+		return err
+	}
+	if active {
+		return &queuetopic.ConflictError{TopicID: topic.TopicID}
 	}
 	return nil
 }

@@ -246,6 +246,12 @@ func (s *Server) processCreate(ctx context.Context, sess *streamSession, req *pr
 	if payload == "" {
 		payload = "null"
 	}
+	if req.ExpiresAt != nil {
+		if err := req.ExpiresAt.CheckValid(); err != nil {
+			return &producerpb.CreateAck{Seq: req.Seq, Ok: false, ErrorMessage: "invalid expiresAt"}
+		}
+		ctx = domain.WithTaskExpiry(ctx, req.ExpiresAt.AsTime())
+	}
 	task, err := s.Scheduler.CreateTask(
 		ctx,
 		cmd,

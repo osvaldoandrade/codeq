@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
-
-	"github.com/gin-gonic/gin"
 )
 
 const maxBatchCreateSize = 100
@@ -78,7 +78,12 @@ func (h *batchCreateTaskController) Handle(c *gin.Context) {
 		}
 
 		idempotencyKey := storageIdempotencyKey(scope, t.Idempotency)
-		task, err := h.svc.CreateTask(c.Request.Context(), t.Command, payloadJSON, t.Priority, t.Webhook, t.MaxAttempts, idempotencyKey, t.Deduplication, t.TaskID, runAt, t.DelaySecs, tenantID)
+		ctx, err := createExpiryContext(c.Request.Context(), t.ExpiresAt)
+		if err != nil {
+			results[i] = batchCreateResult{Error: err.Error()}
+			continue
+		}
+		task, err := h.svc.CreateTask(ctx, t.Command, payloadJSON, t.Priority, t.Webhook, t.MaxAttempts, idempotencyKey, t.Deduplication, t.TaskID, runAt, t.DelaySecs, tenantID)
 		if errors.Is(err, domain.ErrTaskIDConflict) {
 			results[i] = batchCreateResult{Error: domain.ErrTaskIDConflict.Error()}
 			continue

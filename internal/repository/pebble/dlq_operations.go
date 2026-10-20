@@ -318,6 +318,12 @@ func (r *TaskRepository) dlqTask(id string, cmd domain.Command, tenantID string)
 		tenantSeg(task.TenantID) != tenantSeg(tenantID) || cmdSeg(task.Command) != cmdSeg(cmd) {
 		return nil, nil
 	}
+	if err := r.db.checkTaskExpiry(&task); err != nil {
+		if errors.Is(err, domain.ErrTaskExpired) {
+			return nil, nil
+		}
+		return nil, err
+	}
 	return &task, nil
 }
 
