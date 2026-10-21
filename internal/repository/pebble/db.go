@@ -366,16 +366,28 @@ func (d *DB) Batch() *pebbledb.Batch {
 // returns (typical defer b.Close()). Apply() copies the ops out, so
 // closing the caller's batch does not affect the merged commit.
 func (d *DB) CommitBatch(b *pebbledb.Batch) error {
+	return d.commitBatchContext(context.Background(), b)
+}
+
+// Claims may wait behind absolute-expiry retirement. Recheck their request
+// after that coordination, before committing a lease nobody can receive.
+// Once replication starts, its durable outcome remains authoritative.
+func (d *DB) commitBatchContext(ctx context.Context, b *pebbledb.Batch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	unlock, err := d.prepareAbsoluteBatch(b)
 	if err != nil {
 		return err
 	}
-	if unlock == nil {
-		return d.commitBatchRaw(b)
+	if unlock != nil {
+		defer unlock()
 	}
-	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	err = d.commitBatchRaw(b)
-	if err == nil {
+	if err == nil && unlock != nil {
 		d.observeAbsoluteCount()
 	}
 	return err

@@ -792,13 +792,13 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	taskJSON, err := r.db.Get(KeyTask(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil, false, r.db.Delete(pendingKey)
+			return nil, false, r.discardPendingHint(pendingKey)
 		}
 		return nil, false, err
 	}
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
-		return nil, false, r.db.Delete(pendingKey)
+		return nil, false, r.discardPendingHint(pendingKey)
 	}
 	if err := r.db.checkTaskExpiry(&t); err != nil {
 		if errors.Is(err, domain.ErrTaskExpired) {
@@ -817,7 +817,7 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	// pending key and bail — the rightful claimer is already at work
 	// and we must not steal the worker assignment.
 	if t.Status != domain.StatusPending {
-		return nil, false, r.db.Delete(pendingKey)
+		return nil, false, r.discardPendingHint(pendingKey)
 	}
 
 	now := r.now()
@@ -854,12 +854,22 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	if err := b.Set(KeyTTLIndex(ttlScore, id), nil, nil); err != nil {
 		return nil, false, err
 	}
-	if err := r.db.CommitBatch(b); err != nil {
+	if err := r.db.commitBatchContext(ctx, b); err != nil {
 		return nil, false, fmt.Errorf("commit claim: %w", err)
 	}
 	r.leases.Set(id, workerID, cmd, tenantID, taskLeaseUnix(&t, leaseUntil))
 	metrics.QueueDepth.WithLabelValues(string(cmd), "ready").Dec()
 	return &t, true, nil
+}
+
+// Retirement can remove the durable key while its in-memory hint remains.
+// Avoid a synchronous Raft delete for every already-absent key in that backlog.
+func (r *TaskRepository) discardPendingHint(key []byte) error {
+	exists, err := r.db.Has(key)
+	if err != nil || !exists {
+		return err
+	}
+	return r.db.Delete(key)
 }
 
 // ClaimMany is the Phase 7 batch claim path. Pops up to `max` hints
