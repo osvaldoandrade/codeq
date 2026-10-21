@@ -538,6 +538,9 @@ func (r *TaskRepository) Get(ctx context.Context, taskID string) (*domain.Task, 
 // ---------- Claim ----------
 
 func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []domain.Command, leaseSeconds int, inspectLimit int, maxAttemptsDefault int, tenantID string) (*domain.Task, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	if err := r.ensureLeaderDispatch(ctx); err != nil {
 		return nil, false, err
 	}
@@ -552,6 +555,9 @@ func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []
 	// actually wrote to — the public MoveDueDelayed entry point still
 	// defaults to tenant="" for admin/test paths.
 	for _, cmd := range commands {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if _, err := r.moveDueDelayedForTenant(ctx, cmd, inspectLimit, tenantID); err != nil {
 			return nil, false, err
 		}
@@ -562,8 +568,13 @@ func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []
 		}
 	}
 
+	// One budget covers all priorities and commands, including stale hints.
+	remaining := inspectLimit
 	for _, cmd := range commands {
-		t, ok, err := r.popFromAnyPriority(ctx, workerID, cmd, leaseSeconds, tenantID)
+		if remaining == 0 {
+			break
+		}
+		t, ok, err := r.popFromAnyPriority(ctx, workerID, cmd, leaseSeconds, tenantID, &remaining)
 		if err != nil {
 			return nil, false, err
 		}
@@ -571,16 +582,16 @@ func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []
 			return t, true, nil
 		}
 	}
-	return nil, false, nil
+	return nil, false, ctx.Err()
 }
 
 // popFromAnyPriority walks priorities high→low. For each priority it grabs
 // the lowest-seq pending key (FIFO within bucket), atomically deletes it,
 // adds the id to the inprog set, updates the task body, and writes the
 // lease — all in one batch so we never observe a half-moved task.
-func (r *TaskRepository) popFromAnyPriority(ctx context.Context, workerID string, cmd domain.Command, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
-	for p := maxPriority; p >= minPriority; p-- {
-		t, ok, err := r.tryPopPriority(ctx, workerID, cmd, p, leaseSeconds, tenantID)
+func (r *TaskRepository) popFromAnyPriority(ctx context.Context, workerID string, cmd domain.Command, leaseSeconds int, tenantID string, remaining *int) (*domain.Task, bool, error) {
+	for p := maxPriority; p >= minPriority && *remaining > 0; p-- {
+		t, ok, err := r.tryPopPriority(ctx, workerID, cmd, p, leaseSeconds, tenantID, remaining)
 		if err != nil {
 			return nil, false, err
 		}
@@ -588,7 +599,7 @@ func (r *TaskRepository) popFromAnyPriority(ctx context.Context, workerID string
 			return t, true, nil
 		}
 	}
-	return nil, false, nil
+	return nil, false, ctx.Err()
 }
 
 // queueKey is the stable string identifier used to look up the per-queue
@@ -744,15 +755,27 @@ func (r *TaskRepository) recoverDelayedCounts() error {
 	return it.Error()
 }
 
-func (r *TaskRepository) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string) (*domain.Task, bool, error) {
+func (r *TaskRepository) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string, remaining *int) (*domain.Task, bool, error) {
 	q := r.channelFor(cmd, tenantID, priority)
-	h, ok := r.popHint(q)
-	if !ok {
-		return nil, false, nil
+	for *remaining > 0 {
+		h, ok := r.popHintWithinBudget(ctx, q, remaining)
+		if !ok {
+			return nil, false, ctx.Err()
+		}
+		var task *domain.Task
+		var claimed bool
+		err := ctx.Err()
+		if err == nil {
+			task, claimed, err = r.completeClaim(ctx, workerID, cmd, tenantID, priority, leaseSeconds, h.seq, h.id)
+		}
+		r.finishHint(cmd, tenantID, priority, h, err != nil)
+		if err != nil || claimed {
+			return task, claimed, err
+		}
+		// A retired/stale hint is not proof this priority is empty. Keep
+		// looking before the caller backs off and fresh tasks expire behind it.
 	}
-	task, claimed, err := r.completeClaim(ctx, workerID, cmd, tenantID, priority, leaseSeconds, h.seq, h.id)
-	r.finishHint(cmd, tenantID, priority, h, err != nil)
-	return task, claimed, err
+	return nil, false, ctx.Err()
 }
 
 // completeClaim performs the durable side of a claim. Because the channel
@@ -769,15 +792,13 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	taskJSON, err := r.db.Get(KeyTask(id))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			_ = r.db.Delete(pendingKey)
-			return nil, false, nil
+			return nil, false, r.db.Delete(pendingKey)
 		}
 		return nil, false, err
 	}
 	var t domain.Task
 	if err := sonic.Unmarshal(taskJSON, &t); err != nil {
-		_ = r.db.Delete(pendingKey)
-		return nil, false, nil
+		return nil, false, r.db.Delete(pendingKey)
 	}
 	if err := r.db.checkTaskExpiry(&t); err != nil {
 		if errors.Is(err, domain.ErrTaskExpired) {
@@ -796,8 +817,7 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	// pending key and bail — the rightful claimer is already at work
 	// and we must not steal the worker assignment.
 	if t.Status != domain.StatusPending {
-		_ = r.db.Delete(pendingKey)
-		return nil, false, nil
+		return nil, false, r.db.Delete(pendingKey)
 	}
 
 	now := r.now()

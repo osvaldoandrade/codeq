@@ -201,11 +201,23 @@ func (r *TaskRepository) sendHintLocked(cmd domain.Command, tenantID string, pri
 }
 
 func (r *TaskRepository) popHint(q *queueChan) (pendingHint, bool) {
+	return r.popHintWithinBudget(context.Background(), q, nil)
+}
+
+// A nil budget preserves the batch-claim traversal. Single claims account for
+// every removed hint, including a reserved task, before inspecting its body.
+func (r *TaskRepository) popHintWithinBudget(ctx context.Context, q *queueChan, remaining *int) (pendingHint, bool) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
-	for {
+	for remaining == nil || *remaining > 0 {
+		if ctx.Err() != nil {
+			return pendingHint{}, false
+		}
 		select {
 		case h := <-q.ch:
+			if remaining != nil {
+				*remaining--
+			}
 			delete(r.queued, h.id)
 			if _, busy := r.inflight[h.id]; busy {
 				continue
@@ -216,6 +228,7 @@ func (r *TaskRepository) popHint(q *queueChan) (pendingHint, bool) {
 			return pendingHint{}, false
 		}
 	}
+	return pendingHint{}, false
 }
 
 func (r *TaskRepository) finishHint(cmd domain.Command, tenantID string, prio int, h pendingHint, republish bool) {
