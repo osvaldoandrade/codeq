@@ -42,6 +42,14 @@ type Config struct {
 	CommitMS        int           // raft commit timeout (default 50)
 	SnapshotEntries uint64        // log entries before snapshot (default 8192)
 	ApplyTimeout    time.Duration // per-write raft.Apply timeout (default 10s)
+	// SnapshotRetain is how many FSM snapshots stay on disk (default 2).
+	// Each one is a full copy of the queue state, so it is a direct
+	// multiplier on the data volume.
+	SnapshotRetain int
+	// TrailingLogs is how many applied log entries survive a snapshot's
+	// log compaction so a briefly lagging follower can catch up without a
+	// full snapshot install (default 2048; hashicorp's default is 10240).
+	TrailingLogs uint64
 	// StreamLayer is an optional override for the underlying transport
 	// layer. When non-nil (mux mode), Open uses
 	// hraft.NewNetworkTransport on top of it instead of opening its own
@@ -87,6 +95,27 @@ func (c Config) snapshotThreshold() uint64 {
 		return c.SnapshotEntries
 	}
 	return 8192
+}
+
+// DefaultSnapshotRetain and DefaultTrailingLogs bound Raft's on-disk
+// footprint on small voter volumes.
+const (
+	DefaultSnapshotRetain = 2
+	DefaultTrailingLogs   = uint64(2048)
+)
+
+func (c Config) snapshotRetain() int {
+	if c.SnapshotRetain > 0 {
+		return c.SnapshotRetain
+	}
+	return DefaultSnapshotRetain
+}
+
+func (c Config) trailingLogs() uint64 {
+	if c.TrailingLogs > 0 {
+		return c.TrailingLogs
+	}
+	return DefaultTrailingLogs
 }
 
 func (c Config) applyTimeout() time.Duration {
@@ -231,7 +260,7 @@ func openInternal(ctx context.Context, cfg Config, pdb *pebbledb.DB, ownPebble b
 		logs.writeOptions = pebbledb.Sync
 		stable.writeOptions = pebbledb.Sync
 	}
-	snaps, err := newSnapshotStore(cfg.Path + "/snapshots")
+	snaps, err := newSnapshotStore(cfg.Path+"/snapshots", cfg.snapshotRetain())
 	if err != nil {
 		return nil, fmt.Errorf("snapshot store: %w", err)
 	}
@@ -263,6 +292,7 @@ func openInternal(ctx context.Context, cfg Config, pdb *pebbledb.DB, ownPebble b
 	rcfg.CommitTimeout = cfg.commitTimeout()
 	rcfg.SnapshotInterval = cfg.snapshotInterval()
 	rcfg.SnapshotThreshold = cfg.snapshotThreshold()
+	rcfg.TrailingLogs = cfg.trailingLogs()
 	rcfg.LogOutput = os.Stderr
 
 	if cfg.Bootstrap {

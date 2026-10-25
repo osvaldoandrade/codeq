@@ -95,6 +95,10 @@ func (h *createTaskController) Handle(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "absolute_expiry_capacity", "message": "Log queue metadata capacity is full. Review its configured per-shard budget and cleanup health."})
 		return
 	}
+	if errors.Is(err, domain.ErrStorageCapacity) {
+		respondStorageCapacity(c)
+		return
+	}
 	if errors.Is(err, domain.ErrTaskExpired) {
 		c.AbortWithStatusJSON(http.StatusGone, gin.H{"error": "task_expired"})
 		return

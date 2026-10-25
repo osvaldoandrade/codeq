@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	pebbledb "github.com/cockroachdb/pebble"
+	hraft "github.com/hashicorp/raft"
 )
 
 func openSnapshotTestDB(t *testing.T) *pebbledb.DB {
@@ -167,7 +168,7 @@ func TestSnapshot_TruncatedStream(t *testing.T) {
 
 func TestSnapshot_NewSnapshotStoreCreatesDir(t *testing.T) {
 	dir := t.TempDir() + "/snaps"
-	store, err := newSnapshotStore(dir)
+	store, err := newSnapshotStore(dir, 0)
 	if err != nil {
 		t.Fatalf("newSnapshotStore: %v", err)
 	}
@@ -180,5 +181,49 @@ func TestSnapshot_NewSnapshotStoreCreatesDir(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Errorf("fresh store should be empty, got %d entries", len(list))
+	}
+}
+
+func TestSnapshot_StoreRetainsConfiguredCount(t *testing.T) {
+	for _, tc := range []struct{ retain, want int }{{0, DefaultSnapshotRetain}, {1, 1}, {2, 2}, {3, 3}} {
+		store, err := newSnapshotStore(t.TempDir(), tc.retain)
+		if err != nil {
+			t.Fatalf("newSnapshotStore(%d): %v", tc.retain, err)
+		}
+		for i := uint64(1); i <= 5; i++ {
+			sink, err := store.Create(hraft.SnapshotVersionMax, i*10, 1, hraft.Configuration{}, 1, nil)
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if _, err := sink.Write([]byte("state")); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			if err := sink.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		}
+		list, err := store.List()
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(list) != tc.want {
+			t.Fatalf("retain=%d kept %d snapshots, want %d", tc.retain, len(list), tc.want)
+		}
+		if list[0].Index != 50 {
+			t.Fatalf("newest snapshot index = %d, want 50", list[0].Index)
+		}
+	}
+}
+
+func TestConfig_RetentionDefaults(t *testing.T) {
+	if got := (Config{}).snapshotRetain(); got != 2 {
+		t.Fatalf("default snapshot retain = %d", got)
+	}
+	if got := (Config{}).trailingLogs(); got != 2048 {
+		t.Fatalf("default trailing logs = %d", got)
+	}
+	c := Config{SnapshotRetain: 4, TrailingLogs: 512}
+	if c.snapshotRetain() != 4 || c.trailingLogs() != 512 {
+		t.Fatalf("explicit retention ignored: %d %d", c.snapshotRetain(), c.trailingLogs())
 	}
 }

@@ -109,6 +109,24 @@ type DB struct {
 	absoluteCapacity   int64
 	absoluteShard      string
 	fsyncOnCommit      bool
+
+	// createAdmission, when set, decides whether a NEW task may be
+	// written (data-volume guard). Only task creation consults it; claims,
+	// lease renewals, completions, deletions, cleanup and Raft apply never
+	// do, so the queue keeps draining while new work is refused.
+	createAdmission func() error
+}
+
+// SetCreateAdmission installs the new-task admission hook. Like
+// AttachReplicator it must run before repositories start writing.
+func (d *DB) SetCreateAdmission(admit func() error) { d.createAdmission = admit }
+
+// admitCreate consults the admission hook; nil admits.
+func (d *DB) admitCreate() error {
+	if d.createAdmission == nil {
+		return nil
+	}
+	return d.createAdmission()
 }
 
 // AttachReplicator hooks a replication delegate (typically *raft.DB)
@@ -157,23 +175,61 @@ type Options struct {
 	// FsyncOnCommit syncs KV/batch commits, including attached Raft storage.
 	// Default false preserves legacy behavior; absoluteExpiry requires true.
 	FsyncOnCommit bool
+	// CacheBytes sizes the block cache. Zero keeps the legacy 256 MiB; the
+	// server derives it from the container memory limit.
+	CacheBytes int64
+	// MemTableBytes sizes each memtable. Zero keeps the legacy 64 MiB.
+	MemTableBytes uint64
+	// L0StopWritesThreshold stops writes at this many L0 files. Zero keeps
+	// the legacy 64.
+	L0StopWritesThreshold int
+}
+
+const (
+	// DefaultCacheBytes is the legacy block cache size.
+	DefaultCacheBytes = int64(256 << 20)
+	// DefaultMemTableBytes is the legacy memtable size.
+	DefaultMemTableBytes = uint64(64 << 20)
+	// DefaultL0StopWritesThreshold is the legacy L0 write stop.
+	DefaultL0StopWritesThreshold = 64
+)
+
+// withDefaults fills zero sizes with the legacy values, so embedders and
+// benchmarks that pass only a path keep their behavior.
+func (o Options) withDefaults() Options {
+	if o.CacheBytes <= 0 {
+		o.CacheBytes = DefaultCacheBytes
+	}
+	if o.MemTableBytes == 0 {
+		o.MemTableBytes = DefaultMemTableBytes
+	}
+	if o.L0StopWritesThreshold <= 0 {
+		o.L0StopWritesThreshold = DefaultL0StopWritesThreshold
+	}
+	return o
 }
 
 // Open creates or opens the Pebble database at opts.Path. Pebble acquires
 // an exclusive lock on the directory — only one process may hold it.
 func Open(opts Options) (*DB, error) {
+	opts = opts.withDefaults()
+	// Pebble takes its own reference; drop ours once Open returns so the
+	// cache is freed with the DB instead of leaking past Close.
+	cache := pebbledb.NewCache(opts.CacheBytes)
+	defer cache.Unref()
 	pOpts := &pebbledb.Options{
 		// Bloom filters speed up negative point lookups (HGET-style misses
 		// on the ghost path). Bits-per-key 10 is the standard trade-off
 		// (~1% FP rate, ~10 bits per key memory).
-		Cache: pebbledb.NewCache(256 << 20), // 256 MiB block cache
+		Cache: cache,
 		// A 4 MiB memtable fills in a fraction of a second at the create
 		// rate, and Pebble stops writes once 12 L0 files are waiting on
 		// compaction. The 6s profile spent its Pebble time in compaction
 		// while commitLoop was under 3%. A larger memtable and a higher
-		// stop keep that ingest from waiting on the compactor.
-		MemTableSize:          64 << 20,
-		L0StopWritesThreshold: 64,
+		// stop keep that ingest from waiting on the compactor. Both are
+		// bounded by the container memory budget (see internal/memlimit).
+		MemTableSize:          opts.MemTableBytes,
+		L0StopWritesThreshold: opts.L0StopWritesThreshold,
 	}
 	// Single L0 level option to favor write throughput in our queue workload.
 	for i := range pOpts.Levels {

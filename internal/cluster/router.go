@@ -162,6 +162,8 @@ func restoreCreateSentinel(err error) error {
 		return domain.ErrTaskExpired
 	case errMessageHas(err, domain.ErrAbsoluteExpiryCapacity.Error()):
 		return domain.ErrAbsoluteExpiryCapacity
+	case errMessageHas(err, domain.ErrStorageCapacity.Error()):
+		return domain.ErrStorageCapacity
 	default:
 		return err
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	_ "github.com/osvaldoandrade/codeq/pkg/persistence/memory" // Register memory persistence plugin (testing)
 
+	"github.com/osvaldoandrade/codeq/internal/memlimit"
 	"github.com/osvaldoandrade/codeq/pkg/app"
 )
 
@@ -40,6 +41,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "[ERROR] invalid config:", err)
 		os.Exit(1)
 	}
+	// Keep the Go heap (which, with CGO disabled, also holds Pebble's cache
+	// and memtables) below the container limit; explicit GOMEMLIMIT wins.
+	mem, err := memlimit.ConfigureProcess(cfg.Memory.LimitBytes, cfg.Memory.GoMemoryLimitFraction, memlimit.Source{}, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "[WARN] memory limit detection:", err)
+	}
+	fmt.Fprintf(os.Stderr, "[INFO] memory: container limit=%d (%s), go soft limit=%d (%s)\n",
+		mem.LimitBytes, mem.LimitSource, mem.GoLimitBytes, mem.GoLimitSource)
 
 	application, err := app.NewApplication(cfg)
 	if err != nil {

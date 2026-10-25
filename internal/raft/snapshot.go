@@ -16,13 +16,17 @@ import (
 // Pebble state) live in the FSM (see fsmSnapshot + fsm.Restore in
 // fsm.go).
 //
-// retain=3 keeps the last three snapshots on disk; older ones are
-// purged automatically. This is the hashicorp/raft default.
-func newSnapshotStore(dir string) (hraft.SnapshotStore, error) {
+// retain bounds how many snapshots stay on disk; older ones are purged
+// automatically after each new snapshot. Values below 1 select
+// DefaultSnapshotRetain (hashicorp/raft rejects retain < 1).
+func newSnapshotStore(dir string, retain int) (hraft.SnapshotStore, error) {
+	if retain < 1 {
+		retain = DefaultSnapshotRetain
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("snapshot dir %s: %w", dir, err)
 	}
-	return hraft.NewFileSnapshotStore(dir, 3, os.Stderr)
+	return hraft.NewFileSnapshotStore(dir, retain, os.Stderr)
 }
 
 // Snapshot format (streamed into the raft SnapshotSink):

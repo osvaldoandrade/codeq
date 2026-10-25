@@ -21,6 +21,8 @@ import (
 	"github.com/osvaldoandrade/codeq/internal/cluster"
 	"github.com/osvaldoandrade/codeq/internal/cluster/clusterpb"
 	"github.com/osvaldoandrade/codeq/internal/leaderforward"
+	"github.com/osvaldoandrade/codeq/internal/memlimit"
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/middleware"
 	"github.com/osvaldoandrade/codeq/internal/providers"
 	raftpkg "github.com/osvaldoandrade/codeq/internal/raft"
@@ -29,6 +31,7 @@ import (
 	pebblerepo "github.com/osvaldoandrade/codeq/internal/repository/pebble"
 	"github.com/osvaldoandrade/codeq/internal/services"
 	topicpebble "github.com/osvaldoandrade/codeq/internal/storage/adapter/pebble"
+	"github.com/osvaldoandrade/codeq/internal/storage/diskguard"
 	"github.com/osvaldoandrade/codeq/pkg/auth"
 	"github.com/osvaldoandrade/codeq/pkg/config"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
@@ -105,6 +108,8 @@ type pebbleRuntime struct {
 	pool         *cluster.ClientPool
 	limiter      *ratelimit.InMemoryLimiter
 	topicStore   *topicpebble.TopicStore
+	guard        *diskguard.Guard
+	monitorDone  chan struct{}
 }
 
 // newPebbleApplication constructs the Application stack on embedded Pebble.
@@ -122,7 +127,12 @@ func newPebbleApplication(cfg *config.Config, opts ...ApplicationOption) (*Appli
 		return nil, err
 	}
 	rt.pc = pc
-	rt.dbs, err = openPebbleShards(pc)
+	// The guard runs before Pebble opens so a critically full volume
+	// releases its reserve and the store can open and compact.
+	if err = rt.openStorageGuard(); err != nil {
+		return nil, err
+	}
+	rt.dbs, err = openPebbleShards(pc, rt.pebbleSizing())
 	if err != nil {
 		return nil, err
 	}
@@ -165,10 +175,67 @@ func parsePebbleConfig(cfg *config.Config) (pebbleConfig, error) {
 	return pc, nil
 }
 
-func openPebbleShards(pc pebbleConfig) ([]*pebblerepo.DB, error) {
+// storageStat samples the data volume; nil uses statfs. Tests replace it to
+// simulate a full volume without filling the host disk.
+var storageStat diskguard.StatFunc
+
+// openStorageGuard builds the data-volume guard when admission is enabled
+// (the config loader enables it by default). A failed startup check is
+// logged, never fatal: an unknown volume must not keep the node down.
+func (rt *pebbleRuntime) openStorageGuard() error {
+	sc := rt.cfg.Storage
+	if sc.AdmissionMaxUsedFraction <= 0 {
+		return nil
+	}
+	var reserve int64
+	if sc.ReserveBytes != nil {
+		reserve = *sc.ReserveBytes
+	}
+	g, err := diskguard.New(diskguard.Config{
+		Path:            rt.pc.Path,
+		MaxUsedFraction: sc.AdmissionMaxUsedFraction,
+		ReserveBytes:    reserve,
+		Interval:        time.Duration(sc.CheckIntervalSeconds) * time.Second,
+		Stat:            storageStat,
+		Logger:          rt.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("storage guard: %w", err)
+	}
+	if err := g.PrepareStartup(); err != nil {
+		rt.logger.Warn("storage guard startup check failed", "err", err)
+	}
+	rt.guard = g
+	return nil
+}
+
+// pebbleSizing derives per-shard Pebble memory from the container limit.
+func (rt *pebbleRuntime) pebbleSizing() pebblerepo.Options {
+	mc := rt.cfg.Memory
+	limit, source, err := memlimit.Resolve(mc.LimitBytes, memlimit.Source{})
+	if err != nil {
+		rt.logger.Warn("memory limit detection failed; using legacy Pebble sizes", "err", err)
+	}
+	plan := memlimit.Derive(limit, rt.pc.NumShards, memlimit.Overrides{CacheBytes: mc.PebbleCacheBytes, MemTableBytes: mc.PebbleMemTableBytes})
+	rt.logger.Info("pebble memory sizing",
+		"limitBytes", plan.LimitBytes, "limitSource", source, "shards", rt.pc.NumShards,
+		"cacheBytesPerShard", plan.CacheBytesPerShard, "memTableBytesPerShard", plan.MemTableBytesPerShard)
+	for i := range rt.pc.NumShards {
+		shard := strconv.Itoa(i)
+		metrics.PebbleCacheCapacityBytes.WithLabelValues(shard).Set(float64(plan.CacheBytesPerShard))
+		metrics.PebbleMemTableBytes.WithLabelValues(shard).Set(float64(plan.MemTableBytesPerShard))
+	}
+	return pebblerepo.Options{
+		CacheBytes:            plan.CacheBytesPerShard,
+		MemTableBytes:         plan.MemTableBytesPerShard,
+		L0StopWritesThreshold: mc.PebbleL0StopWritesThreshold,
+	}
+}
+
+func openPebbleShards(pc pebbleConfig, sizing pebblerepo.Options) ([]*pebblerepo.DB, error) {
 	dbs := make([]*pebblerepo.DB, 0, pc.NumShards)
 	for i := range pc.NumShards {
-		db, err := openOnePebbleShard(pc, i)
+		db, err := openOnePebbleShard(pc, sizing, i)
 		if err != nil {
 			closePebbleDBs(dbs)
 			return nil, err
@@ -178,7 +245,7 @@ func openPebbleShards(pc pebbleConfig) ([]*pebblerepo.DB, error) {
 	return dbs, nil
 }
 
-func openOnePebbleShard(pc pebbleConfig, idx int) (*pebblerepo.DB, error) {
+func openOnePebbleShard(pc pebbleConfig, sizing pebblerepo.Options, idx int) (*pebblerepo.DB, error) {
 	shardPath := pc.Path
 	if pc.NumShards > 1 {
 		shardPath = fmt.Sprintf("%s/shard%d", pc.Path, idx)
@@ -186,7 +253,9 @@ func openOnePebbleShard(pc pebbleConfig, idx int) (*pebblerepo.DB, error) {
 			return nil, fmt.Errorf("ensure pebble shard dir %s: %w", shardPath, err)
 		}
 	}
-	db, err := pebblerepo.Open(pebblerepo.Options{Path: shardPath, FsyncOnCommit: pc.FsyncOnCommit})
+	sizing.Path = shardPath
+	sizing.FsyncOnCommit = pc.FsyncOnCommit
+	db, err := pebblerepo.Open(sizing)
 	if err != nil {
 		return nil, fmt.Errorf("open pebble shard %d: %w", idx, err)
 	}
@@ -250,6 +319,9 @@ func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux
 		ElectionMS:    cfg.Raft.ElectionMS,
 		LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
 		CommitMS:      cfg.Raft.CommitMS,
+		// Zero/negative values select the raft package defaults (2/2048).
+		SnapshotRetain: cfg.Raft.SnapshotRetain,
+		TrailingLogs:   uint64(max(cfg.Raft.TrailingLogs, 0)), // #nosec G115 -- clamped non-negative
 	}
 	if err := applyShardTransport(cfg, mux, idx, &raftCfg); err != nil {
 		return nil, err
@@ -302,6 +374,9 @@ func (rt *pebbleRuntime) routeRepositories() error {
 	rt.topicStore = topicpebble.NewTopicStore(rt.dbs[0], rt.dbs[1:]...)
 	for i, db := range rt.dbs {
 		db.SetTopicPolicyReader(rt.topicStore)
+		if rt.guard != nil {
+			db.SetCreateAdmission(rt.guard.AdmitCreate)
+		}
 		if err := db.SetAbsoluteExpiryCapacity(rt.cfg.AbsoluteIdentityBudget, strconv.Itoa(i)); err != nil {
 			return err
 		}
@@ -564,12 +639,56 @@ func (rt *pebbleRuntime) openStreams(app *Application, scheduler services.Schedu
 	app.TracingShutdown = func(ctx context.Context) error {
 		return rt.shutdown(ctx, workerStream, producerStream)
 	}
+	rt.startStorageMonitor()
 	return app, nil
+}
+
+// startStorageMonitor samples the data volume (when guarded) and Pebble
+// engine health on a timer. It is the last startup step so every failure
+// path before it never has to stop it.
+func (rt *pebbleRuntime) startStorageMonitor() {
+	rt.monitorDone = make(chan struct{})
+	go func() {
+		defer close(rt.monitorDone)
+		if rt.guard != nil {
+			rt.guard.Run(rt.bgCtx, rt.observeEngines)
+			return
+		}
+		runEvery(rt.bgCtx, diskguard.DefaultInterval, rt.observeEngines)
+	}()
+}
+
+func (rt *pebbleRuntime) observeEngines() {
+	for i, db := range rt.dbs {
+		db.ObserveEngineMetrics(strconv.Itoa(i))
+	}
+}
+
+// runEvery calls fn immediately and then every interval until ctx ends.
+func runEvery(ctx context.Context, interval time.Duration, fn func()) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		fn()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// stopStorageMonitor waits for the monitor so it never samples a closed DB.
+func (rt *pebbleRuntime) stopStorageMonitor() {
+	if rt.monitorDone != nil {
+		<-rt.monitorDone
+	}
 }
 
 func (rt *pebbleRuntime) shutdown(ctx context.Context, worker, producer *grpcServerHandle) error {
 	_ = rt.limiter.Close()
 	rt.bgCancel()
+	rt.stopStorageMonitor()
 	stopGRPCServer(ctx, &grpcServerHandle{srv: rt.grpcSrv, lis: rt.grpcLis})
 	stopGRPCServer(ctx, worker)
 	stopGRPCServer(ctx, producer)

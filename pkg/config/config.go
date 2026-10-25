@@ -64,6 +64,8 @@ type Config struct {
 	Sharding                           ShardingConfig  `yaml:"sharding"`
 	Cluster                            ClusterConfig   `yaml:"cluster"`
 	Raft                               RaftConfig      `yaml:"raft"`
+	Storage                            StorageConfig   `yaml:"storage"`
+	Memory                             MemoryConfig    `yaml:"memory"`
 	// WorkerStreamAddr enables the bidirectional worker gRPC stream when
 	// non-empty (e.g. ":9091"). Use this to escape the HTTP middleware
 	// tax on the claim+result hot path — one stream per worker carries
@@ -161,6 +163,12 @@ type RaftConfig struct {
 	// rolling upgrades. Empty keeps schedules fail closed (503, no firing);
 	// "v1" enables them once every peer runs a compatible build.
 	ScheduleCatalogProtocol string `yaml:"scheduleCatalogProtocol"`
+	// SnapshotRetain is how many FSM snapshots each voter keeps on disk
+	// (default 2). Env RAFT_SNAPSHOT_RETAIN.
+	SnapshotRetain int `yaml:"snapshotRetain"`
+	// TrailingLogs is how many applied entries survive log compaction
+	// after a snapshot (default 2048). Env RAFT_TRAILING_LOGS.
+	TrailingLogs int `yaml:"trailingLogs"`
 }
 
 type RateLimitConfig struct {
@@ -584,6 +592,8 @@ func applyEnvAndDefaults(c *Config) {
 		c.RateLimit.Admin.BurstSize = 0
 	}
 
+	applyStorageEnvAndDefaults(c)
+
 	log.Printf("Scheduler Config: {Port:%d Persistence:%s Identity:%s TZ:%s Lease:%ds Inspect:%d}\n",
 		c.Port, c.PersistenceProvider, c.IdentityServiceURL, c.Timezone, c.DefaultLeaseSeconds, c.RequeueInspectLimit)
 
@@ -621,7 +631,7 @@ func (c *Config) Validate() error {
 	if c.AbsoluteIdentityBudget < 0 {
 		return fmt.Errorf("absoluteExpiryMaxIdentitiesPerShard must be positive")
 	}
-	var errs []string
+	errs := validateStorage(c)
 	env := strings.ToLower(strings.TrimSpace(c.Env))
 	dev := env == "dev"
 

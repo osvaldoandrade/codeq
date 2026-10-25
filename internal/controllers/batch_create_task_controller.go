@@ -88,6 +88,10 @@ func (h *batchCreateTaskController) Handle(c *gin.Context) {
 			results[i] = batchCreateResult{Error: domain.ErrTaskIDConflict.Error()}
 			continue
 		}
+		if errors.Is(err, domain.ErrStorageCapacity) {
+			results[i] = batchCreateResult{Error: domain.StorageCapacityCode}
+			continue
+		}
 		if errors.Is(err, domain.ErrIdempotencyConflict) || (err == nil && !bindingMayReplay(scope, task)) {
 			// Per-item 409 equivalent: the stable code and never the task.
 			recordIdempotencyConflict(c, tenantID)

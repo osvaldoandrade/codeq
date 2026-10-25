@@ -298,6 +298,11 @@ func (r *TaskRepository) EnqueueWithID(ctx context.Context, id string, cmd domai
 	if existing, found, err := r.precheckCreate(ctx, cmd, payload, tenantID, idempotencyKey, deduplicationKey, dedupeKey); found || err != nil {
 		return existing, false, err
 	}
+	// Replays above wrote nothing; only a genuinely new task meets the
+	// data-volume guard, before any absolute-expiry metadata is reserved.
+	if err := r.db.admitCreate(); err != nil {
+		return nil, false, err
+	}
 
 	now := r.now()
 	task := &domain.Task{
