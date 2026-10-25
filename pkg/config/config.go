@@ -163,8 +163,9 @@ type RaftConfig struct {
 	// rolling upgrades. Empty keeps schedules fail closed (503, no firing);
 	// "v1" enables them once every peer runs a compatible build.
 	ScheduleCatalogProtocol string `yaml:"scheduleCatalogProtocol"`
-	// SnapshotRetain is how many FSM snapshots each voter keeps on disk
-	// (default 2). Env RAFT_SNAPSHOT_RETAIN.
+	// SnapshotRetain is how many FSM snapshots each voter keeps on disk.
+	// 0 (default) is auto: 1 on data volumes of at most 1 GiB, else 2.
+	// Env RAFT_SNAPSHOT_RETAIN.
 	SnapshotRetain int `yaml:"snapshotRetain"`
 	// TrailingLogs is how many applied entries survive log compaction
 	// after a snapshot (default 2048). Env RAFT_TRAILING_LOGS.

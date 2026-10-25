@@ -10,6 +10,9 @@
 //     shrinks the queue (claim, lease renewal, completion, nack, deletion,
 //     cleanup, Raft replication and compaction) is never consulted, so the
 //     queue keeps draining and space can be reclaimed.
+//   - snapshot headroom: on Raft voters the admission threshold is lowered
+//     so the next snapshot cycle fits (see EffectiveThreshold): a snapshot
+//     is written in full before older ones are reaped.
 //   - reserve: a small ballast file is written while space is plentiful and
 //     deleted when the volume is critically full (at runtime, and at startup
 //     before Pebble opens), giving Pebble room to open and compact without a
@@ -25,6 +28,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -85,6 +89,49 @@ func (u Usage) atOrAbove(extra uint64, fraction float64) bool {
 	return float64(u.UsedBytes()+extra) >= fraction*float64(u.TotalBytes)
 }
 
+// SnapshotFootprint is the Raft snapshot space on the guarded volume,
+// summed over every shard that keeps snapshots there.
+type SnapshotFootprint struct {
+	// EstimateBytes is the expected size of the next snapshot: the newest
+	// snapshot on disk, or the live replicated state when larger or when
+	// no snapshot exists yet. Zero disables snapshot headroom.
+	EstimateBytes uint64
+	// OnDiskBytes is what snapshots occupy now (already in UsedBytes).
+	OnDiskBytes uint64
+	// Retain is how many snapshots survive each new one (raft.snapshotRetain).
+	Retain int
+}
+
+// SnapshotSizer measures the snapshot footprint. It runs only on the
+// monitor goroutine, never on the request path.
+type SnapshotSizer func() (SnapshotFootprint, error)
+
+// EffectiveThreshold is the used fraction at or above which new tasks are
+// refused:
+//
+//	min(maxUsed, 1 - (max(E*(R+1) - D, E) + reserve) / total)
+//
+// with E the snapshot estimate, R the retention and D the snapshot bytes
+// already on disk. Raft writes a new snapshot completely before reaping
+// old ones, so the snapshot footprint peaks at R+1 copies. D is credited
+// because those bytes are already counted as used (without the credit the
+// retained copies would be counted twice and a drained queue could keep
+// admission closed until the next snapshot), but never below one full new
+// copy E. reserve keeps that many bytes free at the peak. The result is
+// clamped to [0, maxUsed]; 0 means the volume cannot hold the snapshot
+// footprint and every new task is refused until it shrinks. Without a
+// snapshot estimate (no Raft, empty state) it is maxUsed.
+func EffectiveThreshold(maxUsed float64, total uint64, fp SnapshotFootprint, reserve uint64) float64 {
+	if total == 0 || fp.EstimateBytes == 0 {
+		return maxUsed
+	}
+	retain := uint64(max(fp.Retain, 1)) // #nosec G115 -- clamped positive
+	est := float64(fp.EstimateBytes)
+	snap := max(est*float64(retain+1)-float64(fp.OnDiskBytes), est)
+	eff := 1 - (snap+float64(reserve))/float64(total)
+	return min(max(eff, 0), maxUsed)
+}
+
 // StatFunc samples the filesystem holding path.
 type StatFunc func(path string) (Usage, error)
 
@@ -117,6 +164,9 @@ type Guard struct {
 	now           func() time.Time
 
 	blocked     atomic.Bool
+	effective   atomic.Uint64 // math.Float64bits of the effective threshold
+	sizer       atomic.Pointer[SnapshotSizer]
+	footprint   atomic.Pointer[SnapshotFootprint]
 	lastSample  atomic.Int64 // unix nanos of the last sample attempt; 0 = never
 	reserveHeld atomic.Int64
 	reserveMu   sync.Mutex
@@ -158,7 +208,63 @@ func New(cfg Config) (*Guard, error) {
 		g.now = time.Now
 	}
 	metrics.StorageAdmissionThresholdRatio.Set(g.maxUsed)
+	g.setEffective(g.maxUsed)
 	return g, nil
+}
+
+// SetSnapshotSizer installs the Raft snapshot footprint source. The
+// monitor (Run) samples it before each volume sample; until the first
+// sample the effective threshold equals the configured one.
+func (g *Guard) SetSnapshotSizer(fn SnapshotSizer) {
+	if g == nil || fn == nil {
+		return
+	}
+	g.sizer.Store(&fn)
+}
+
+// RefreshSnapshotFootprint samples the installed sizer. A failure keeps
+// the last known footprint (a transient read error must not reopen
+// admission that snapshot headroom closed).
+func (g *Guard) RefreshSnapshotFootprint() error {
+	fn := g.sizer.Load()
+	if fn == nil {
+		return nil
+	}
+	fp, err := (*fn)()
+	if err != nil {
+		metrics.StorageStatErrors.Inc()
+		return fmt.Errorf("diskguard: snapshot footprint: %w", err)
+	}
+	g.footprint.Store(&fp)
+	metrics.StorageSnapshotEstimateBytes.Set(float64(fp.EstimateBytes))
+	metrics.StorageSnapshotDiskBytes.Set(float64(fp.OnDiskBytes))
+	return nil
+}
+
+// SnapshotFootprint reports the last sampled footprint.
+func (g *Guard) SnapshotFootprint() SnapshotFootprint {
+	if fp := g.footprint.Load(); fp != nil {
+		return *fp
+	}
+	return SnapshotFootprint{}
+}
+
+// EffectiveThreshold reports the threshold applied by the last sample.
+func (g *Guard) EffectiveThreshold() float64 {
+	return math.Float64frombits(g.effective.Load())
+}
+
+func (g *Guard) setEffective(v float64) {
+	g.effective.Store(math.Float64bits(v))
+	metrics.StorageAdmissionEffectiveThresholdRatio.Set(v)
+}
+
+// thresholdFor computes and publishes the effective threshold for u.
+func (g *Guard) thresholdFor(u Usage) float64 {
+	reserve := uint64(max(g.reserveSize(u), 0)) // #nosec G115 -- clamped non-negative
+	eff := EffectiveThreshold(g.maxUsed, u.TotalBytes, g.SnapshotFootprint(), reserve)
+	g.setEffective(eff)
+	return eff
 }
 
 // Refresh samples the volume, updates the admission state and metrics.
@@ -178,7 +284,7 @@ func (g *Guard) Refresh() (Usage, error) {
 	metrics.StorageDataDirTotalBytes.Set(float64(u.TotalBytes))
 	metrics.StorageDataDirFreeBytes.Set(float64(u.FreeBytes))
 	metrics.StorageDataDirUsedRatio.Set(u.UsedFraction())
-	g.setBlocked(u.atOrAbove(0, g.maxUsed), u)
+	g.setBlocked(u.atOrAbove(0, g.thresholdFor(u)), u)
 	return u, nil
 }
 
@@ -191,13 +297,21 @@ func (g *Guard) setBlocked(blocked bool, u Usage) {
 	if g.blocked.Swap(blocked) == blocked {
 		return
 	}
+	eff := g.EffectiveThreshold()
 	if blocked {
+		fp := g.SnapshotFootprint()
+		reason := "used_fraction"
+		if eff < g.maxUsed {
+			reason = "snapshot_headroom"
+		}
 		g.logger.Warn("storage admission closed: new tasks refused until space is reclaimed",
-			"code", domain.StorageCapacityCode, "usedRatio", u.UsedFraction(), "threshold", g.maxUsed,
+			"code", domain.StorageCapacityCode, "reason", reason, "usedRatio", u.UsedFraction(),
+			"threshold", eff, "configuredThreshold", g.maxUsed,
+			"snapshotEstimateBytes", fp.EstimateBytes, "snapshotDiskBytes", fp.OnDiskBytes, "snapshotRetain", fp.Retain,
 			"freeBytes", u.FreeBytes, "totalBytes", u.TotalBytes)
 		return
 	}
-	g.logger.Info("storage admission open", "usedRatio", u.UsedFraction(), "threshold", g.maxUsed)
+	g.logger.Info("storage admission open", "usedRatio", u.UsedFraction(), "threshold", eff, "configuredThreshold", g.maxUsed)
 }
 
 // AdmitCreate returns domain.ErrStorageCapacity while the volume is at or
@@ -293,7 +407,7 @@ func (g *Guard) maybeCreateReserve(u Usage) error {
 	need := uint64(size)
 	// Never let the reserve itself close admission, and keep at least one
 	// more reserve worth of free space after writing it.
-	if u.atOrAbove(need, g.maxUsed) || u.FreeBytes < 2*need {
+	if u.atOrAbove(need, g.EffectiveThreshold()) || u.FreeBytes < 2*need {
 		return nil
 	}
 	if err := g.writeReserve(size); err != nil {
@@ -379,9 +493,9 @@ func (g *Guard) writeReserve(size int64) (err error) {
 	return nil
 }
 
-// Run samples every interval until ctx ends: it refreshes admission,
-// reconciles the reserve and invokes hooks (engine metrics). The first
-// pass runs immediately.
+// Run samples every interval until ctx ends: it refreshes the snapshot
+// footprint and admission, reconciles the reserve and invokes hooks
+// (engine metrics). The first pass runs immediately.
 func (g *Guard) Run(ctx context.Context, hooks ...func()) {
 	ticker := time.NewTicker(g.interval)
 	defer ticker.Stop()
@@ -396,6 +510,9 @@ func (g *Guard) Run(ctx context.Context, hooks ...func()) {
 }
 
 func (g *Guard) tick(hooks []func()) {
+	if err := g.RefreshSnapshotFootprint(); err != nil {
+		g.logger.Warn("snapshot footprint sample failed; keeping the last estimate", "err", err)
+	}
 	if _, err := g.Refresh(); err != nil {
 		g.logger.Warn("storage sample failed; admission stays open", "err", err)
 	}

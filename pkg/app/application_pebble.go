@@ -219,7 +219,9 @@ func (rt *pebbleRuntime) pebbleSizing() pebblerepo.Options {
 	plan := memlimit.Derive(limit, rt.pc.NumShards, memlimit.Overrides{CacheBytes: mc.PebbleCacheBytes, MemTableBytes: mc.PebbleMemTableBytes})
 	rt.logger.Info("pebble memory sizing",
 		"limitBytes", plan.LimitBytes, "limitSource", source, "shards", rt.pc.NumShards,
-		"cacheBytesPerShard", plan.CacheBytesPerShard, "memTableBytesPerShard", plan.MemTableBytesPerShard)
+		"cacheBytesPerShard", plan.CacheBytesPerShard, "memTableBytesPerShard", plan.MemTableBytesPerShard,
+		"pebbleWorstCaseBytes", plan.PebbleBytes())
+	rt.reportSizingFloors(plan)
 	for i := range rt.pc.NumShards {
 		shard := strconv.Itoa(i)
 		metrics.PebbleCacheCapacityBytes.WithLabelValues(shard).Set(float64(plan.CacheBytesPerShard))
@@ -230,6 +232,25 @@ func (rt *pebbleRuntime) pebbleSizing() pebblerepo.Options {
 		MemTableBytes:         plan.MemTableBytesPerShard,
 		L0StopWritesThreshold: mc.PebbleL0StopWritesThreshold,
 	}
+}
+
+// reportSizingFloors warns (never fails) when the container limit is too
+// small for the shard count, e.g. Autopilot setting limit = a small
+// request: per-shard floors then give Pebble more of the limit than the
+// intended 15% + 1/32 and the Go heap has less headroom.
+func (rt *pebbleRuntime) reportSizingFloors(plan memlimit.Plan) {
+	metrics.MemoryPebbleMinSafeLimitBytes.Set(float64(plan.MinSafeLimitBytes))
+	if !plan.FloorApplied {
+		metrics.MemoryPebbleSizingFloored.Set(0)
+		return
+	}
+	metrics.MemoryPebbleSizingFloored.Set(1)
+	rt.logger.Warn("memory limit is below the safe floor for the configured Pebble shards; "+
+		"per-shard cache/memtable sizes were raised to their floors. Raise the container memory "+
+		"request/limit to at least minSafeLimitBytes or reduce numShards",
+		"limitBytes", plan.LimitBytes, "shards", plan.Shards, "minSafeLimitBytes", plan.MinSafeLimitBytes,
+		"cacheBytesPerShard", plan.CacheBytesPerShard, "memTableBytesPerShard", plan.MemTableBytesPerShard,
+		"pebbleWorstCaseBytes", plan.PebbleBytes())
 }
 
 func openPebbleShards(pc pebbleConfig, sizing pebblerepo.Options) ([]*pebblerepo.DB, error) {
@@ -278,19 +299,74 @@ func (rt *pebbleRuntime) openRaft() error {
 		return err
 	}
 	rt.mux = mux
+	retain := rt.snapshotRetain()
+	metrics.RaftSnapshotRetain.Set(float64(retain))
 	for i, shardDB := range rt.dbs {
-		rdb, err := openRaftShard(rt.bgCtx, rt.cfg, rt.pc, mux, i, shardDB)
+		rdb, err := openRaftShard(rt.bgCtx, rt.cfg, rt.pc, mux, i, shardDB, retain)
 		if err != nil {
 			return err
 		}
 		rt.raftNodes[i] = rdb
 	}
+	if rt.guard != nil {
+		rt.guard.SetSnapshotSizer(rt.snapshotFootprint)
+	}
 	rt.logger.Info("raft replication enabled",
 		"selfID", rt.cfg.Raft.SelfID,
 		"baseBindAddr", rt.cfg.Raft.BindAddr,
 		"peers", len(rt.cfg.Raft.Peers),
-		"shards", len(rt.dbs))
+		"shards", len(rt.dbs),
+		"snapshotRetain", retain)
 	return nil
+}
+
+// snapshotRetain resolves raft.snapshotRetain. An explicit value wins;
+// 0 (auto, the loader default) keeps one snapshot on data volumes of at
+// most 1 GiB and two otherwise or when the volume size is unknown.
+func (rt *pebbleRuntime) snapshotRetain() int {
+	if rt.cfg.Raft.SnapshotRetain > 0 {
+		return rt.cfg.Raft.SnapshotRetain
+	}
+	stat := storageStat
+	if stat == nil {
+		stat = diskguard.Statfs
+	}
+	u, err := stat(rt.pc.Path)
+	if err != nil || !u.Known() {
+		rt.logger.Warn("data volume size unknown; using the default raft snapshot retention",
+			"retain", raftpkg.DefaultSnapshotRetain, "err", err)
+		return raftpkg.DefaultSnapshotRetain
+	}
+	return raftpkg.AutoSnapshotRetain(u.TotalBytes)
+}
+
+// snapshotFootprint sums every shard's Raft snapshot space for the data
+// volume guard. The next snapshot is estimated as the larger of the newest
+// snapshot on disk and the live replicated state, so a growing queue is
+// covered before its next snapshot. It runs on the monitor goroutine only.
+func (rt *pebbleRuntime) snapshotFootprint() (diskguard.SnapshotFootprint, error) {
+	var (
+		fp   diskguard.SnapshotFootprint
+		errs []error
+	)
+	for _, node := range rt.raftNodes {
+		if node == nil {
+			continue
+		}
+		fp.Retain = node.SnapshotRetain()
+		du, err := node.SnapshotDiskUsage()
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		live, err := node.LiveStateBytes()
+		if err != nil {
+			errs = append(errs, err)
+		}
+		fp.EstimateBytes += max(du.LatestBytes, live)
+		fp.OnDiskBytes += du.OnDiskBytes
+	}
+	return fp, errors.Join(errs...)
 }
 
 func openMuxAcceptor(cfg *config.Config) (*raftpkg.MuxAcceptor, error) {
@@ -304,7 +380,7 @@ func openMuxAcceptor(cfg *config.Config) (*raftpkg.MuxAcceptor, error) {
 	return acc, nil
 }
 
-func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux *raftpkg.MuxAcceptor, idx int, shardDB *pebblerepo.DB) (*raftpkg.DB, error) {
+func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux *raftpkg.MuxAcceptor, idx int, shardDB *pebblerepo.DB, snapshotRetain int) (*raftpkg.DB, error) {
 	shardPath := pc.Path
 	if pc.NumShards > 1 {
 		shardPath = fmt.Sprintf("%s/shard%d", pc.Path, idx)
@@ -319,8 +395,9 @@ func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux
 		ElectionMS:    cfg.Raft.ElectionMS,
 		LeaderLeaseMS: cfg.Raft.LeaderLeaseMS,
 		CommitMS:      cfg.Raft.CommitMS,
-		// Zero/negative values select the raft package defaults (2/2048).
-		SnapshotRetain: cfg.Raft.SnapshotRetain,
+		// Resolved by snapshotRetain; zero/negative values select the raft
+		// package defaults (2/2048).
+		SnapshotRetain: snapshotRetain,
 		TrailingLogs:   uint64(max(cfg.Raft.TrailingLogs, 0)), // #nosec G115 -- clamped non-negative
 	}
 	if err := applyShardTransport(cfg, mux, idx, &raftCfg); err != nil {

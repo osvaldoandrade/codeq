@@ -13,6 +13,15 @@ var (
 	StorageDataDirUsedRatio = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "storage_data_dir_used_ratio", Help: "Used fraction of the data directory filesystem (reserve file included)."})
 	// StorageAdmissionThresholdRatio is the configured used fraction that refuses new tasks.
 	StorageAdmissionThresholdRatio = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "storage_admission_threshold_ratio", Help: "Configured used fraction at or above which new task creation is refused."})
+	// StorageAdmissionEffectiveThresholdRatio is the threshold actually applied:
+	// the configured one, lowered to keep room for the next Raft snapshot cycle.
+	StorageAdmissionEffectiveThresholdRatio = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "storage_admission_effective_threshold_ratio", Help: "Used fraction at or above which new task creation is refused, after reserving Raft snapshot headroom."})
+	// StorageSnapshotEstimateBytes is the expected size of the next Raft snapshot (all shards).
+	StorageSnapshotEstimateBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "storage_snapshot_estimate_bytes", Help: "Estimated size of the next Raft snapshot on the data volume, summed over shards."})
+	// StorageSnapshotDiskBytes is what Raft snapshots occupy on the data volume now.
+	StorageSnapshotDiskBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "storage_snapshot_disk_bytes", Help: "Bytes Raft snapshots (retained and in progress) occupy on the data volume, summed over shards."})
+	// RaftSnapshotRetain is the snapshot retention in effect.
+	RaftSnapshotRetain = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "raft_snapshot_retain", Help: "Raft snapshots kept on disk after each new snapshot."})
 	// StorageAdmissionBlocked is 1 while new task creation is refused.
 	StorageAdmissionBlocked = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "storage_admission_blocked", Help: "1 while new task creation is refused by the data volume guard, else 0."})
 	// StorageAdmissionRefused counts creates refused with storage_capacity.
@@ -39,6 +48,11 @@ var (
 
 	// MemoryContainerLimitBytes is the detected container memory limit (0 = unlimited/unknown).
 	MemoryContainerLimitBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_container_limit_bytes", Help: "Detected container memory limit; 0 when unlimited or unknown."})
+	// MemoryPebbleSizingFloored is 1 when the container limit is too small for
+	// the shard count and a per-shard Pebble size was raised to its floor.
+	MemoryPebbleSizingFloored = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_pebble_sizing_floored", Help: "1 when derived Pebble cache/memtable sizes hit their per-shard floors because the memory limit is too small for the shard count, else 0."})
+	// MemoryPebbleMinSafeLimitBytes is the smallest limit that avoids the floors.
+	MemoryPebbleMinSafeLimitBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_pebble_min_safe_limit_bytes", Help: "Smallest container memory limit at which derived Pebble sizes stay above their per-shard floors for the configured shard count."})
 	// MemoryGoLimitBytes is the Go runtime soft memory limit in effect.
 	MemoryGoLimitBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_go_limit_bytes", Help: "Go runtime soft memory limit (GOMEMLIMIT) in effect."})
 )
@@ -46,10 +60,13 @@ var (
 func init() {
 	prometheus.MustRegister(
 		StorageDataDirTotalBytes, StorageDataDirFreeBytes, StorageDataDirUsedRatio,
-		StorageAdmissionThresholdRatio, StorageAdmissionBlocked, StorageAdmissionRefused,
+		StorageAdmissionThresholdRatio, StorageAdmissionEffectiveThresholdRatio,
+		StorageAdmissionBlocked, StorageAdmissionRefused,
+		StorageSnapshotEstimateBytes, StorageSnapshotDiskBytes, RaftSnapshotRetain,
 		StorageStatErrors, StorageReserveBytes, StorageReserveReleased,
 		PebbleL0Files, PebbleL0Sublevels, PebbleCompactionDebtBytes, PebbleDiskUsageBytes,
 		PebbleCacheCapacityBytes, PebbleMemTableBytes,
 		MemoryContainerLimitBytes, MemoryGoLimitBytes,
+		MemoryPebbleSizingFloored, MemoryPebbleMinSafeLimitBytes,
 	)
 }

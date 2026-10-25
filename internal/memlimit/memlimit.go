@@ -38,6 +38,7 @@ const (
 	// One memtable gets 1/32 of the limit, within [4 MiB, 64 MiB]. Pebble
 	// may hold up to two queued memtables plus the mutable one.
 	memTableDivisor  = 32
+	memTablesInRAM   = 3
 	minMemTableBytes = 4 * mib
 	maxMemTableBytes = 64 * mib
 	// cgroup v1 reports "unlimited" as a huge page-aligned value.
@@ -184,8 +185,25 @@ type Overrides struct {
 // Plan is the per-shard Pebble sizing for one process.
 type Plan struct {
 	LimitBytes            int64 // 0 = unlimited/unknown
+	Shards                int
 	CacheBytesPerShard    int64
 	MemTableBytesPerShard uint64
+	// FloorApplied is true when the limit is too small for the shard count
+	// and a derived (not overridden) per-shard size was raised to its
+	// floor, so Pebble gets a larger share of the limit than intended.
+	// This happens when Autopilot sets limit = a small request.
+	FloorApplied bool
+	// MinSafeLimitBytes is the smallest limit at which no derived size
+	// hits its floor for this shard count; 0 when every size is overridden
+	// or the per-process ceilings cannot be split that many ways.
+	MinSafeLimitBytes int64
+}
+
+// PebbleBytes is the worst-case Pebble memory of the plan: per shard, the
+// block cache plus the mutable and two queued memtables.
+func (p Plan) PebbleBytes() int64 {
+	perShard := p.CacheBytesPerShard + memTablesInRAM*int64(min(p.MemTableBytesPerShard, uint64(math.MaxInt64/8))) // #nosec G115 -- bounded above
+	return int64(max(p.Shards, 1)) * perShard
 }
 
 // Derive sizes each Pebble shard from the container limit. Without a limit
@@ -196,12 +214,13 @@ func Derive(limit int64, shards int, o Overrides) Plan {
 	if shards < 1 {
 		shards = 1
 	}
-	p := Plan{LimitBytes: max(limit, 0), CacheBytesPerShard: maxCacheBytes, MemTableBytesPerShard: uint64(maxMemTableBytes)}
+	p := Plan{LimitBytes: max(limit, 0), Shards: shards, CacheBytesPerShard: maxCacheBytes, MemTableBytesPerShard: uint64(maxMemTableBytes)}
 	if limit > 0 {
 		cacheTotal := clamp(int64(float64(limit)*cacheFraction), minCacheBytes, maxCacheBytes)
 		memTotal := clamp(limit/memTableDivisor, minMemTableBytes, maxMemTableBytes)
 		p.CacheBytesPerShard = roundMiB(max(cacheTotal/int64(shards), minCacheBytes))
 		p.MemTableBytesPerShard = uint64(roundMiB(max(memTotal/int64(shards), minMemTableBytes))) // #nosec G115 -- roundMiB returns at least 1 MiB
+		p.FloorApplied, p.MinSafeLimitBytes = floorCheck(limit, shards, o)
 	}
 	if o.CacheBytes > 0 {
 		p.CacheBytesPerShard = o.CacheBytes
@@ -210,6 +229,27 @@ func Derive(limit int64, shards int, o Overrides) Plan {
 		p.MemTableBytesPerShard = uint64(o.MemTableBytes) // #nosec G115 -- positive, checked above
 	}
 	return p
+}
+
+// floorCheck reports whether a derived per-shard size falls below its floor
+// at this limit and the smallest limit that avoids every floor.
+func floorCheck(limit int64, shards int, o Overrides) (floored bool, minSafe int64) {
+	n := int64(shards)
+	reachable := true
+	if o.CacheBytes <= 0 {
+		floored = floored || float64(limit)*cacheFraction < float64(minCacheBytes*n)
+		minSafe = max(minSafe, int64(math.Ceil(float64(minCacheBytes*n)/cacheFraction)))
+		reachable = reachable && minCacheBytes*n <= maxCacheBytes
+	}
+	if o.MemTableBytes <= 0 {
+		floored = floored || limit/memTableDivisor < minMemTableBytes*n
+		minSafe = max(minSafe, minMemTableBytes*n*memTableDivisor)
+		reachable = reachable && minMemTableBytes*n <= maxMemTableBytes
+	}
+	if !reachable {
+		return true, 0
+	}
+	return floored, minSafe
 }
 
 func clamp(v, lo, hi int64) int64 { return min(max(v, lo), hi) }

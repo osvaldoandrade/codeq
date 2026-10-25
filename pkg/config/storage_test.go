@@ -25,7 +25,7 @@ func TestStorageDefaultsFromLoader(t *testing.T) {
 		cfg.Memory.PebbleCacheBytes != 0 || cfg.Memory.PebbleMemTableBytes != 0 || cfg.Memory.PebbleL0StopWritesThreshold != 64 {
 		t.Errorf("memory defaults = %+v", cfg.Memory)
 	}
-	if cfg.Raft.SnapshotRetain != 2 || cfg.Raft.TrailingLogs != 2048 {
+	if cfg.Raft.SnapshotRetain != 0 || cfg.Raft.TrailingLogs != 2048 {
 		t.Errorf("raft retention = %d/%d", cfg.Raft.SnapshotRetain, cfg.Raft.TrailingLogs)
 	}
 	if err := cfg.Validate(); err != nil {

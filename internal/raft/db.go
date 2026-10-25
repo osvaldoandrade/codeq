@@ -260,7 +260,7 @@ func openInternal(ctx context.Context, cfg Config, pdb *pebbledb.DB, ownPebble b
 		logs.writeOptions = pebbledb.Sync
 		stable.writeOptions = pebbledb.Sync
 	}
-	snaps, err := newSnapshotStore(cfg.Path+"/snapshots", cfg.snapshotRetain())
+	snaps, err := newSnapshotStore(snapshotDirName(cfg.Path), cfg.snapshotRetain())
 	if err != nil {
 		return nil, fmt.Errorf("snapshot store: %w", err)
 	}

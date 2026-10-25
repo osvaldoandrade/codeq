@@ -203,3 +203,44 @@ func TestConfigureProcess(t *testing.T) {
 		t.Fatalf("malformed cgroup: report = %+v err=%v", r, err)
 	}
 }
+
+func TestDeriveReportsFloorsForSmallAutopilotLimits(t *testing.T) {
+	cases := []struct {
+		name    string
+		limit   int64
+		shards  int
+		o       Overrides
+		floored bool
+		minSafe int64
+	}{
+		{"production 512Mi one shard", 512 << 20, 1, Overrides{}, false, 128 << 20},
+		{"exactly the safe floor", 128 << 20, 1, Overrides{}, false, 128 << 20},
+		{"autopilot 64Mi one shard", 64 << 20, 1, Overrides{}, true, 128 << 20},
+		{"512Mi four shards at the edge", 512 << 20, 4, Overrides{}, false, 512 << 20},
+		{"512Mi eight shards", 512 << 20, 8, Overrides{}, true, 1 << 30},
+		{"unlimited never floors", 0, 8, Overrides{}, false, 0},
+		{"overrides skip floors", 64 << 20, 4, Overrides{CacheBytes: 8 << 20, MemTableBytes: 4 << 20}, false, 0},
+		{"cache override leaves memtable floor", 64 << 20, 1, Overrides{CacheBytes: 8 << 20}, true, 128 << 20},
+		// 64 MiB of memtable cannot be split into 17 x 4 MiB at any limit.
+		{"too many shards for the ceilings", 64 << 30, 17, Overrides{}, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Derive(tc.limit, tc.shards, tc.o)
+			if p.FloorApplied != tc.floored || p.MinSafeLimitBytes != tc.minSafe {
+				t.Fatalf("floored=%v minSafe=%d, want %v %d (%+v)", p.FloorApplied, p.MinSafeLimitBytes, tc.floored, tc.minSafe, p)
+			}
+			if p.Shards != max(tc.shards, 1) {
+				t.Fatalf("shards = %d", p.Shards)
+			}
+		})
+	}
+	// Floors never crash and keep every shard functional.
+	p := Derive(32<<20, 8, Overrides{})
+	if p.CacheBytesPerShard != 8<<20 || p.MemTableBytesPerShard != 4<<20 || !p.FloorApplied {
+		t.Fatalf("tiny limit plan = %+v", p)
+	}
+	if got := p.PebbleBytes(); got != 8*(8<<20+3*(4<<20)) {
+		t.Fatalf("PebbleBytes = %d", got)
+	}
+}

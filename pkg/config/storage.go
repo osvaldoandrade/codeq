@@ -16,8 +16,10 @@ const (
 	DefaultStorageCheckIntervalSeconds     = 5
 	DefaultGoMemoryLimitFraction           = 0.70
 	DefaultPebbleL0StopWritesThreshold     = 64
-	DefaultRaftSnapshotRetain              = 2
-	DefaultRaftTrailingLogs                = 2048
+	// DefaultRaftSnapshotRetain is 0 = auto: the server keeps one snapshot
+	// on data volumes of at most 1 GiB and two on larger ones.
+	DefaultRaftSnapshotRetain = 0
+	DefaultRaftTrailingLogs   = 2048
 
 	maxPebbleMemTableBytes = int64(4 << 30)
 )
@@ -92,7 +94,8 @@ func applyStorageEnvAndDefaults(c *Config) {
 		c.Memory.GoMemoryLimitFraction = DefaultGoMemoryLimitFraction
 	}
 	setDefaultInt(&c.Memory.PebbleL0StopWritesThreshold, DefaultPebbleL0StopWritesThreshold)
-	setDefaultInt(&c.Raft.SnapshotRetain, DefaultRaftSnapshotRetain)
+	// raft.snapshotRetain stays 0 (auto) unless set; the server resolves it
+	// from the data volume size (see internal/raft.AutoSnapshotRetain).
 	setDefaultInt(&c.Raft.TrailingLogs, DefaultRaftTrailingLogs)
 }
 
@@ -114,7 +117,7 @@ func validateStorage(c *Config) []string {
 	add(c.Memory.PebbleMemTableBytes < 0 || c.Memory.PebbleMemTableBytes >= maxPebbleMemTableBytes,
 		fmt.Sprintf("memory.pebbleMemTableBytes must be within [0, %d)", maxPebbleMemTableBytes))
 	add(c.Memory.PebbleL0StopWritesThreshold < 0, "memory.pebbleL0StopWritesThreshold must be >= 1")
-	add(c.Raft.SnapshotRetain < 0, "raft.snapshotRetain must be >= 1")
+	add(c.Raft.SnapshotRetain < 0, "raft.snapshotRetain must be >= 1 (or 0 for auto)")
 	add(c.Raft.TrailingLogs < 0, "raft.trailingLogs must be >= 1")
 	return errs
 }
