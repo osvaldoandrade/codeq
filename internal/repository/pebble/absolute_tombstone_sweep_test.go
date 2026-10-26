@@ -54,7 +54,7 @@ func TestAbsoluteSweepLeavesSettledTombstoneUnwritten(t *testing.T) {
 
 	// The replay guarantee is unchanged while the window is open.
 	ctx := domain.WithTaskExpiry(context.Background(), time.Now().Add(time.Hour))
-	if _, err = repo.Enqueue(ctx, absoluteTestTopic, `{"batch":"sensitive-payload"}`, 3, "", 3, "", "", id, time.Time{}, "tenant-a"); !errors.Is(err, domain.ErrTaskExpired) {
+	if _, err = repo.Enqueue(ctx, absoluteTestTopic, `{"batch":"sensitive-payload"}`, 3, "", 3, "", "", id, time.Time{}, dedupeTenant); !errors.Is(err, domain.ErrTaskExpired) {
 		t.Fatalf("replay inside window = %v, want ErrTaskExpired", err)
 	}
 	if count, err := db.absoluteCount(); err != nil || count != 1 {
@@ -72,7 +72,7 @@ func TestAbsoluteSweepLeavesSettledTombstoneUnwritten(t *testing.T) {
 	if count, err := db.absoluteCount(); err != nil || count != 0 {
 		t.Fatalf("count after window = %d, %v", count, err)
 	}
-	if active, err := db.HasAbsoluteTopicCustody(context.Background(), "tenant-a", absoluteTestTopic); err != nil || active {
+	if active, err := db.HasAbsoluteTopicCustody(context.Background(), dedupeTenant, absoluteTestTopic); err != nil || active {
 		t.Fatalf("custody after window = %v, %v", active, err)
 	}
 }
@@ -109,7 +109,7 @@ func TestAbsoluteSweepStillPurgesRetiredTombstoneWithRestoredRow(t *testing.T) {
 
 	// A task row reappearing under a retired identity (restore of an older
 	// snapshot) is expired by its own deadline and must be removed again.
-	row := domain.Task{ID: id, Command: absoluteTestTopic, Payload: `{"batch":"sensitive-payload"}`, TenantID: "tenant-a", Status: domain.StatusPending, CreatedAt: time.Now().Add(-3 * time.Hour).UTC()}
+	row := domain.Task{ID: id, Command: absoluteTestTopic, Payload: `{"batch":"sensitive-payload"}`, TenantID: dedupeTenant, Status: domain.StatusPending, CreatedAt: time.Now().Add(-3 * time.Hour).UTC()}
 	deadline := time.Now().Add(-time.Hour).UTC()
 	row.ExpiresAt = &deadline
 	body, err := json.Marshal(&row)
