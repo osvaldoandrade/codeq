@@ -113,6 +113,18 @@ voters keep their own copies. Set an explicit value to override. The on-disk for
 rollback simply resumes the older release's retention (3) and accumulates
 snapshots again; nothing needs migrating.
 
+The retention is also applied once at startup, **before Pebble opens**, on
+every shard of a Raft node: complete snapshots beyond the retention are reaped
+with hashicorp's own ordering (the newest always stays) and in-progress
+`<term>-<index>-<msec>.tmp` directories left by a process that died while
+writing a snapshot are deleted (hashicorp/raft never reaps those). A voter
+filled under the older retention of 3, or by an abandoned snapshot, otherwise
+cannot replay its WAL, so Raft would never run to reap them. The step holds the
+Pebble directory lock (a store open in another process is left untouched),
+logs `raft snapshot space reclaimed before open` with the freed bytes, and is
+never fatal. It frees only snapshot copies; if the volume is still full the
+store fails to open as before and needs more space.
+
 ## Configuration
 
 | YAML key | Env | Default |

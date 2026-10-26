@@ -132,6 +132,7 @@ func newPebbleApplication(cfg *config.Config, opts ...ApplicationOption) (*Appli
 	if err = rt.openStorageGuard(); err != nil {
 		return nil, err
 	}
+	rt.reclaimSnapshotSpace()
 	rt.dbs, err = openPebbleShards(pc, rt.pebbleSizing())
 	if err != nil {
 		return nil, err
@@ -266,10 +267,18 @@ func openPebbleShards(pc pebbleConfig, sizing pebblerepo.Options) ([]*pebblerepo
 	return dbs, nil
 }
 
-func openOnePebbleShard(pc pebbleConfig, sizing pebblerepo.Options, idx int) (*pebblerepo.DB, error) {
-	shardPath := pc.Path
+// shardDataPath is the Pebble directory of one shard; Raft keeps its log
+// in that store and its snapshots under it.
+func shardDataPath(pc pebbleConfig, idx int) string {
 	if pc.NumShards > 1 {
-		shardPath = fmt.Sprintf("%s/shard%d", pc.Path, idx)
+		return fmt.Sprintf("%s/shard%d", pc.Path, idx)
+	}
+	return pc.Path
+}
+
+func openOnePebbleShard(pc pebbleConfig, sizing pebblerepo.Options, idx int) (*pebblerepo.DB, error) {
+	shardPath := shardDataPath(pc, idx)
+	if pc.NumShards > 1 {
 		if err := os.MkdirAll(shardPath, 0o700); err != nil {
 			return nil, fmt.Errorf("ensure pebble shard dir %s: %w", shardPath, err)
 		}
@@ -318,6 +327,33 @@ func (rt *pebbleRuntime) openRaft() error {
 		"shards", len(rt.dbs),
 		"snapshotRetain", retain)
 	return nil
+}
+
+// reclaimSnapshotSpace applies the snapshot retention to every shard before
+// Pebble opens. A voter filled under an older, larger retention (or by a
+// snapshot abandoned mid-write) cannot replay its WAL, so Raft would never
+// run to reap those copies itself. Failures are logged, never fatal: the
+// store opens exactly as before.
+func (rt *pebbleRuntime) reclaimSnapshotSpace() {
+	if !rt.cfg.Raft.Enabled {
+		return
+	}
+	retain := rt.snapshotRetain()
+	for i := range rt.pc.NumShards {
+		got, err := raftpkg.ReclaimSnapshotsBeforeOpen(shardDataPath(rt.pc, i), retain)
+		if err != nil {
+			rt.logger.Warn("raft snapshot reclaim before open failed", "shard", i, "retain", retain, "err", err)
+		}
+		if got.FreedBytes > 0 || got.Abandoned > 0 {
+			rt.logger.Info("raft snapshot space reclaimed before open", "shard", i, "retain", retain,
+				"abandoned", got.Abandoned, "freedBytes", got.FreedBytes, "retainedBytes", got.RetainedBytes)
+		}
+	}
+	if rt.guard != nil {
+		if _, err := rt.guard.Refresh(); err != nil {
+			rt.logger.Warn("storage guard refresh after snapshot reclaim failed", "err", err)
+		}
+	}
 }
 
 // snapshotRetain resolves raft.snapshotRetain. An explicit value wins;
@@ -381,10 +417,7 @@ func openMuxAcceptor(cfg *config.Config) (*raftpkg.MuxAcceptor, error) {
 }
 
 func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux *raftpkg.MuxAcceptor, idx int, shardDB *pebblerepo.DB, snapshotRetain int) (*raftpkg.DB, error) {
-	shardPath := pc.Path
-	if pc.NumShards > 1 {
-		shardPath = fmt.Sprintf("%s/shard%d", pc.Path, idx)
-	}
+	shardPath := shardDataPath(pc, idx)
 	raftCfg := raftpkg.Config{
 		Path:          shardPath,
 		FsyncOnCommit: pc.FsyncOnCommit,
