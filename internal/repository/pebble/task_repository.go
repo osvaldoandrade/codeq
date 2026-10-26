@@ -1834,6 +1834,12 @@ func dropExpiredBodies(db *DB, hits []ttlHit) (int, error) {
 		if err := b.Delete(KeyTask(hit.id), nil); err != nil {
 			return 0, err
 		}
+		// The result belongs to the reaped body. Keeping it leaked one
+		// record per completed task forever and handed it to a later
+		// task that reuses the ID (ADR-0008) before its own result.
+		if err := b.Delete(KeyResult(hit.id), nil); err != nil {
+			return 0, err
+		}
 		dropped = append(dropped, hit.id)
 	}
 	if err := db.CommitBatch(b); err != nil {
