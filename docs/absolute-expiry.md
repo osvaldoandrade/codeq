@@ -55,7 +55,9 @@ cleanup is asynchronous and its delay must be measured at installation load.
 TTL/queue counts can reflect rows waiting for physical retirement.
 
 Retirement keeps a no-payload tombstone for 48 hours after actual retirement.
-Retries do not extend it. Once it expires the ID may be reused: this is not
+Retries do not extend it. A retired tombstone with no task row or reference
+left is only read by later sweeps, never rewritten, so the rotating scan adds
+no Raft entries or deletion tombstones while the replay window is open. Once it expires the ID may be reused: this is not
 eternal deduplication. The Logs gateway separately enforces the approved source
 timestamp/replay boundary. Topic disable/delete returns 409 while tasks or
 tombstones remain; unknown shard custody also fails closed. Legacy unreplicated

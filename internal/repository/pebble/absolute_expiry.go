@@ -736,6 +736,9 @@ func (d *DB) sweepAbsoluteIdentity(id string, now time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if settled, err := d.retiredTombstoneSettled(identity, task, now); err != nil || settled {
+		return false, err
+	}
 	expired, err := d.absoluteRowExpired(task, now)
 	if err != nil || !expired {
 		return false, err
@@ -756,6 +759,29 @@ func (d *DB) sweepAbsoluteIdentity(id string, now time.Time) (bool, error) {
 		metrics.AbsoluteExpiredPurged.Inc()
 	}
 	return task != nil, nil
+}
+
+// retiredTombstoneSettled reports a tombstone that has nothing left to purge:
+// retired, no task row, no reverse references, replay window still open. The
+// rotating sweep revisits every tombstone many times during that window;
+// re-staging its purge would replicate point and range deletions of absent
+// keys plus an identical identity rewrite on every visit, which only grows
+// the Raft log, forces snapshots and leaves tombstones for compaction.
+func (d *DB) retiredTombstoneSettled(identity *absoluteIdentity, task *domain.Task, now time.Time) (bool, error) {
+	if identity.RetiredAt == nil || task != nil || !now.Before(identity.ReplayUntil) {
+		return false, nil
+	}
+	prefix := absoluteRefs(identity.ID)
+	it, err := d.Iter(prefix, prefixUpper(prefix))
+	if err != nil {
+		return false, err
+	}
+	residue := it.First()
+	err = it.Error()
+	if cerr := it.Close(); err == nil {
+		err = cerr
+	}
+	return !residue, err
 }
 
 func (d *DB) removeExpiredAbsoluteIdentity(b *pebbledb.Batch, identity *absoluteIdentity, now time.Time) error {
