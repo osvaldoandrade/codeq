@@ -11,8 +11,11 @@ import (
 // never dial it: they dial the address in the replicated configuration.
 type advertisedAddr string
 
+// Network reports "tcp", the only network the Raft transports use.
 func (a advertisedAddr) Network() string { return "tcp" }
-func (a advertisedAddr) String() string  { return string(a) }
+
+// String returns the advertised address verbatim.
+func (a advertisedAddr) String() string { return string(a) }
 
 // ValidateAdvertiseAddr reports whether addr can identify exactly one voter.
 //

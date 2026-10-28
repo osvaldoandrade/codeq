@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -14,10 +15,11 @@ import (
 func TestRaft_Mux_WildcardBindAdvertisesOwnPeerAddress(t *testing.T) {
 	const numShards = 2
 	ports := pickThreeFreePorts(t)
-	ids := []string{"node-1", "node-2", "node-3"}
+	ids := make([]string, len(ports))
 	peers := map[string]string{}
-	for i, id := range ids {
-		peers[id] = "127.0.0.1:" + ports[i]
+	for i := range ports {
+		ids[i] = "node-" + strconv.Itoa(i+1)
+		peers[ids[i]] = "127.0.0.1:" + ports[i]
 	}
 	nodes := make([]*raftTestNode, len(ids))
 	for i := len(ids) - 1; i >= 0; i-- {

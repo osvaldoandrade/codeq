@@ -39,6 +39,8 @@ func newSweepingSnapshotStore(inner hraft.SnapshotStore, dir string, logOut io.W
 	return &sweepingSnapshotStore{SnapshotStore: inner, dir: dir, log: logOut, open: make(map[string]struct{})}
 }
 
+// Create opens a snapshot sink through the wrapped store and tracks it until
+// the sink is closed or canceled. A failed Create sweeps what it left.
 func (s *sweepingSnapshotStore) Create(version hraft.SnapshotVersion, index, term uint64,
 	configuration hraft.Configuration, configurationIndex uint64, trans hraft.Transport,
 ) (hraft.SnapshotSink, error) {
@@ -94,12 +96,15 @@ type sweepingSnapshotSink struct {
 	once  sync.Once
 }
 
+// Close finishes the snapshot, then releases it and sweeps abandoned ones.
 func (k *sweepingSnapshotSink) Close() error {
 	err := k.SnapshotSink.Close()
 	k.once.Do(func() { k.store.release(k.ID()) })
 	return err
 }
 
+// Cancel abandons the snapshot, then releases it and sweeps abandoned ones,
+// including this one when the wrapped Cancel could not remove it.
 func (k *sweepingSnapshotSink) Cancel() error {
 	err := k.SnapshotSink.Cancel()
 	k.once.Do(func() { k.store.release(k.ID()) })

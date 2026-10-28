@@ -748,24 +748,11 @@ func validateRaftPeerAddrs(peers map[string]string) []string {
 	seen := make(map[string]string, len(peers))
 	for _, id := range ids {
 		addr := strings.TrimSpace(peers[id])
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q is not host:port", id, addr))
+		key, problem := raftPeerAddrKey(addr)
+		if problem != "" {
+			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q %s", id, addr, problem))
 			continue
 		}
-		if host == "" {
-			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q has no host", id, addr))
-			continue
-		}
-		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q is a wildcard address; each voter needs its own reachable address", id, addr))
-			continue
-		}
-		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
-			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q has an invalid port", id, addr))
-			continue
-		}
-		key := strings.ToLower(net.JoinHostPort(host, port))
 		if other, dup := seen[key]; dup {
 			errs = append(errs, fmt.Sprintf("raft.peers[%s] and raft.peers[%s] share address %q; each voter needs its own", other, id, addr))
 			continue
@@ -773,4 +760,23 @@ func validateRaftPeerAddrs(peers map[string]string) []string {
 		seen[key] = id
 	}
 	return errs
+}
+
+// raftPeerAddrKey returns the case-insensitive identity of one voter's
+// address, or what makes it unusable as a per-voter address.
+func raftPeerAddrKey(addr string) (key, problem string) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", "is not host:port"
+	}
+	if host == "" {
+		return "", "has no host"
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return "", "is a wildcard address; each voter needs its own reachable address"
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+		return "", "has an invalid port"
+	}
+	return strings.ToLower(net.JoinHostPort(host, port)), ""
 }
