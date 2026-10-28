@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	pebbledb "github.com/cockroachdb/pebble"
 	hraft "github.com/hashicorp/raft"
@@ -18,7 +19,9 @@ import (
 //
 // retain bounds how many snapshots stay on disk; older ones are purged
 // automatically after each new snapshot. Values below 1 select
-// DefaultSnapshotRetain (hashicorp/raft rejects retain < 1).
+// DefaultSnapshotRetain (hashicorp/raft rejects retain < 1). Snapshots
+// abandoned mid-write are swept while the voter runs (see
+// sweepingSnapshotStore).
 func newSnapshotStore(dir string, retain int) (hraft.SnapshotStore, error) {
 	if retain < 1 {
 		retain = DefaultSnapshotRetain
@@ -26,7 +29,11 @@ func newSnapshotStore(dir string, retain int) (hraft.SnapshotStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("snapshot dir %s: %w", dir, err)
 	}
-	return hraft.NewFileSnapshotStore(dir, retain, os.Stderr)
+	files, err := hraft.NewFileSnapshotStore(dir, retain, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	return newSweepingSnapshotStore(files, filepath.Join(dir, "snapshots"), os.Stderr), nil
 }
 
 // Snapshot format (streamed into the raft SnapshotSink):
