@@ -1492,6 +1492,7 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 		id       string
 	}
 	published := make([]publish, 0, len(batchEntries))
+	movedIDs := make(map[string]struct{}, len(batchEntries))
 	for _, e := range batchEntries {
 		taskJSON, err := r.db.Get(KeyTask(e.id))
 		if err != nil {
@@ -1513,6 +1514,20 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 			}
 			return moved, err
 		}
+		// A stale delayed key must not move a task that no longer waits in
+		// the delayed set. Lease-expiry repair runs from the reaper and the
+		// claim path without a shared lock, so two requeues of one expired
+		// lease can each leave a key with a different jittered score. Once
+		// the first key moved the task, the second would reset a re-claimed
+		// task to PENDING with no worker (its owner's result is then refused
+		// as not-owner) or resurrect a completed one. Drop such a key only.
+		if _, dup := movedIDs[e.id]; dup || !awaitsDelayedMove(&t) {
+			if err := b.Delete(e.delayedKey, nil); err != nil {
+				return moved, err
+			}
+			continue
+		}
+		movedIDs[e.id] = struct{}{}
 		prio := normalizePriority(t.Priority)
 		seq := r.db.NextSeq()
 		t.Status = domain.StatusPending
@@ -1545,6 +1560,17 @@ func (r *TaskRepository) moveDueDelayedForTenant(ctx context.Context, cmd domain
 		r.publishPending(p.cmd, p.tenantID, p.prio, p.seq, p.id)
 	}
 	return moved, nil
+}
+
+// awaitsDelayedMove reports whether a task body still waits in the delayed
+// set: PENDING and located there. Every delayed-key writer (delayed
+// enqueue, Nack, lease-expiry requeue) records LocationDelayed; a body
+// without a location predates that field and keeps the original move.
+func awaitsDelayedMove(t *domain.Task) bool {
+	if t.Status != domain.StatusPending {
+		return false
+	}
+	return t.LastKnownLocation == "" || t.LastKnownLocation == domain.LocationDelayed
 }
 
 // ---------- requeueExpired ----------
