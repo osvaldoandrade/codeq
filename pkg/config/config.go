@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -713,6 +715,9 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Sprintf("raft.selfId %q not present in raft.peers", c.Raft.SelfID))
 			}
 		}
+		if len(c.Raft.Peers) > 1 {
+			errs = append(errs, validateRaftPeerAddrs(c.Raft.Peers)...)
+		}
 		if protocol := strings.TrimSpace(c.Raft.TopicCatalogProtocol); protocol != "" && protocol != "v1" {
 			errs = append(errs, fmt.Sprintf("raft.topicCatalogProtocol %q is unsupported (expected v1 or empty)", protocol))
 		}
@@ -725,4 +730,47 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config validation failed: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+// validateRaftPeerAddrs requires every voter of a multi-voter group to have
+// its own reachable address. A voter advertises its peer address as its vote
+// identity and hashicorp/raft grants a second vote in one term to a candidate
+// whose advertised address matches the recorded one, so two voters sharing
+// an address (or announcing a wildcard such as "[::]:7000") can both win the
+// same term.
+func validateRaftPeerAddrs(peers map[string]string) []string {
+	ids := make([]string, 0, len(peers))
+	for id := range peers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var errs []string
+	seen := make(map[string]string, len(peers))
+	for _, id := range ids {
+		addr := strings.TrimSpace(peers[id])
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q is not host:port", id, addr))
+			continue
+		}
+		if host == "" {
+			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q has no host", id, addr))
+			continue
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q is a wildcard address; each voter needs its own reachable address", id, addr))
+			continue
+		}
+		if p, err := strconv.Atoi(port); err != nil || p < 1 || p > 65535 {
+			errs = append(errs, fmt.Sprintf("raft.peers[%s] %q has an invalid port", id, addr))
+			continue
+		}
+		key := strings.ToLower(net.JoinHostPort(host, port))
+		if other, dup := seen[key]; dup {
+			errs = append(errs, fmt.Sprintf("raft.peers[%s] and raft.peers[%s] share address %q; each voter needs its own", other, id, addr))
+			continue
+		}
+		seen[key] = id
+	}
+	return errs
 }

@@ -23,6 +23,9 @@ import (
 // over. No new RPCs, no protobuf, no breaking change to hashicorp/raft.
 type MuxAcceptor struct {
 	listener net.Listener
+	// advertise is what every registered group announces to its peers;
+	// nil announces the listener address (single voter, tests).
+	advertise net.Addr
 
 	mu     sync.Mutex
 	groups map[uint32]*muxStreamLayer
@@ -33,19 +36,39 @@ type MuxAcceptor struct {
 
 // NewMuxAcceptor opens a TCP listener at bindAddr and starts the
 // accept loop. Each call to RegisterGroup returns a StreamLayer that
-// receives connections whose group-ID prefix matches.
+// receives connections whose group-ID prefix matches. Its groups
+// advertise the listener address; a multi-voter deployment that binds a
+// wildcard address must use NewMuxAcceptorAdvertising instead.
 func NewMuxAcceptor(bindAddr string, logOut io.Writer) (*MuxAcceptor, error) {
+	return NewMuxAcceptorAdvertising(bindAddr, "", logOut)
+}
+
+// NewMuxAcceptorAdvertising is NewMuxAcceptor whose groups advertise
+// advertise (this voter's own peer address, e.g.
+// "codeq-0.ns.svc.cluster.local:7000") instead of the listener address.
+// An empty advertise keeps the listener address. Peers only see the
+// advertised address in RPC headers; they keep dialing the addresses in
+// the replicated Raft configuration.
+func NewMuxAcceptorAdvertising(bindAddr, advertise string, logOut io.Writer) (*MuxAcceptor, error) {
 	if logOut == nil {
 		logOut = io.Discard
+	}
+	var adv net.Addr
+	if advertise != "" {
+		if err := ValidateAdvertiseAddr(advertise); err != nil {
+			return nil, fmt.Errorf("mux: %w", err)
+		}
+		adv = advertisedAddr(advertise)
 	}
 	l, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("mux listen %s: %w", bindAddr, err)
 	}
 	a := &MuxAcceptor{
-		listener: l,
-		groups:   make(map[uint32]*muxStreamLayer),
-		logger:   logOut,
+		listener:  l,
+		advertise: adv,
+		groups:    make(map[uint32]*muxStreamLayer),
+		logger:    logOut,
 	}
 	go a.acceptLoop()
 	return a, nil
@@ -54,6 +77,15 @@ func NewMuxAcceptor(bindAddr string, logOut io.Writer) (*MuxAcceptor, error) {
 // Addr returns the actual bind address of the underlying listener
 // (useful when bindAddr was passed as ":0" for an ephemeral port).
 func (a *MuxAcceptor) Addr() net.Addr { return a.listener.Addr() }
+
+// AdvertiseAddr returns the address every registered group announces to
+// its peers: the configured advertise address, else the listener address.
+func (a *MuxAcceptor) AdvertiseAddr() net.Addr {
+	if a.advertise != nil {
+		return a.advertise
+	}
+	return a.listener.Addr()
+}
 
 // Close stops the accept loop and closes the underlying listener and
 // every registered StreamLayer. After Close, all registered
@@ -206,7 +238,11 @@ func (l *muxStreamLayer) Close() error {
 	return nil
 }
 
-func (l *muxStreamLayer) Addr() net.Addr { return l.parent.Addr() }
+// Addr is the address hraft.NetworkTransport advertises as this voter
+// (RPC header Addr, persisted votes, the leader address followers record),
+// so it must be this voter's own peer address, never the shared wildcard
+// listener address.
+func (l *muxStreamLayer) Addr() net.Addr { return l.parent.AdvertiseAddr() }
 
 // --- hraft.StreamLayer ---
 

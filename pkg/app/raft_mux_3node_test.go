@@ -83,6 +83,13 @@ func TestRaft_Mux_3Node_4Shard(t *testing.T) {
 
 func startMuxRaftNode(t *testing.T, id string, peers map[string]string, numShards int, bootstrap bool) *raftTestNode {
 	t.Helper()
+	return startMuxRaftNodeBound(t, id, peers[id], peers, numShards, bootstrap)
+}
+
+// startMuxRaftNodeBound is startMuxRaftNode listening on bindAddr instead
+// of the node's own peer address (production binds the wildcard ":7000").
+func startMuxRaftNodeBound(t *testing.T, id, bindAddr string, peers map[string]string, numShards int, bootstrap bool) *raftTestNode {
+	t.Helper()
 	pebbleDir := t.TempDir() + "/pebble"
 	pcfg, _ := json.Marshal(map[string]any{
 		"path":      pebbleDir,
@@ -118,7 +125,7 @@ func startMuxRaftNode(t *testing.T, id string, peers map[string]string, numShard
 		Raft: config.RaftConfig{
 			Enabled:             true,
 			SelfID:              id,
-			BindAddr:            peers[id],
+			BindAddr:            bindAddr,
 			Bootstrap:           bootstrap,
 			Peers:               peers,
 			MuxEnabled:          true,
@@ -142,7 +149,7 @@ func startMuxRaftNode(t *testing.T, id string, peers map[string]string, numShard
 		id:       id,
 		app:      app,
 		server:   server,
-		bindAddr: peers[id],
+		bindAddr: bindAddr,
 	}
 }
 

@@ -320,9 +320,14 @@ func (rt *pebbleRuntime) openRaft() error {
 	if rt.guard != nil {
 		rt.guard.SetSnapshotSizer(rt.snapshotFootprint)
 	}
+	advertiseAddr := ""
+	if len(rt.raftNodes) > 0 && rt.raftNodes[0] != nil {
+		advertiseAddr = rt.raftNodes[0].AdvertiseAddr()
+	}
 	rt.logger.Info("raft replication enabled",
 		"selfID", rt.cfg.Raft.SelfID,
 		"baseBindAddr", rt.cfg.Raft.BindAddr,
+		"advertiseAddr", advertiseAddr,
 		"peers", len(rt.cfg.Raft.Peers),
 		"shards", len(rt.dbs),
 		"snapshotRetain", retain)
@@ -409,7 +414,13 @@ func openMuxAcceptor(cfg *config.Config) (*raftpkg.MuxAcceptor, error) {
 	if !cfg.Raft.MuxEnabled {
 		return nil, nil
 	}
-	acc, err := raftpkg.NewMuxAcceptor(cfg.Raft.BindAddr, os.Stderr)
+	// Every voter advertises its own peer address. hashicorp/raft records
+	// and compares votes by the candidate's advertised address, so voters
+	// that all advertised the shared wildcard listener ("[::]:7000") looked
+	// like one candidate and one term could elect two leaders. Without
+	// peers (a single voter) the listener address is kept.
+	advertise := cfg.Raft.Peers[cfg.Raft.SelfID]
+	acc, err := raftpkg.NewMuxAcceptorAdvertising(cfg.Raft.BindAddr, advertise, os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("raft mux acceptor: %w", err)
 	}

@@ -516,6 +516,16 @@ func (d *DB) SelfID() string { return d.cfg.SelfID }
 // BindAddr returns the raft bind address configured for this node.
 func (d *DB) BindAddr() string { return d.cfg.BindAddr }
 
+// AdvertiseAddr returns the address this node announces to its peers in
+// Raft RPC headers (its own vote identity), or "" before the transport
+// exists.
+func (d *DB) AdvertiseAddr() string {
+	if d.trans == nil {
+		return ""
+	}
+	return string(d.trans.LocalAddr())
+}
+
 // WaitLeader blocks until this node IS the leader, or ctx is done.
 // Useful in tests that bootstrap and then need to write.
 func (d *DB) WaitLeader(ctx context.Context) error {
