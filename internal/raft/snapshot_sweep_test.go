@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	hraft "github.com/hashicorp/raft"
@@ -170,5 +171,56 @@ func TestSweepingStoreRemovesWhatAFailedCloseLeaves(t *testing.T) {
 				t.Fatalf("snapshot still tracked as open: %v", store.open)
 			}
 		})
+	}
+}
+
+// Snapshots taken concurrently (local snapshot and InstallSnapshot both
+// Create through the store) never sweep each other. Run with -race.
+func TestSweepingStoreConcurrentSnapshotsNeverSweepEachOther(t *testing.T) {
+	const writers = 8
+	base := filepath.Join(t.TempDir(), "snapshots")
+	store, err := newSnapshotStore(base, writers)
+	if err != nil {
+		t.Fatalf("newSnapshotStore: %v", err)
+	}
+	dir := filepath.Join(base, "snapshots")
+	var wg sync.WaitGroup
+	ids := make([]string, writers)
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sink, err := store.Create(hraft.SnapshotVersionMax, uint64(100+i), 7, hraft.Configuration{}, 1, nil)
+			if err != nil {
+				errs <- err
+				return
+			}
+			ids[i] = sink.ID()
+			if _, err := sink.Write([]byte("state")); err != nil {
+				errs <- err
+				return
+			}
+			if i%2 == 0 {
+				errs <- sink.Close()
+				return
+			}
+			_ = sink.Cancel()
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent snapshot failed: %v", err)
+		}
+	}
+	for i, id := range ids {
+		if i%2 == 0 && !exists(filepath.Join(dir, id)) {
+			t.Fatalf("completed snapshot %s missing", id)
+		}
+		if exists(filepath.Join(dir, id+snapshotTmpSuffix)) {
+			t.Fatalf("temp folder %s left behind", id)
+		}
 	}
 }

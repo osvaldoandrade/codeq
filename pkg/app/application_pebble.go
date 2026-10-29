@@ -414,13 +414,7 @@ func openMuxAcceptor(cfg *config.Config) (*raftpkg.MuxAcceptor, error) {
 	if !cfg.Raft.MuxEnabled {
 		return nil, nil
 	}
-	// Every voter advertises its own peer address. hashicorp/raft records
-	// and compares votes by the candidate's advertised address, so voters
-	// that all advertised the shared wildcard listener ("[::]:7000") looked
-	// like one candidate and one term could elect two leaders. Without
-	// peers (a single voter) the listener address is kept.
-	advertise := cfg.Raft.Peers[cfg.Raft.SelfID]
-	acc, err := raftpkg.NewMuxAcceptorAdvertising(cfg.Raft.BindAddr, advertise, os.Stderr)
+	acc, err := raftpkg.NewMuxAcceptorAdvertising(cfg.Raft.BindAddr, muxAdvertiseAddr(cfg), os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("raft mux acceptor: %w", err)
 	}
@@ -456,6 +450,21 @@ func openRaftShard(ctx context.Context, cfg *config.Config, pc pebbleConfig, mux
 	}
 	shardDB.AttachReplicator(rdb)
 	return rdb, nil
+}
+
+// muxAdvertiseAddr is the address this voter announces to its peers.
+// hashicorp/raft records and compares votes by the candidate's advertised
+// address, so voters that all advertised the shared wildcard listener
+// ("[::]:7000") looked like one candidate and one term could elect two
+// leaders. In a group of more than one voter each advertises its own peer
+// address (Config.Validate guarantees they are distinct and dialable). A
+// single voter has no competing candidate and keeps the listener address,
+// exactly as before, whatever its own peers entry says.
+func muxAdvertiseAddr(cfg *config.Config) string {
+	if len(cfg.Raft.Peers) < 2 {
+		return ""
+	}
+	return cfg.Raft.Peers[cfg.Raft.SelfID]
 }
 
 func applyShardTransport(cfg *config.Config, mux *raftpkg.MuxAcceptor, idx int, raftCfg *raftpkg.Config) error {

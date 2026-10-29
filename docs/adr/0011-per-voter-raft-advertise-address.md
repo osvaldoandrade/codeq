@@ -36,9 +36,10 @@ Tests never hit it because they bind each voter to its own `127.0.0.1:port`.
   bind address. Every registered group advertises `advertise`, so the transport
   advertises it too (`StreamLayer.Addr()` → `MuxAcceptor.AdvertiseAddr()`).
   `NewMuxAcceptor` keeps the listener address (single voter, tests).
-- `pkg/app` passes `Peers[SelfID]` as the advertise address. This is the address
-  the other voters already dial, and it is in the replicated configuration. A
-  voter without peers (a single voter) keeps the listener address.
+- In a group of more than one voter, `pkg/app` passes `Peers[SelfID]` as the
+  advertise address. This is the address the other voters already dial, and it
+  is in the replicated configuration. A single voter has no competing candidate
+  and keeps the listener address, whatever its own peers entry says.
 - An advertise address must be `host:port` with a non-wildcard host and a port
   from 1 to 65535 (`raft.ValidateAdvertiseAddr`). The check runs before
   listening.
