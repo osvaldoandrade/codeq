@@ -68,3 +68,46 @@ func TestRetentionKeepsResultOfLiveBody(t *testing.T) {
 		t.Fatalf("result of a live task = %+v, %v", rec, err)
 	}
 }
+
+// A terminal body indexed under two expiry seconds (its writes straddled a
+// second boundary, as on a slow CI runner) is reaped and counted once, and
+// both index entries go.
+func TestRetentionCountsABodyIndexedTwiceOnce(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	tasks := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
+	results := NewResultRepository(db, time.UTC)
+	completeNamed(t, tasks, results, namedID, "first")
+
+	lower, upper := PrefixTTL()
+	var existing [][]byte
+	it, err := db.Iter(lower, upper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for valid := it.First(); valid; valid = it.Next() {
+		existing = append(existing, append([]byte(nil), it.Key()...))
+	}
+	_ = it.Close()
+	if len(existing) == 0 {
+		t.Fatal("completed task has no expiry index entry")
+	}
+	second := KeyTTLIndex(uint64(time.Now().Add(-time.Second).Unix()), namedID) // #nosec G115 -- test clock is positive
+	b := db.Batch()
+	if err = b.Set(second, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CommitBatch(b); err != nil {
+		t.Fatal(err)
+	}
+	_ = b.Close()
+
+	if n, err := tasks.CleanupExpired(ctx, 100, time.Now().Add(taskRetention+time.Hour)); err != nil || n != 1 {
+		t.Fatalf("cleanup = %d, %v; want the one body counted once", n, err)
+	}
+	for _, key := range append(existing, second, KeyTask(namedID), KeyResult(namedID)) {
+		if yes, err := db.Has(key); err != nil || yes {
+			t.Fatalf("retained %q after retention: %v %v", key, yes, err)
+		}
+	}
+}

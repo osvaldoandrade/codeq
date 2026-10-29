@@ -1821,7 +1821,18 @@ func dropExpiredBodies(db *DB, hits []ttlHit) (int, error) {
 	b := db.Batch()
 	defer b.Close()
 	dropped := make([]string, 0, len(hits))
+	reaped := make(map[string]struct{}, len(hits))
 	for _, hit := range hits {
+		// A body indexed under two expiry seconds (its writes straddled a
+		// second boundary) is reaped once: later hits for it in this pass
+		// still read the body the batch is deleting, so they only drop
+		// their own index entry.
+		if _, done := reaped[hit.id]; done {
+			if err := b.Delete(hit.key, nil); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		body, err := db.Get(KeyTask(hit.id))
 		if err != nil {
 			if !errors.Is(err, ErrNotFound) {
@@ -1849,6 +1860,7 @@ func dropExpiredBodies(db *DB, hits []ttlHit) (int, error) {
 				return 0, err
 			}
 			dropped = append(dropped, hit.id)
+			reaped[hit.id] = struct{}{}
 			continue
 		}
 		if err = b.Delete(hit.key, nil); err != nil {
@@ -1867,6 +1879,7 @@ func dropExpiredBodies(db *DB, hits []ttlHit) (int, error) {
 			return 0, err
 		}
 		dropped = append(dropped, hit.id)
+		reaped[hit.id] = struct{}{}
 	}
 	if err := db.CommitBatch(b); err != nil {
 		return 0, err
