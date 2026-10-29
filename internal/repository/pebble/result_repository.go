@@ -138,6 +138,10 @@ func (r *ResultRepository) UpdateTaskOnComplete(ctx context.Context, id string, 
 	if err := r.db.checkTaskExpiry(&t); err != nil {
 		return err
 	}
+	if t.ExpiresAt != nil && status == domain.StatusCompleted {
+		// An acknowledged absolute task leaves nothing to retain (ADR 0012).
+		return r.db.retireCompletedAbsolute(&t)
+	}
 	t.Status = status
 	t.LastKnownLocation = domain.LocationNone
 	t.WorkerID = ""

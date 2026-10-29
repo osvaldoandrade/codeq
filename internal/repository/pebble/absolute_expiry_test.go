@@ -168,7 +168,9 @@ func exerciseAbsoluteState(t *testing.T, repo *TaskRepository, results *ResultRe
 }
 
 func TestAbsoluteExpiryPurgesEveryQueueStateAndResult(t *testing.T) {
-	for _, scenario := range []string{absolutePendingScenario, absoluteDelayedScenario, "in-progress", absoluteCompletedScenario, absoluteFailedScenario, absoluteNackedScenario, "abandoned", absoluteRequeuedScenario} {
+	// Acknowledged completion leaves nothing to expire: see
+	// TestAbsoluteCompletionLeavesNothing (ADR 0012).
+	for _, scenario := range []string{absolutePendingScenario, absoluteDelayedScenario, "in-progress", absoluteFailedScenario, absoluteNackedScenario, "abandoned", absoluteRequeuedScenario} {
 		t.Run(scenario, func(t *testing.T) {
 			db, repo, results, clock := absoluteFixture(t)
 			ctx := context.Background()

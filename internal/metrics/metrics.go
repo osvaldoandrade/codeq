@@ -19,6 +19,9 @@ var (
 	AbsoluteIdentityRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_identity_refused_total", Help: "New absolute task accepts refused by the per-shard metadata budget."}, []string{shardLabel})
 	// AbsoluteExpiredPurged counts physical absolute payload retirement.
 	AbsoluteExpiredPurged = prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_expired_purged_total", Help: "Absolute task payloads retired by bounded cleanup."})
+	// AbsoluteCompletedPurged counts absolute tasks removed entirely on their
+	// acknowledged completion (ADR 0012).
+	AbsoluteCompletedPurged = prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_completed_purged_total", Help: "Absolute tasks removed entirely on acknowledged completion."})
 )
 
 var (
@@ -161,7 +164,7 @@ var (
 
 func init() {
 	prometheus.MustRegister(
-		AbsoluteIdentityUsage, AbsoluteIdentityCapacity, AbsoluteIdentityRefused, AbsoluteExpiredPurged,
+		AbsoluteIdentityUsage, AbsoluteIdentityCapacity, AbsoluteIdentityRefused, AbsoluteExpiredPurged, AbsoluteCompletedPurged,
 		TaskCreatedTotal,
 		TaskClaimedTotal,
 		TaskCompletedTotal,

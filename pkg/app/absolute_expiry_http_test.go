@@ -181,12 +181,14 @@ func TestAbsoluteExpiryStrictBindingJWKSHTTPWorkerLifecycle(t *testing.T) {
 		t.Fatalf("strict Claim lost trusted task metadata: %s", claimed.raw)
 	}
 	s.expect(s.call(http.MethodPost, pathTasks+"/logs-strict/heartbeat", worker, map[string]any{fwdExtend: 60}), http.StatusOK, "", "strict heartbeat")
-	s.expect(s.call(http.MethodPost, pathTasks+"/logs-strict/result", worker, map[string]any{keyStatus: statusCompleted, keyResult: map[string]any{"accepted": 1}}), http.StatusOK, "", "strict result")
 	read := s.call(http.MethodGet, pathTasks+"/logs-strict", publish, nil)
 	s.expect(read, http.StatusOK, "", "strict read")
 	if read.body[logsExpiryKey] != created.body[logsExpiryKey] {
 		t.Fatal("worker lifecycle extended expiry")
 	}
+	s.expect(s.call(http.MethodPost, pathTasks+"/logs-strict/result", worker, map[string]any{keyStatus: statusCompleted, keyResult: map[string]any{"accepted": 1}}), http.StatusOK, "", "strict result")
+	// ADR 0012: the acknowledged absolute task is gone at once.
+	s.expect(s.call(http.MethodGet, pathTasks+"/logs-strict", publish, nil), http.StatusNotFound, "", "acknowledged read")
 }
 
 func TestAbsoluteExpiryHTTPKeepsLargeJSONNumbersSingleAndBatch(t *testing.T) {

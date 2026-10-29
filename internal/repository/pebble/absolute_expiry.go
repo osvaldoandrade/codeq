@@ -813,6 +813,48 @@ func (d *DB) stageAbsoluteIdentityRemoval(b *pebbledb.Batch, identity *absoluteI
 	return b.Set([]byte(absoluteCountKey), []byte(strconv.FormatInt(max(0, count-1), 10)), nil)
 }
 
+// retireCompletedAbsolute ends an absolute task's custody the moment its
+// consumer acknowledges success. Payload, result, lease, every queue/TTL/dedupe
+// reference and the identity itself go in one replicated batch: an
+// acknowledged task leaves nothing behind (ADR 0012). The consumer of an
+// absolute topic owns replay protection for data it accepted (Managed Logs
+// keeps per-event receipts in CefasDB), so publishing the same ID again later
+// is a new task. Tasks retired by their deadline still keep the bounded
+// replay tombstone.
+func (d *DB) retireCompletedAbsolute(task *domain.Task) error {
+	d.absoluteMu.Lock()
+	defer d.absoluteMu.Unlock()
+	identity, err := d.readAbsoluteIdentity(task.ID)
+	if err != nil {
+		return err
+	}
+	// A restored row may predate its identity manifest; it was never counted.
+	restored := identity == nil
+	if restored {
+		identity = &absoluteIdentity{ID: task.ID, TenantID: task.TenantID, TopicID: taskTopicID(task), Hash: taskContentHash(task.Command, task.Payload), CreatedAt: task.CreatedAt, ExpiresAt: *task.ExpiresAt}
+	}
+	b := d.Batch()
+	defer b.Close()
+	if err = d.stageAbsolutePurge(b, identity, task, d.expiryTime()); err != nil {
+		return err
+	}
+	if restored {
+		err = errors.Join(b.Delete(absoluteKey(identity.ID), nil), b.Delete(absoluteTopicKey(identity.TopicID, identity.ID), nil))
+	} else {
+		err = d.stageAbsoluteIdentityRemoval(b, identity)
+	}
+	if err != nil {
+		return err
+	}
+	if err = d.commitBatchRaw(b); err != nil {
+		return fmt.Errorf("retire completed absolute task: %w", err)
+	}
+	d.Leases.Delete(task.ID)
+	d.observeAbsoluteCount()
+	metrics.AbsoluteCompletedPurged.Inc()
+	return nil
+}
+
 func (d *DB) purgeAbsoluteRow(task *domain.Task) error {
 	d.absoluteMu.Lock()
 	defer d.absoluteMu.Unlock()

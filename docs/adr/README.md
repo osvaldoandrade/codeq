@@ -63,3 +63,4 @@ Proposed → Accepted → (Superseded by NNNN | Deprecated)
 | [0008](0008-client-chosen-task-ids.md) | Client-chosen task IDs | Proposed |
 | [0009](0009-dlq-operations.md) | Requeue and delete dead-lettered tasks | Proposed |
 | [0011](0011-per-voter-raft-advertise-address.md) | Every Raft voter advertises its own peer address | Accepted |
+| [0012](0012-acknowledged-absolute-tasks-leave-nothing.md) | An acknowledged absolute task leaves nothing behind | Accepted |
