@@ -89,6 +89,13 @@ type DB struct {
 	stopCh   chan struct{}
 	stopped  chan struct{}
 
+	// lifecycle guards repository work that reads Pebble outside a request
+	// (the leadership watcher's dispatch rebuild). Close refuses new work and
+	// waits for running work, so a rebuild racing shutdown never iterates a
+	// closed Pebble ("pebble: closed" panic).
+	lifecycle sync.RWMutex
+	closing   bool
+
 	// repl is the optional replication delegate. nil = direct pebble
 	// mode (the standalone path the bench harness uses). Set by
 	// AttachReplicator after construction.
@@ -262,12 +269,29 @@ func (d *DB) Close() error {
 	if d == nil || d.db == nil {
 		return nil
 	}
+	// Refuse new background work and wait for running work first; it may
+	// still need the coalescer below.
+	d.lifecycle.Lock()
+	d.closing = true
+	d.lifecycle.Unlock()
 	// Stop the coalescer first so any in-flight CommitBatch caller gets
 	// its response (or db-closed error) before pebble.Close yanks the DB
 	// out from under it.
 	close(d.stopCh)
 	<-d.stopped
 	return d.db.Close()
+}
+
+// runOpen runs fn unless the DB is closing, and reports whether it ran.
+// Close waits for a running fn to return. fn must not call runOpen.
+func (d *DB) runOpen(fn func()) bool {
+	d.lifecycle.RLock()
+	defer d.lifecycle.RUnlock()
+	if d.closing {
+		return false
+	}
+	fn()
+	return true
 }
 
 // Raw exposes the underlying pebble.DB for advanced callers (tests,

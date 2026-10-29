@@ -123,10 +123,17 @@ func (r *TaskRepository) barrier(ctx context.Context) error {
 // drops it on each loss. The goroutine exits when LeaderObservation is
 // closed, which raft.DB.Close does by closing stopCh.
 func (r *TaskRepository) watchLeadership(src leadershipSource) {
-	if src.IsLeader() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = r.ensureLeaderDispatch(ctx)
-		cancel()
+	// The rebuild reads Pebble outside any request; runOpen keeps it from
+	// racing DB.Close during shutdown.
+	rebuild := func() bool {
+		return r.db.runOpen(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = r.ensureLeaderDispatch(ctx)
+			cancel()
+		})
+	}
+	if src.IsLeader() && !rebuild() {
+		return
 	}
 	for {
 		leader, ok := <-src.LeaderObservation()
@@ -140,9 +147,9 @@ func (r *TaskRepository) watchLeadership(src leadershipSource) {
 			r.dispatchMu.Unlock()
 			continue
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = r.ensureLeaderDispatch(ctx)
-		cancel()
+		if !rebuild() {
+			return
+		}
 	}
 }
 
