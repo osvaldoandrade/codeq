@@ -821,29 +821,22 @@ func (d *DB) stageAbsoluteIdentityRemoval(b *pebbledb.Batch, identity *absoluteI
 // keeps per-event receipts in CefasDB), so publishing the same ID again later
 // is a new task. Tasks retired by their deadline still keep the bounded
 // replay tombstone.
-func (d *DB) retireCompletedAbsolute(task *domain.Task) error {
+//
+// seen is the row the acknowledgement was validated against. Under the
+// absolute lock the row is read again and must still be that in-progress,
+// unexpired, unretired incarnation; a duplicate acknowledgement, a
+// re-published ID or a row retired by its deadline in between is refused
+// instead of being purged.
+func (d *DB) retireCompletedAbsolute(seen *domain.Task) error {
 	d.absoluteMu.Lock()
 	defer d.absoluteMu.Unlock()
-	identity, err := d.readAbsoluteIdentity(task.ID)
+	task, err := d.acknowledgedAbsoluteRow(seen)
 	if err != nil {
 		return err
-	}
-	// A restored row may predate its identity manifest; it was never counted.
-	restored := identity == nil
-	if restored {
-		identity = &absoluteIdentity{ID: task.ID, TenantID: task.TenantID, TopicID: taskTopicID(task), Hash: taskContentHash(task.Command, task.Payload), CreatedAt: task.CreatedAt, ExpiresAt: *task.ExpiresAt}
 	}
 	b := d.Batch()
 	defer b.Close()
-	if err = d.stageAbsolutePurge(b, identity, task, d.expiryTime()); err != nil {
-		return err
-	}
-	if restored {
-		err = errors.Join(b.Delete(absoluteKey(identity.ID), nil), b.Delete(absoluteTopicKey(identity.TopicID, identity.ID), nil))
-	} else {
-		err = d.stageAbsoluteIdentityRemoval(b, identity)
-	}
-	if err != nil {
+	if err = d.stageCompletedRetirement(b, task); err != nil {
 		return err
 	}
 	if err = d.commitBatchRaw(b); err != nil {
@@ -853,6 +846,54 @@ func (d *DB) retireCompletedAbsolute(task *domain.Task) error {
 	d.observeAbsoluteCount()
 	metrics.AbsoluteCompletedPurged.Inc()
 	return nil
+}
+
+// acknowledgedAbsoluteRow re-reads the row under the absolute lock and
+// returns it only while it is still the in-progress, unexpired, unretired
+// incarnation the acknowledgement was validated against.
+func (d *DB) acknowledgedAbsoluteRow(seen *domain.Task) (*domain.Task, error) {
+	raw, err := d.Get(KeyTask(seen.ID))
+	if errors.Is(err, ErrNotFound) {
+		return nil, errors.New("task not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	var task domain.Task
+	if err = json.Unmarshal(raw, &task); err != nil {
+		return nil, fmt.Errorf("unmarshal task: %w", err)
+	}
+	if err = d.checkTaskExpiry(&task); err != nil {
+		return nil, err
+	}
+	if task.ExpiresAt == nil || task.Status != domain.StatusInProgress || !task.CreatedAt.Equal(seen.CreatedAt) {
+		return nil, errors.New("not-in-progress")
+	}
+	return &task, nil
+}
+
+// stageCompletedRetirement stages the purge of every trace of task and of
+// its identity. A restored row may predate its identity manifest; it was
+// never counted, so only its manifest keys are dropped.
+func (d *DB) stageCompletedRetirement(b *pebbledb.Batch, task *domain.Task) error {
+	identity, err := d.readAbsoluteIdentity(task.ID)
+	if err != nil {
+		return err
+	}
+	if identity != nil && identity.RetiredAt != nil {
+		return errors.New("not-in-progress")
+	}
+	restored := identity == nil
+	if restored {
+		identity = &absoluteIdentity{ID: task.ID, TenantID: task.TenantID, TopicID: taskTopicID(task), Hash: taskContentHash(task.Command, task.Payload), CreatedAt: task.CreatedAt, ExpiresAt: *task.ExpiresAt}
+	}
+	if err = d.stageAbsolutePurge(b, identity, task, d.expiryTime()); err != nil {
+		return err
+	}
+	if restored {
+		return errors.Join(b.Delete(absoluteKey(identity.ID), nil), b.Delete(absoluteTopicKey(identity.TopicID, identity.ID), nil))
+	}
+	return d.stageAbsoluteIdentityRemoval(b, identity)
 }
 
 func (d *DB) purgeAbsoluteRow(task *domain.Task) error {

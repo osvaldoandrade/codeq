@@ -239,10 +239,16 @@ func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updat
 	now := r.now()
 	b := r.db.Batch()
 	defer b.Close()
+	var acknowledged []*domain.Task
 	for _, u := range updates {
 		t, ok := tasks[u.ID]
 		if !ok {
 			return fmt.Errorf("task %s not found", u.ID)
+		}
+		if t.ExpiresAt != nil && u.Status == domain.StatusCompleted {
+			// Retired individually after the rest commits (ADR 0012).
+			acknowledged = append(acknowledged, t)
+			continue
 		}
 		t.Status = u.Status
 		t.LastKnownLocation = domain.LocationNone
@@ -264,11 +270,18 @@ func (r *ResultRepository) BatchUpdateTasksOnComplete(ctx context.Context, updat
 			return err
 		}
 	}
-	if err := r.db.CommitBatch(b); err != nil {
-		return err
+	if !b.Empty() {
+		if err := r.db.CommitBatch(b); err != nil {
+			return err
+		}
 	}
 	for _, u := range updates {
 		r.db.Leases.Delete(u.ID)
+	}
+	for _, t := range acknowledged {
+		if err := r.db.retireCompletedAbsolute(t); err != nil {
+			return fmt.Errorf("task %s: %w", t.ID, err)
+		}
 	}
 	return nil
 }

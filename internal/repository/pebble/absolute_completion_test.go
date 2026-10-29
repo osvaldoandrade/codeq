@@ -92,3 +92,103 @@ func TestAbsoluteFailureKeepsCustody(t *testing.T) {
 		t.Fatalf("failed task identity = %+v %v", identity, err)
 	}
 }
+
+// A duplicate acknowledgement finds nothing to retire, and one that arrives
+// after the ID was published again never purges the new incarnation.
+func TestAbsoluteCompletionRefusesStaleAcknowledgements(t *testing.T) {
+	db, repo, results, clock := absoluteFixture(t)
+	ctx := context.Background()
+	first := enqueueAbsolute(t, repo, clock, "logs-stale-ack", "", time.Time{}, 100)
+	completeAbsolute(t, repo, results, first.ID, domain.StatusCompleted)
+	if err := results.UpdateTaskOnComplete(ctx, first.ID, absoluteTestTopic, "tenant-a", domain.StatusCompleted, ""); err == nil {
+		t.Fatal("duplicate acknowledgement of a retired task succeeded")
+	}
+	clock.Add(int64(time.Millisecond))
+	again := enqueueAbsolute(t, repo, clock, first.ID, "", time.Time{}, 100)
+	if err := db.retireCompletedAbsolute(first); err == nil || err.Error() != "not-in-progress" {
+		t.Fatalf("stale acknowledgement against the re-published ID = %v", err)
+	}
+	if got, err := repo.Get(ctx, again.ID); err != nil || got == nil || !got.CreatedAt.Equal(again.CreatedAt) {
+		t.Fatalf("re-published task lost: %+v %v", got, err)
+	}
+}
+
+// An acknowledgement racing the deadline leaves retirement to the sweep and
+// its bounded tombstone.
+func TestAbsoluteCompletionAfterDeadlineIsRefused(t *testing.T) {
+	db, repo, _, clock := absoluteFixture(t)
+	ctx := context.Background()
+	task := enqueueAbsolute(t, repo, clock, "logs-late-ack", "", time.Time{}, 100)
+	claimed, ok, err := repo.Claim(ctx, absoluteTestWorker, []domain.Command{absoluteTestTopic}, 60, 100, 100, "tenant-a")
+	if err != nil || !ok || claimed.ID != task.ID {
+		t.Fatalf("claim=%+v,%v,%v", claimed, ok, err)
+	}
+	clock.Store(task.ExpiresAt.Add(time.Second).UnixNano())
+	if err = db.retireCompletedAbsolute(claimed); err == nil {
+		t.Fatal("acknowledgement after the deadline retired the task")
+	}
+	if identity, e := db.readAbsoluteIdentity(task.ID); e != nil || identity == nil {
+		t.Fatalf("identity lost before the sweep: %+v %v", identity, e)
+	}
+}
+
+// A restored in-progress row without an identity manifest is retired on
+// acknowledgement without touching the identity count.
+func TestAbsoluteCompletionOfRestoredRowKeepsCount(t *testing.T) {
+	db, repo, results, clock := absoluteFixture(t)
+	ctx := context.Background()
+	task := enqueueAbsolute(t, repo, clock, "logs-restored", "", time.Time{}, 100)
+	claimed, ok, err := repo.Claim(ctx, absoluteTestWorker, []domain.Command{absoluteTestTopic}, 60, 100, 100, "tenant-a")
+	if err != nil || !ok || claimed.ID != task.ID {
+		t.Fatalf("claim=%+v,%v,%v", claimed, ok, err)
+	}
+	// Simulate a row restored without its manifest.
+	b := db.Batch()
+	if err = db.stageAbsoluteIdentityRemoval(b, newAbsoluteIdentity(task)); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.CommitBatch(b); err != nil {
+		t.Fatal(err)
+	}
+	_ = b.Close()
+	if n, e := db.absoluteCount(); e != nil || n != 0 {
+		t.Fatalf("count before = %d, %v", n, e)
+	}
+	if err = results.UpdateTaskOnComplete(ctx, task.ID, absoluteTestTopic, "tenant-a", domain.StatusCompleted, ""); err != nil {
+		t.Fatal(err)
+	}
+	assertNoTrace(t, db, task.ID)
+	if n, e := db.absoluteCount(); e != nil || n != 0 {
+		t.Fatalf("count after = %d, %v", n, e)
+	}
+}
+
+// The batch acknowledgement path (HTTP batch and gRPC streams) retires
+// acknowledged absolute tasks too, and leaves other completions unchanged.
+func TestAbsoluteBatchCompletionLeavesNothing(t *testing.T) {
+	db, repo, results, clock := absoluteFixture(t)
+	ctx := context.Background()
+	task := enqueueAbsolute(t, repo, clock, "logs-batch-ack", "", time.Time{}, 100)
+	claimed, ok, err := repo.Claim(ctx, absoluteTestWorker, []domain.Command{absoluteTestTopic}, 60, 100, 100, "tenant-a")
+	if err != nil || !ok || claimed.ID != task.ID {
+		t.Fatalf("claim=%+v,%v,%v", claimed, ok, err)
+	}
+	legacy, err := repo.Enqueue(ctx, domain.CmdGenerateMaster, `{"n":1}`, 0, "", 3, "", "", "", time.Time{}, "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, e := repo.Claim(ctx, "w", []domain.Command{domain.CmdGenerateMaster}, 60, 100, 3, "tenant-a"); e != nil || !ok || got.ID != legacy.ID {
+		t.Fatalf("legacy claim=%+v,%v,%v", got, ok, e)
+	}
+	updates := []domain.TaskCompleteUpdate{
+		{ID: task.ID, Status: domain.StatusCompleted},
+		{ID: legacy.ID, Status: domain.StatusCompleted},
+	}
+	if err = results.BatchUpdateTasksOnComplete(ctx, updates); err != nil {
+		t.Fatal(err)
+	}
+	assertNoTrace(t, db, task.ID)
+	if got, e := repo.Get(ctx, legacy.ID); e != nil || got == nil || got.Status != domain.StatusCompleted {
+		t.Fatalf("legacy completion changed: %+v %v", got, e)
+	}
+}
