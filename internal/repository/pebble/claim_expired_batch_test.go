@@ -437,12 +437,18 @@ func TestClaimManyFailedCommitsRestoreHints(t *testing.T) {
 func TestMoveDueDelayedRetiresExpiredRowsInOneCommit(t *testing.T) {
 	db, repo, _, clock := absoluteFixture(t)
 	base := time.Unix(0, clock.Load()).UTC()
-	visible := time.Now().Add(time.Second)
+	// The rows must be written as delayed: 25 fsync'd enqueues can take over a second under
+	// full-suite load, so leave a wide margin and fail loudly if a row is enqueued ready.
+	visible := time.Now().Add(5 * time.Second)
 	const n = 25
 	for _, id := range expiredIDs(n) {
 		ctx := domain.WithTaskExpiry(context.Background(), base.Add(time.Minute))
-		if _, err := repo.Enqueue(ctx, absoluteTestTopic, `{}`, 3, "", 100, "", "", id, visible, "tenant-a"); err != nil {
+		_, ready, err := repo.EnqueueWithReady(ctx, absoluteTestTopic, `{}`, 3, "", 100, "", "", id, visible, "tenant-a")
+		if err != nil {
 			t.Fatal(err)
+		}
+		if ready {
+			t.Fatalf("row %s was enqueued ready; the delayed fixture needs a later visibleAt", id)
 		}
 	}
 	time.Sleep(time.Until(visible.Truncate(time.Second).Add(time.Second)))
