@@ -175,6 +175,9 @@ func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	moved := 0
+	// Expired absolute rows retire together in one replicated batch at the
+	// end of the tick instead of one commit per row.
+	var expired []*domain.Task
 	for _, id := range ids {
 		// Double-check the lease is still expired — a Heartbeat between
 		// snapshot and now would have extended it.
@@ -187,6 +190,7 @@ func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
 				r.db.Leases.Delete(id)
 				continue
 			}
+			err = joinErrors(err, r.retireExpired(expired, &moved))
 			return moved, err
 		}
 		var t domain.Task
@@ -196,12 +200,10 @@ func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
 		}
 		if err := r.db.checkTaskExpiry(&t); err != nil {
 			if errors.Is(err, domain.ErrTaskExpired) {
-				if err = r.db.purgeAbsoluteRow(&t); err != nil {
-					return moved, err
-				}
-				moved++
+				expired = append(expired, &t)
 				continue
 			}
+			err = joinErrors(err, r.retireExpired(expired, &moved))
 			return moved, err
 		}
 		if t.Status != domain.StatusInProgress {
@@ -216,7 +218,20 @@ func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
 		}
 		moved++
 	}
-	return moved, nil
+	err := r.retireExpired(expired, &moved)
+	return moved, err
+}
+
+// retireExpired retires the expired rows a lease sweep met in one batch and
+// counts them as moved.
+func (r *Reaper) retireExpired(expired []*domain.Task, moved *int) error {
+	retired, err := r.db.purgeAbsoluteRows(expired)
+	for _, ok := range retired {
+		if ok {
+			*moved++
+		}
+	}
+	return err
 }
 
 // requeueExpiredOne moves a single in-progress task back into delayed with

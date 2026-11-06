@@ -653,6 +653,11 @@ func (d *DB) purgeRestoredRange(b *pebbledb.Batch, id string, lo, hi []byte) err
 // sweepAbsolute rotates over a bounded slice of identities, so shorter policies
 // are enforced without waiting for the original TTL and unexpired rows cannot
 // permanently starve later IDs. Progress is best effort; a restart resumes at 0.
+//
+// The page retires in batches of at most absoluteRetireBatch identities, one
+// replicated commit each. It used to commit every identity on its own while
+// holding absoluteMu, so on a slow leader a page of expired rows kept every
+// absolute claim waiting behind hundreds of serial Raft round trips.
 func (d *DB) sweepAbsolute(ctx context.Context, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 512
@@ -666,19 +671,33 @@ func (d *DB) sweepAbsolute(ctx context.Context, limit int) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	retire, err := d.newAbsoluteRetirement()
+	if err != nil {
+		return 0, err
+	}
+	defer retire.close()
 	removed := 0
 	now := d.expiryTime()
+	var stopErr error
 	for _, id := range ids {
-		if err := ctx.Err(); err != nil {
-			return removed, err
+		if stopErr = ctx.Err(); stopErr != nil {
+			break
 		}
-		purged, err := d.sweepAbsoluteIdentity(id, now)
+		n, err := retire.flushIfFull()
+		removed += n
 		if err != nil {
 			return removed, err
 		}
-		if purged {
-			removed++
+		if stopErr = retire.stageSweptIdentity(id, now); stopErr != nil {
+			break
 		}
+	}
+	// Whatever was staged before a cancellation or an error still commits,
+	// like the identities the per-row sweep had already retired.
+	n, err := retire.commit()
+	removed += n
+	if err != nil || stopErr != nil {
+		return removed, joinErrors(stopErr, err)
 	}
 	d.observeAbsoluteCount()
 	if more {
@@ -727,38 +746,37 @@ func (d *DB) absoluteTaskRow(id string) (*domain.Task, error) {
 	return &task, nil
 }
 
-func (d *DB) sweepAbsoluteIdentity(id string, now time.Time) (bool, error) {
+// stageSweptIdentity stages the sweep's retirement of one identity: the purge
+// of an expired (or missing) row and, once its replay window is over, the
+// identity itself.
+func (r *absoluteRetirement) stageSweptIdentity(id string, now time.Time) error {
+	d := r.d
 	identity, err := d.readAbsoluteIdentity(id)
 	if err != nil || identity == nil {
-		return false, err
+		return err
 	}
 	task, err := d.absoluteTaskRow(id)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if settled, err := d.retiredTombstoneSettled(identity, task, now); err != nil || settled {
-		return false, err
+		return err
 	}
 	expired, err := d.absoluteRowExpired(task, now)
 	if err != nil || !expired {
-		return false, err
+		return err
 	}
-	b := d.Batch()
-	defer b.Close()
-	if err = d.stageAbsolutePurge(b, identity, task, now); err != nil {
-		return false, err
-	}
-	if err = d.removeExpiredAbsoluteIdentity(b, identity, now); err != nil {
-		return false, err
-	}
-	if err = d.commitBatchRaw(b); err != nil {
-		return false, err
-	}
-	d.Leases.Delete(id)
-	if task != nil {
-		metrics.AbsoluteExpiredPurged.Inc()
-	}
-	return task != nil, nil
+	return r.stage(id, task != nil, nil, func(b *pebbledb.Batch) (int64, error) {
+		if err := d.stageAbsolutePurge(b, identity, task, now); err != nil {
+			return 0, err
+		}
+		// stageAbsolutePurge restarts the replay window of a row it retires
+		// now, so only an identity retired earlier can leave here.
+		if now.Before(identity.ReplayUntil) {
+			return 0, nil
+		}
+		return -1, stageAbsoluteIdentityKeysRemoval(b, identity)
+	})
 }
 
 // retiredTombstoneSettled reports a tombstone that has nothing left to purge:
@@ -784,13 +802,6 @@ func (d *DB) retiredTombstoneSettled(identity *absoluteIdentity, task *domain.Ta
 	return !residue, err
 }
 
-func (d *DB) removeExpiredAbsoluteIdentity(b *pebbledb.Batch, identity *absoluteIdentity, now time.Time) error {
-	if now.Before(identity.ReplayUntil) {
-		return nil
-	}
-	return d.stageAbsoluteIdentityRemoval(b, identity)
-}
-
 func (d *DB) absoluteRowExpired(task *domain.Task, now time.Time) (bool, error) {
 	if task == nil {
 		return true, nil
@@ -800,10 +811,7 @@ func (d *DB) absoluteRowExpired(task *domain.Task, now time.Time) (bool, error) 
 }
 
 func (d *DB) stageAbsoluteIdentityRemoval(b *pebbledb.Batch, identity *absoluteIdentity) error {
-	if err := b.Delete(absoluteKey(identity.ID), nil); err != nil {
-		return err
-	}
-	if err := b.Delete(absoluteTopicKey(identity.TopicID, identity.ID), nil); err != nil {
+	if err := stageAbsoluteIdentityKeysRemoval(b, identity); err != nil {
 		return err
 	}
 	count, err := d.absoluteCount()
@@ -811,6 +819,13 @@ func (d *DB) stageAbsoluteIdentityRemoval(b *pebbledb.Batch, identity *absoluteI
 		return err
 	}
 	return b.Set([]byte(absoluteCountKey), []byte(strconv.FormatInt(max(0, count-1), 10)), nil)
+}
+
+func stageAbsoluteIdentityKeysRemoval(b *pebbledb.Batch, identity *absoluteIdentity) error {
+	if err := b.Delete(absoluteKey(identity.ID), nil); err != nil {
+		return err
+	}
+	return b.Delete(absoluteTopicKey(identity.TopicID, identity.ID), nil)
 }
 
 // retireCompletedAbsolute ends an absolute task's custody the moment its
@@ -896,11 +911,124 @@ func (d *DB) stageCompletedRetirement(b *pebbledb.Batch, task *domain.Task) erro
 	return d.stageAbsoluteIdentityRemoval(b, identity)
 }
 
-func (d *DB) purgeAbsoluteRow(task *domain.Task) error {
+// purgeAbsoluteRows retires the expired rows among tasks with one replicated
+// commit per absoluteRetireBatch rows instead of one per row, so a claim that
+// meets a backlog of expired heads pays one Raft round trip, not hundreds.
+//
+// retired[i] reports that tasks[i] is gone (or was never there) and its hint
+// can be dropped. A row that is not expired stays and retired[i] is false.
+// Rows are staged in order and staging stops at the first error. Rows staged
+// before it still commit, as the per-row path had committed them, and the
+// error is returned. A failed commit leaves its rows unretired.
+func (d *DB) purgeAbsoluteRows(tasks []*domain.Task) ([]bool, error) {
+	retired := make([]bool, len(tasks))
+	if len(tasks) == 0 {
+		return retired, nil
+	}
 	d.absoluteMu.Lock()
 	defer d.absoluteMu.Unlock()
+	retire, err := d.newAbsoluteRetirement()
+	if err != nil {
+		return retired, err
+	}
+	defer retire.close()
+	var stageErr error
+	for i, task := range tasks {
+		if _, err := retire.flushIfFull(); err != nil {
+			return retired, fmt.Errorf("retire absolute tasks: %w", err)
+		}
+		if stageErr = retire.stageExpiredRow(task, &retired[i]); stageErr != nil {
+			break
+		}
+	}
+	if _, err := retire.commit(); err != nil {
+		return retired, joinErrors(stageErr, fmt.Errorf("retire absolute tasks: %w", err))
+	}
+	return retired, stageErr
+}
+
+// absoluteRetireBatch bounds the rows one retirement commit carries. It is at
+// least the default claim inspection budget, so a claim retires every expired
+// head it inspected in one commit, and keeps one Raft entry near 150 KiB
+// (about 600 bytes per retired row).
+const absoluteRetireBatch = 256
+
+// absoluteRetirement stages several retirements into one Pebble batch and
+// replicates them in one commit. The caller holds absoluteMu from
+// newAbsoluteRetirement through the last commit. The identity count is read
+// once and carried across the staged rows, so every row adjusts the running
+// value instead of the stored one the batch is about to replace.
+type absoluteRetirement struct {
+	d       *DB
+	b       *pebbledb.Batch
+	scratch *pebbledb.Batch
+	count   int64
+	changed bool
+	ids     map[string]struct{}
+	expired int
+	// marks are set to true once the staged rows they belong to commit.
+	marks []*bool
+}
+
+func (d *DB) newAbsoluteRetirement() (*absoluteRetirement, error) {
+	count, err := d.absoluteCount()
+	if err != nil {
+		return nil, err
+	}
+	return &absoluteRetirement{d: d, b: d.Batch(), scratch: d.Batch(), count: count, ids: map[string]struct{}{}}, nil
+}
+
+func (r *absoluteRetirement) close() {
+	_ = r.b.Close()
+	_ = r.scratch.Close()
+}
+
+// flushIfFull commits the staged rows once they reach absoluteRetireBatch.
+func (r *absoluteRetirement) flushIfFull() (int, error) {
+	if len(r.ids) < absoluteRetireBatch {
+		return 0, nil
+	}
+	return r.commit()
+}
+
+// stage runs one row's staging in a scratch batch and adds it to the
+// retirement only if it succeeds, so a failing row never leaves half its
+// deletions in the commit. delta is the row's identity count change.
+func (r *absoluteRetirement) stage(id string, expired bool, mark *bool, fn func(*pebbledb.Batch) (int64, error)) error {
+	r.scratch.Reset()
+	delta, err := fn(r.scratch)
+	if err != nil {
+		return err
+	}
+	if err = r.b.Apply(r.scratch, nil); err != nil {
+		return err
+	}
+	if delta != 0 {
+		r.count = max(0, r.count+delta)
+		r.changed = true
+	}
+	r.ids[id] = struct{}{}
+	if expired {
+		r.expired++
+	}
+	if mark != nil {
+		r.marks = append(r.marks, mark)
+	}
+	return nil
+}
+
+// stageExpiredRow stages what the v0.5.12 per-row purge committed for one row
+// and sets *retired once that commits. A row that is not expired is skipped.
+func (r *absoluteRetirement) stageExpiredRow(task *domain.Task, retired *bool) error {
+	d := r.d
 	if err := d.checkTaskExpiry(task); !errors.Is(err, domain.ErrTaskExpired) {
 		return err
+	}
+	if _, dup := r.ids[task.ID]; dup {
+		if retired != nil {
+			r.marks = append(r.marks, retired)
+		}
+		return nil
 	}
 	identity, err := d.readAbsoluteIdentity(task.ID)
 	if err != nil {
@@ -910,31 +1038,73 @@ func (d *DB) purgeAbsoluteRow(task *domain.Task) error {
 	if restored {
 		identity = &absoluteIdentity{ID: task.ID, TenantID: task.TenantID, TopicID: taskTopicID(task), Hash: taskContentHash(task.Command, task.Payload), CreatedAt: task.CreatedAt, ExpiresAt: *task.ExpiresAt}
 	}
-	b := d.Batch()
-	defer b.Close()
-	if restored {
-		// Cleanup must still retire an accepted/restored row when its identity
-		// manifest is missing. Account it even above the operational budget;
-		// new acceptance is refused at capacity, retirement is never blocked.
-		count, err := d.absoluteCount()
+	now := d.expiryTime()
+	return r.stage(task.ID, true, retired, func(b *pebbledb.Batch) (int64, error) {
+		delta := int64(0)
+		if restored {
+			// Cleanup must still retire an accepted/restored row when its
+			// identity manifest is missing. Account it even above the
+			// operational budget; new acceptance is refused at capacity,
+			// retirement is never blocked.
+			delta = 1
+			if err := b.Set(absoluteTopicKey(identity.TopicID, task.ID), nil, nil); err != nil {
+				return 0, err
+			}
+		}
+		return delta, d.stageAbsolutePurge(b, identity, task, now)
+	})
+}
+
+// commit replicates the staged rows in one write and starts an empty batch
+// for the next ones. It reports how many staged rows had a task row.
+func (r *absoluteRetirement) commit() (int, error) {
+	if len(r.ids) == 0 {
+		return 0, nil
+	}
+	if r.changed {
+		if err := r.b.Set([]byte(absoluteCountKey), []byte(strconv.FormatInt(r.count, 10)), nil); err != nil {
+			return 0, err
+		}
+	}
+	err := r.d.commitBatchRaw(r.b)
+	// Never reuse a batch whose bytes a replicator may still reference.
+	_ = r.b.Close()
+	r.b = r.d.Batch()
+	ids, expired, marks := r.ids, r.expired, r.marks
+	r.ids, r.expired, r.changed, r.marks = map[string]struct{}{}, 0, false, nil
+	if err != nil {
+		// The stored count is unknown after a failed write; reread it.
+		if count, cerr := r.d.absoluteCount(); cerr == nil {
+			r.count = count
+		}
+		return 0, err
+	}
+	for _, mark := range marks {
+		*mark = true
+	}
+	for id := range ids {
+		r.d.Leases.Delete(id)
+	}
+	r.d.observeAbsoluteCount()
+	metrics.AbsoluteExpiredPurged.Add(float64(expired))
+	return expired, nil
+}
+
+// joinErrors is errors.Join that returns a single non-nil error unwrapped, so
+// callers matching a concrete type (NotLeaderError) or comparing a context
+// error keep seeing it as before.
+func joinErrors(errs ...error) error {
+	var kept []error
+	for _, err := range errs {
 		if err != nil {
-			return err
-		}
-		if err = b.Set([]byte(absoluteCountKey), []byte(strconv.FormatInt(count+1, 10)), nil); err != nil {
-			return err
-		}
-		if err = b.Set(absoluteTopicKey(identity.TopicID, task.ID), nil, nil); err != nil {
-			return err
+			kept = append(kept, err)
 		}
 	}
-	if err = d.stageAbsolutePurge(b, identity, task, d.expiryTime()); err != nil {
-		return err
+	switch len(kept) {
+	case 0:
+		return nil
+	case 1:
+		return kept[0]
 	}
-	if err = d.commitBatchRaw(b); err != nil {
-		return fmt.Errorf("retire absolute task: %w", err)
-	}
-	d.Leases.Delete(task.ID)
-	d.observeAbsoluteCount()
-	metrics.AbsoluteExpiredPurged.Inc()
-	return nil
+	return errors.Join(kept...)
 }

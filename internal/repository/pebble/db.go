@@ -122,6 +122,17 @@ type DB struct {
 	// lease renewals, completions, deletions, cleanup and Raft apply never
 	// do, so the queue keeps draining while new work is refused.
 	createAdmission func() error
+
+	// onWrite, when set, runs before every write this DB submits (a batch
+	// commit, Set or Delete; replicated or local). Tests count commits with
+	// it; production leaves it nil.
+	onWrite func()
+}
+
+func (d *DB) noteWrite() {
+	if d.onWrite != nil {
+		d.onWrite()
+	}
 }
 
 // SetCreateAdmission installs the new-task admission hook. Like
@@ -399,6 +410,7 @@ func (d *DB) Has(key []byte) (bool, error) {
 // flows through Replicate (raft) as a 1-op batch; otherwise it commits
 // directly with the configured fsync policy.
 func (d *DB) Set(key, value []byte) error {
+	d.noteWrite()
 	if d.repl != nil {
 		if err := d.RequireWriteLeader(); err != nil {
 			return err
@@ -415,6 +427,7 @@ func (d *DB) Set(key, value []byte) error {
 
 // Delete removes a key. Same semantics as Set re: replication.
 func (d *DB) Delete(key []byte) error {
+	d.noteWrite()
 	if d.repl != nil {
 		if err := d.RequireWriteLeader(); err != nil {
 			return err
@@ -474,6 +487,7 @@ func (d *DB) commitBatchContext(ctx context.Context, b *pebbledb.Batch) error {
 }
 
 func (d *DB) commitBatchRaw(b *pebbledb.Batch) error {
+	d.noteWrite()
 	if d.repl != nil {
 		if err := d.RequireWriteLeader(); err != nil {
 			return err

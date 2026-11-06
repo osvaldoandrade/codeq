@@ -74,7 +74,7 @@ func (f expiryPolicyReader) Get(ctx context.Context, tenant, name string) (queue
 	return f(ctx, tenant, name)
 }
 
-func absoluteFixture(t *testing.T) (*DB, *TaskRepository, *ResultRepository, *atomic.Int64) {
+func absoluteFixture(t testing.TB) (*DB, *TaskRepository, *ResultRepository, *atomic.Int64) {
 	t.Helper()
 	db, err := Open(Options{Path: t.TempDir(), FsyncOnCommit: true})
 	if err != nil {
