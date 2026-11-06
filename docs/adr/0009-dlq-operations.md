@@ -149,11 +149,16 @@ Windows that remain, none of them introduced by this ADR:
   path and is left to a later decision. It becomes more pressing if client
   chosen task IDs (ADR 0008) land: a reused ID could then meet a leftover
   TTL entry of its deleted namesake and be reaped early.
-- Interplay with other proposed ADRs: with ADR 0004 (deduplication) a
-  delete must also release the task's deduplication entry and a requeue
-  must decide whether the task holds it again; with ADR 0007 (progress) a
-  requeue should clear the progress of the previous run. Whichever lands
-  second carries that change.
+- Interplay with ADR 0004 (deduplication), carried here: a delete of a
+  waiting task releases the deduplication mapping in its batch, through the
+  same release the claim uses, which deletes the mapping only while it still
+  names the task. A requeue does not re-acquire the key: it retries the
+  task, like a nack retry, and is not a new create. A requeued task keeps
+  `DeduplicationKey` on its body as a record while a newer task may hold the
+  key, so neither its next claim nor its delete touches that newer mapping.
+- Interplay with ADR 0007 (progress): a requeue clears the progress of the
+  previous run. With ADR 0008 (client-chosen task IDs): see the TTL note
+  above.
 
 ## Alternatives considered
 

@@ -38,9 +38,10 @@ of `POST /tasks/batch`, producer gRPC `CreateTask.deduplication_key`, and
 - **Release on claim.** The claim that moves the task to `IN_PROGRESS`
   releases the key in the same Pebble batch (`Claim` and `ClaimMany`). The next
   create of the key enqueues a new task, which later creates join in turn.
-  Retries of the running task (nack, lease expiry) do not re-acquire the key,
-  so a release deletes the mapping only while it still names the released
-  task: a newer task may hold the key by then.
+  Retries of the running task (nack, lease expiry, a dead-letter requeue)
+  do not re-acquire the key, so a release deletes the mapping only while it
+  still names the released task: a newer task may hold the key by then. An
+  admin delete of a waiting task (ADR 0009) releases the key the same way.
 - **Exclusive with idempotency.** A create with both `idempotencyKey` and
   `deduplicationKey` fails with `400` (`domain.ErrDeduplicationWithIdempotency`):
   each key alone decides whether the create writes a task.
