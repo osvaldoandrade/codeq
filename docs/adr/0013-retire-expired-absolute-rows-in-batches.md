@@ -122,6 +122,30 @@ was slow and the per-row pattern turned a backlog into an outage.
   deferring a delete that a concurrent claim could make stale, so it needs
   its own change.
 
+### Known trade-offs and follow-ups (review of 9af454b)
+
+- **Retirement after the lease delays the reply.** After the live task's lease
+  commits, `Claim` and `ClaimMany` wait for `absoluteMu` and one retirement
+  commit before they return the task. `sweepAbsolute`, enqueues and acks also
+  take `absoluteMu`.
+  - Absolute leases are capped at the task's deadline. If the caller gives up
+    during that wait, a frontier task can expire while leased to nobody.
+  - This is still far shorter than v0.5.12, which made one commit per expired
+    head before leasing anything.
+  - Follow-up (v0.5.14): after the lease, take `absoluteMu` with `TryLock`
+    (republishing the held hints when it is busy), or retire in a detached
+    `runOpen` task.
+- **The retirement epoch check is sampled per retirement.** It does not wait
+  for the new leader's Barrier. `Enqueue`'s count check has the same race, so
+  this is not a regression. Follow-up: require the rebuild epoch.
+- **A row that can never stage still fails a claim that leases nothing.** The
+  same happens to `moveDueDelayedForTenant` on a corrupt delayed row, as in
+  v0.5.12.
+- **`requeueExpired` and `discardPendingHint` still commit once per row.** They
+  are bounded by tasks in flight or by stale hints.
+- **Stale comment.** The comment at `internal/raft/db.go` near
+  `raftMergeBatch` still says 32; the constant is 128.
+
 ## Alternatives considered
 
 - **One combined batch for retirement and the lease.** It would save one more
