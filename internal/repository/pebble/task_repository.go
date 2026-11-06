@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,11 @@ type TaskRepository struct {
 	rebuiltEpoch  uint64
 	queued        map[string]struct{}
 	inflight      map[string]struct{}
+
+	// clock, when set, replaces time.Now for now(). Tests use it to move
+	// the absolute-expiry clock at the instant a lease is stamped;
+	// production leaves it nil.
+	clock func() time.Time
 }
 
 // queueChan is the per-queue channel + recovery state. Each hint carries
@@ -200,7 +206,12 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	return r
 }
 
-func (r *TaskRepository) now() time.Time { return time.Now().In(r.tz) }
+func (r *TaskRepository) now() time.Time {
+	if r.clock != nil {
+		return r.clock().In(r.tz)
+	}
+	return time.Now().In(r.tz)
+}
 
 func normalizePriority(p int) int {
 	if p < minPriority {
@@ -587,6 +598,13 @@ func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []
 			return nil, false, joinErrors(err, r.retireHeld(held))
 		}
 		if ok {
+			// The lease is durable: a retirement failure now must not turn
+			// it into an error the worker would treat as "nothing leased".
+			// Rows that did not retire keep their hints for a later claim.
+			if err := r.retireHeld(held); err != nil {
+				slog.Warn("codeq: claim leased a task but could not retire expired absolute rows; their hints were republished",
+					"command", string(cmd), "tenant", tenantID, "task", t.ID, "error", err)
+			}
 			return t, true, nil
 		}
 	}
@@ -598,7 +616,11 @@ func (r *TaskRepository) Claim(ctx context.Context, workerID string, commands []
 
 // expiredHints holds the expired absolute rows one claim met, with their
 // hints still in flight, so they retire together in one replicated batch
-// (retireHeld) instead of one Raft round trip per row.
+// (retireHeld) instead of one Raft round trip per row. The claim retires
+// them after it commits its own lease (or finds nothing): a held row is in
+// flight, so no other claimer can take it meanwhile, and leasing first keeps
+// the gap between reading the live row and leasing it as short as it was
+// with per-row retirement.
 type expiredHints struct {
 	tenantID string
 	tasks    []*domain.Task
@@ -814,7 +836,7 @@ func (r *TaskRepository) tryPopPriority(ctx context.Context, workerID string, cm
 		result := claimSkipped
 		err := ctx.Err()
 		if err == nil {
-			task, result, err = r.completeClaim(ctx, workerID, cmd, tenantID, priority, leaseSeconds, h.seq, h.id, held)
+			task, result, err = r.completeClaim(ctx, workerID, cmd, tenantID, priority, leaseSeconds, h.seq, h.id)
 		}
 		if err == nil && result == claimExpired {
 			// The hint stays in flight until its row retires with the rest.
@@ -854,10 +876,15 @@ const (
 // matching pending key by exact key — no scan — and signal empty.
 //
 // An expired absolute row is returned as claimExpired for the caller to hold;
-// before this claim commits its own lease, every held row retires in one
-// batch. A claim that met N expired heads therefore commits twice, not N+1
-// times.
-func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd domain.Command, tenantID string, priority, leaseSeconds int, seq uint64, id string, held *expiredHints) (*domain.Task, claimResult, error) {
+// the claim retires every held row in one batch after it commits its own
+// lease. A claim that met N expired heads therefore commits twice, not N+1
+// times, and the live row is leased right after it was read.
+//
+// A live row whose deadline passes between that read and the lease commit
+// (the FIFO's first live row is the closest to its deadline) is held as
+// expired too, and the claim moves on to the next hint. The failed lease
+// writes nothing, so a moving expiry frontier costs reads, never commits.
+func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd domain.Command, tenantID string, priority, leaseSeconds int, seq uint64, id string) (*domain.Task, claimResult, error) {
 	pendingKey := KeyPending(cmd, tenantID, priority, seq, id)
 	row, expired, err := r.readClaimable(pendingKey, id)
 	if err != nil || row == nil {
@@ -868,6 +895,7 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	}
 	t := *row
 
+	// The lease starts now, immediately before its commit.
 	now := r.now()
 	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
 	leaseUntil, err = r.db.limitTaskLease(&t, leaseUntil)
@@ -886,18 +914,22 @@ func (r *TaskRepository) completeClaim(ctx context.Context, workerID string, cmd
 	if err := r.stageClaim(b, cmd, tenantID, pendingKey, &t, now); err != nil {
 		return nil, claimSkipped, err
 	}
-	// Retire the expired heads met before this task first, in one batch:
-	// the FIFO's older rows are gone before a later one is leased, as they
-	// were with per-row retirement.
-	if err := r.retireHeld(held); err != nil {
-		return nil, claimSkipped, err
-	}
 	if err := r.db.commitBatchContext(ctx, b); err != nil {
+		if r.expiredSinceRead(err, row) {
+			return row, claimExpired, nil
+		}
 		return nil, claimSkipped, fmt.Errorf("commit claim: %w", err)
 	}
 	r.leases.Set(id, workerID, cmd, tenantID, taskLeaseUnix(&t, leaseUntil))
 	metrics.QueueDepth.WithLabelValues(string(cmd), "ready").Dec()
 	return &t, claimTaken, nil
+}
+
+// expiredSinceRead reports a lease commit refused because the row's absolute
+// deadline passed after it was read. The commit wrote nothing, and the row is
+// now an expired row like any other.
+func (r *TaskRepository) expiredSinceRead(err error, row *domain.Task) bool {
+	return errors.Is(err, domain.ErrTaskExpired) && errors.Is(r.db.checkTaskExpiry(row), domain.ErrTaskExpired)
 }
 
 // readClaimable loads the row behind a hint. It returns a pending row ready
@@ -1049,110 +1081,151 @@ collect:
 		return nil, nil
 	}
 
-	now := r.now()
-	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
-
-	out := make([]*domain.Task, 0, len(hints))
-	b := r.db.Batch()
-	defer b.Close()
-
-	// Process every popped hint. Drop the bad ones (ghost / bad JSON /
+	// Read every popped hint. Drop the bad ones (ghost / bad JSON /
 	// status != pending) by deleting only their pending key — same
-	// invariant as completeClaim, just folded into the batch.
+	// invariant as completeClaim, just folded into the batch. Expired rows
+	// keep their hints in flight and retire in one batch after the leases
+	// commit, so the leases start right after their rows were read.
 	var expired []*domain.Task
 	var expiredAt []int
+	holdExpired := func(at int, task *domain.Task) {
+		expired = append(expired, task)
+		expiredAt = append(expiredAt, at)
+		retiredHint[at] = false
+	}
+	var drops [][]byte
+	live := make([]claimCandidate, 0, len(hints))
 	for i, h := range hints {
 		pendingKey := KeyPending(h.cmd, tenantID, h.priority, h.seq, h.id)
 		taskJSON, err := r.db.Get(KeyTask(h.id))
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
-				_ = b.Delete(pendingKey, nil)
+				drops = append(drops, pendingKey)
 				continue
 			}
-			return nil, err
+			return nil, joinErrors(err, r.retireClaimManyRows(expired, expiredAt, retiredHint))
 		}
 		var t domain.Task
 		if err := sonic.Unmarshal(taskJSON, &t); err != nil {
-			_ = b.Delete(pendingKey, nil)
+			drops = append(drops, pendingKey)
 			continue
 		}
 		if err := r.db.checkTaskExpiry(&t); err != nil {
 			if errors.Is(err, domain.ErrTaskExpired) {
-				// Retired below with the other expired rows, in one batch.
-				expired = append(expired, &t)
-				expiredAt = append(expiredAt, i)
-				retiredHint[i] = false
+				holdExpired(i, &t)
 				continue
 			}
-			return nil, err
+			return nil, joinErrors(err, r.retireClaimManyRows(expired, expiredAt, retiredHint))
 		}
 		if t.Status != domain.StatusPending {
 			// Stale hint — duplicate publication or recovery race. Drop
 			// the pending key; the rightful claimer already owns it.
-			_ = b.Delete(pendingKey, nil)
+			drops = append(drops, pendingKey)
 			continue
 		}
-		t.Status = domain.StatusInProgress
-		t.LastKnownLocation = domain.LocationInProgress
-		t.WorkerID = workerID
-		taskLease, err := r.db.limitTaskLease(&t, leaseUntil)
-		if err != nil {
-			return nil, err
-		}
-		t.LeaseUntil = taskLeaseText(&t, taskLease)
-		t.Attempts++
-		t.UpdatedAt = now
-		updatedJSON, _ := sonic.Marshal(&t)
-		if err := b.Delete(pendingKey, nil); err != nil {
-			return nil, err
-		}
-		if err := b.Set(KeyInprog(h.cmd, tenantID, h.id), nil, nil); err != nil {
-			return nil, err
-		}
-		if err := b.Set(KeyTask(h.id), updatedJSON, nil); err != nil {
-			return nil, err
-		}
-		if err := r.releaseDedupe(b, &t); err != nil {
-			return nil, err
-		}
-		// Phase 6 / M2: lease lives in-memory, recovered from task body
-		// on restart. Set deferred until after the durable commit so
-		// failed commits don't strand the in-memory entry ahead of disk.
-		if err := b.Set(KeyTTLIndex(taskTTLScore(&t, now.Add(taskRetention)), h.id), nil, nil); err != nil {
-			return nil, err
-		}
-		// Stash a value copy so all returned pointers are independent and
-		// the caller can mutate them without aliasing the loop variable.
-		tc := t
-		out = append(out, &tc)
+		live = append(live, claimCandidate{at: i, cmd: h.cmd, pendingKey: pendingKey, row: t})
 	}
-	retired, err := r.db.purgeAbsoluteRows(expired)
-	for j, i := range expiredAt {
-		retiredHint[i] = retired[j]
+
+	out, leases, err := r.commitClaimMany(workerID, tenantID, leaseSeconds, drops, live)
+	for err != nil && errors.Is(err, domain.ErrTaskExpired) {
+		// A live row's deadline passed after it was read. The refused batch
+		// wrote nothing: hold that row with the expired ones and lease the
+		// rest. Every retry drops at least one row, and none commits.
+		kept := make([]claimCandidate, 0, len(live))
+		for _, c := range live {
+			if row := c.row; errors.Is(r.db.checkTaskExpiry(&row), domain.ErrTaskExpired) {
+				holdExpired(c.at, &row)
+				continue
+			}
+			kept = append(kept, c)
+		}
+		if len(kept) == len(live) {
+			break
+		}
+		live = kept
+		out, leases, err = r.commitClaimMany(workerID, tenantID, leaseSeconds, drops, live)
 	}
 	if err != nil {
-		return nil, err
-	}
-	if b.Empty() {
-		// Only expired rows: nothing left to replicate.
-		committed = true
-		return out, nil
-	}
-	if err := r.db.CommitBatch(b); err != nil {
-		return nil, fmt.Errorf("commit claim-many: %w", err)
+		return nil, joinErrors(err, r.retireClaimManyRows(expired, expiredAt, retiredHint))
 	}
 	committed = true
 	// Lease table updates happen post-commit so a failed Pebble commit
 	// doesn't leave the in-memory state ahead of disk.
-	for _, t := range out {
-		until, err := time.Parse(time.RFC3339Nano, t.LeaseUntil)
-		if err != nil {
-			return nil, err
-		}
-		r.leases.Set(t.ID, workerID, t.Command, tenantID, taskLeaseUnix(t, until))
+	for i, t := range out {
+		r.leases.Set(t.ID, workerID, t.Command, tenantID, leases[i])
 		metrics.QueueDepth.WithLabelValues(string(t.Command), "ready").Dec()
 	}
+	// The leases are durable: a retirement failure now is logged, not
+	// returned, and its rows keep their hints for a later claim.
+	if err := r.retireClaimManyRows(expired, expiredAt, retiredHint); err != nil {
+		slog.Warn("codeq: claim-many leased tasks but could not retire expired absolute rows; their hints were republished",
+			"tenant", tenantID, "leased", len(out), "error", err)
+	}
 	return out, nil
+}
+
+// claimCandidate is a pending row ClaimMany read and is about to lease.
+type claimCandidate struct {
+	at         int
+	cmd        domain.Command
+	pendingKey []byte
+	row        domain.Task
+}
+
+// commitClaimMany leases every candidate and drops every stale pending key in
+// one batch. The leases start immediately before the commit. An empty batch
+// is not replicated. It returns the leased tasks and their lease deadlines.
+func (r *TaskRepository) commitClaimMany(workerID, tenantID string, leaseSeconds int, drops [][]byte, live []claimCandidate) ([]*domain.Task, []int64, error) {
+	now := r.now()
+	leaseUntil := now.Add(time.Duration(leaseSeconds) * time.Second).UTC()
+	out := make([]*domain.Task, 0, len(live))
+	leases := make([]int64, 0, len(live))
+	b := r.db.Batch()
+	defer b.Close()
+	for _, key := range drops {
+		if err := b.Delete(key, nil); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, c := range live {
+		// A value copy per task: the returned pointers are independent and
+		// a retry starts again from the row as read.
+		t := c.row
+		taskLease, err := r.db.limitTaskLease(&t, leaseUntil)
+		if err != nil {
+			return nil, nil, err
+		}
+		t.Status = domain.StatusInProgress
+		t.LastKnownLocation = domain.LocationInProgress
+		t.WorkerID = workerID
+		t.LeaseUntil = taskLeaseText(&t, taskLease)
+		t.Attempts++
+		t.UpdatedAt = now
+		// Phase 6 / M2: lease lives in-memory, recovered from task body
+		// on restart; the caller sets it only after the durable commit.
+		if err := r.stageClaim(b, c.cmd, tenantID, c.pendingKey, &t, now); err != nil {
+			return nil, nil, err
+		}
+		out = append(out, &t)
+		leases = append(leases, taskLeaseUnix(&t, taskLease))
+	}
+	if b.Empty() {
+		return out, leases, nil
+	}
+	if err := r.db.CommitBatch(b); err != nil {
+		return nil, nil, fmt.Errorf("commit claim-many: %w", err)
+	}
+	return out, leases, nil
+}
+
+// retireClaimManyRows retires the expired rows ClaimMany popped in one batch
+// and records which of their hints can be dropped.
+func (r *TaskRepository) retireClaimManyRows(expired []*domain.Task, expiredAt []int, retiredHint map[int]bool) error {
+	retired, err := r.db.purgeAbsoluteRows(expired)
+	for j, i := range expiredAt {
+		retiredHint[i] = retired[j]
+	}
+	return err
 }
 
 // findPendingKey scans the per-prio pending prefix looking for an entry

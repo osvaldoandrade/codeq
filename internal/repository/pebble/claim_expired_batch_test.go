@@ -72,7 +72,7 @@ func hintCount(repo *TaskRepository) int {
 }
 
 // A claim that meets N expired heads before a live task commits twice (one
-// retirement batch plus its lease), not N+1 times, on standalone Pebble and
+// lease, then one retirement batch), not N+1 times, on standalone Pebble and
 // through a replicator.
 func TestClaimRetiresExpiredHeadsInOneCommit(t *testing.T) {
 	for _, replicated := range []bool{false, true} {
@@ -125,7 +125,7 @@ func TestClaimRetirementStaysWithinBudgetAndBatch(t *testing.T) {
 		t.Fatalf("claim=%+v ok=%v err=%v", got, ok, err)
 	}
 	if n := writes.Load(); n != 3 {
-		t.Fatalf("writes=%d; want two retirement batches and one lease", n)
+		t.Fatalf("writes=%d; want one lease and two retirement batches", n)
 	}
 	assertRetired(t, db, expiredIDs(expired)...)
 
@@ -147,17 +147,18 @@ func TestClaimRetirementStaysWithinBudgetAndBatch(t *testing.T) {
 	}
 }
 
-// failFirstReplicator fails (or cancels the claim at) its first replicated
-// write, then behaves like a durable leader.
-type failFirstReplicator struct {
+// stepReplicator fails its failAt-th replicated write (1-based; 0 never) and
+// cancels the claim right after its first successful write, then behaves
+// like a durable leader.
+type stepReplicator struct {
 	*ambiguousAbsoluteReplicator
 	calls  atomic.Int64
-	fail   bool
+	failAt int64
 	cancel context.CancelFunc
 }
 
-func (r *failFirstReplicator) Replicate(repr []byte) error {
-	if r.calls.Add(1) == 1 && r.fail {
+func (r *stepReplicator) Replicate(repr []byte) error {
+	if r.calls.Add(1) == r.failAt {
 		return errors.New("replication failed")
 	}
 	err := r.ambiguousAbsoluteReplicator.Replicate(repr)
@@ -168,28 +169,60 @@ func (r *failFirstReplicator) Replicate(repr []byte) error {
 	return err
 }
 
-// The retirement batch commits whatever the claimant does; a failed
-// retirement keeps every row and restores every hint; neither loses nor
-// duplicates the live task.
+func stepFixture(t *testing.T, expired int, failAt int64, cancel context.CancelFunc) (*DB, *TaskRepository, *domain.Task) {
+	t.Helper()
+	db, repo, _, clock := absoluteFixture(t)
+	live := seedExpiredHeads(t, repo, clock, expired)
+	db.AttachReplicator(&stepReplicator{ambiguousAbsoluteReplicator: &ambiguousAbsoluteReplicator{db: db.Raw()}, failAt: failAt, cancel: cancel})
+	return db, repo, live
+}
+
+func assertUnretained(t *testing.T, db *DB, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		if has, err := db.Has(KeyTask(id)); err != nil || !has {
+			t.Fatalf("%s lost by a failed retirement: %v %v", id, has, err)
+		}
+	}
+}
+
+// The claim commits its lease first and then retires the expired rows it
+// held. The retirement commits whatever the claimant does; a failed lease or
+// retirement keeps every affected row and restores its hint; neither loses
+// nor duplicates the live task.
 func TestClaimRetirementFailureAndCancellation(t *testing.T) {
 	const expired = 30
-	t.Run("canceled-after-retirement", func(t *testing.T) {
-		db, repo, _, clock := absoluteFixture(t)
-		live := seedExpiredHeads(t, repo, clock, expired)
+	t.Run("canceled-after-lease", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		db.AttachReplicator(&failFirstReplicator{ambiguousAbsoluteReplicator: &ambiguousAbsoluteReplicator{db: db.Raw()}, cancel: cancel})
+		db, repo, live := stepFixture(t, expired, 0, cancel)
+		writes := countWrites(db)
 		got, ok, err := claimLogs(ctx, repo, defaultInspectLimit)
-		if !errors.Is(err, context.Canceled) || ok || got != nil {
-			t.Fatalf("canceled claim=%+v ok=%v err=%v", got, ok, err)
+		if err != nil || !ok || got.ID != live.ID {
+			t.Fatalf("a durable lease must be returned: %+v ok=%v err=%v", got, ok, err)
+		}
+		if n := writes.Load(); n != 2 {
+			t.Fatalf("writes=%d; want the lease and one retirement batch", n)
 		}
 		assertRetired(t, db, expiredIDs(expired)...)
+		if hints := hintCount(repo); hints != 0 || len(repo.inflight) != 0 {
+			t.Fatalf("hints=%d inflight=%v", hints, repo.inflight)
+		}
+	})
+	t.Run("lease-commit-fails", func(t *testing.T) {
+		db, repo, live := stepFixture(t, expired, 1, nil)
+		got, ok, err := claimLogs(context.Background(), repo, defaultInspectLimit)
+		if err == nil || ok || got != nil {
+			t.Fatalf("failed lease hidden: %+v ok=%v err=%v", got, ok, err)
+		}
+		// The held rows still retire; only the live hint comes back.
+		assertRetired(t, db, expiredIDs(expired)...)
+		if hints := hintCount(repo); hints != 1 || len(repo.inflight) != 0 {
+			t.Fatalf("hints=%d inflight=%v; want only the live task's", hints, repo.inflight)
+		}
 		stored, err := repo.Get(context.Background(), live.ID)
 		if err != nil || stored.Status != domain.StatusPending || stored.Attempts != 0 {
-			t.Fatalf("canceled claim consumed the live task: %+v %v", stored, err)
-		}
-		if hints := hintCount(repo); hints != 1 {
-			t.Fatalf("hints=%d; want only the live task's", hints)
+			t.Fatalf("failed lease consumed the live task: %+v %v", stored, err)
 		}
 		got, ok, err = claimLogs(context.Background(), repo, defaultInspectLimit)
 		if err != nil || !ok || got.ID != live.ID {
@@ -197,31 +230,23 @@ func TestClaimRetirementFailureAndCancellation(t *testing.T) {
 		}
 	})
 	t.Run("retirement-commit-fails", func(t *testing.T) {
-		db, repo, _, clock := absoluteFixture(t)
-		live := seedExpiredHeads(t, repo, clock, expired)
+		db, repo, live := stepFixture(t, expired, 2, nil)
 		countBefore, _ := db.absoluteCount()
-		db.AttachReplicator(&failFirstReplicator{ambiguousAbsoluteReplicator: &ambiguousAbsoluteReplicator{db: db.Raw()}, fail: true})
 		got, ok, err := claimLogs(context.Background(), repo, defaultInspectLimit)
-		if err == nil || ok || got != nil {
-			t.Fatalf("failed retirement hidden: %+v ok=%v err=%v", got, ok, err)
+		if err != nil || !ok || got.ID != live.ID {
+			t.Fatalf("a failed retirement must not fail the durable lease: %+v ok=%v err=%v", got, ok, err)
 		}
-		if hints := hintCount(repo); hints != expired+1 {
-			t.Fatalf("hints=%d; want every hint restored (%d)", hints, expired+1)
+		if hints := hintCount(repo); hints != expired || len(repo.inflight) != 0 {
+			t.Fatalf("hints=%d inflight=%v; want every expired hint restored (%d)", hints, repo.inflight, expired)
 		}
-		if len(repo.inflight) != 0 {
-			t.Fatalf("hints left in flight: %v", repo.inflight)
-		}
-		for _, id := range expiredIDs(expired) {
-			if has, err := db.Has(KeyTask(id)); err != nil || !has {
-				t.Fatalf("%s lost by a failed retirement: %v %v", id, has, err)
-			}
-		}
+		assertUnretained(t, db, expiredIDs(expired)...)
 		if count, _ := db.absoluteCount(); count != countBefore {
 			t.Fatalf("count=%d want %d", count, countBefore)
 		}
+		writes := countWrites(db)
 		got, ok, err = claimLogs(context.Background(), repo, defaultInspectLimit)
-		if err != nil || !ok || got.ID != live.ID {
-			t.Fatalf("retry=%+v ok=%v err=%v", got, ok, err)
+		if err != nil || ok || got != nil || writes.Load() != 1 {
+			t.Fatalf("retry=%+v ok=%v err=%v writes=%d", got, ok, err, writes.Load())
 		}
 		assertRetired(t, db, expiredIDs(expired)...)
 	})
@@ -346,7 +371,7 @@ func TestClaimManyRetiresExpiredRowsInOneCommit(t *testing.T) {
 		t.Fatalf("claim-many=%d err=%v", len(tasks), err)
 	}
 	if n := writes.Load(); n != 2 {
-		t.Fatalf("writes=%d; want one retirement batch and one claim batch", n)
+		t.Fatalf("writes=%d; want one claim batch and one retirement batch", n)
 	}
 	assertRetired(t, db, expiredIDs(50)...)
 
@@ -367,21 +392,45 @@ func TestClaimManyRetiresExpiredRowsInOneCommit(t *testing.T) {
 	}
 }
 
-// ClaimMany keeps every hint when the retirement batch fails.
-func TestClaimManyFailedRetirementRestoresHints(t *testing.T) {
-	db, repo, _, clock := absoluteFixture(t)
-	live := seedExpiredHeads(t, repo, clock, 10)
-	db.AttachReplicator(&failFirstReplicator{ambiguousAbsoluteReplicator: &ambiguousAbsoluteReplicator{db: db.Raw()}, fail: true})
-	if tasks, err := repo.ClaimMany(context.Background(), "worker", []domain.Command{absoluteTestTopic}, 60, 100, 0, 100, "tenant-a"); err == nil || len(tasks) != 0 {
-		t.Fatalf("failed retirement hidden: %d %v", len(tasks), err)
+// ClaimMany commits its leases before it retires: a failed lease batch
+// returns the error, still retires the expired rows and restores the live
+// hints; a failed retirement keeps the leases and restores the expired hints.
+func TestClaimManyFailedCommitsRestoreHints(t *testing.T) {
+	claimMany := func(repo *TaskRepository) ([]*domain.Task, error) {
+		return repo.ClaimMany(context.Background(), "worker", []domain.Command{absoluteTestTopic}, 60, 100, 0, 100, "tenant-a")
 	}
-	if hints := hintCount(repo); hints != 11 {
-		t.Fatalf("hints=%d want 11", hints)
-	}
-	tasks, err := repo.ClaimMany(context.Background(), "worker", []domain.Command{absoluteTestTopic}, 60, 100, 0, 100, "tenant-a")
-	if err != nil || len(tasks) != 1 || tasks[0].ID != live.ID {
-		t.Fatalf("retry=%v err=%v", tasks, err)
-	}
+	t.Run("lease-commit-fails", func(t *testing.T) {
+		db, repo, live := stepFixture(t, 10, 1, nil)
+		if tasks, err := claimMany(repo); err == nil || len(tasks) != 0 {
+			t.Fatalf("failed lease hidden: %d %v", len(tasks), err)
+		}
+		assertRetired(t, db, expiredIDs(10)...)
+		if hints := hintCount(repo); hints != 1 || len(repo.inflight) != 0 {
+			t.Fatalf("hints=%d inflight=%v want only the live task's", hints, repo.inflight)
+		}
+		tasks, err := claimMany(repo)
+		if err != nil || len(tasks) != 1 || tasks[0].ID != live.ID {
+			t.Fatalf("retry=%v err=%v", tasks, err)
+		}
+	})
+	t.Run("retirement-commit-fails", func(t *testing.T) {
+		db, repo, live := stepFixture(t, 10, 2, nil)
+		tasks, err := claimMany(repo)
+		if err != nil || len(tasks) != 1 || tasks[0].ID != live.ID {
+			t.Fatalf("a failed retirement must not fail the durable lease: %v err=%v", tasks, err)
+		}
+		if _, ok := db.Leases.Get(live.ID); !ok {
+			t.Fatal("leased task has no lease")
+		}
+		if hints := hintCount(repo); hints != 10 || len(repo.inflight) != 0 {
+			t.Fatalf("hints=%d inflight=%v want the 10 expired hints", hints, repo.inflight)
+		}
+		assertUnretained(t, db, expiredIDs(10)...)
+		if tasks, err = claimMany(repo); err != nil || len(tasks) != 0 {
+			t.Fatalf("retry=%v err=%v", tasks, err)
+		}
+		assertRetired(t, db, expiredIDs(10)...)
+	})
 }
 
 // Due delayed rows that expired retire in one batch inside the claim prelude.
@@ -803,10 +852,10 @@ func TestBatchedSweepMatchesPerIdentitySweep(t *testing.T) {
 	}
 }
 
-// A row that fails to stage does not leave half its deletions in the batch:
-// the rows before it retire, it and the rows after it stay, and the error
-// is returned.
-func TestBatchedPurgeStopsAtFirstStagingError(t *testing.T) {
+// A row that fails to stage does not leave half its deletions in the batch
+// and does not pin the rows behind it: every other row retires in the same
+// commit, it stays, and the error is returned.
+func TestBatchedPurgeSkipsRowThatFailsToStage(t *testing.T) {
 	db, repo, _, clock := absoluteFixture(t)
 	seedExpiredHeads(t, repo, clock, 5)
 	ids := expiredIDs(5)
@@ -821,19 +870,21 @@ func TestBatchedPurgeStopsAtFirstStagingError(t *testing.T) {
 		}
 		rows = append(rows, row)
 	}
+	writes := countWrites(db)
 	retired, err := db.purgeAbsoluteRows(rows)
 	if err == nil {
 		t.Fatal("staging error hidden")
 	}
+	if n := writes.Load(); n != 1 {
+		t.Fatalf("writes=%d want 1", n)
+	}
 	for i, ok := range retired {
-		if ok != (i < 2) {
+		if ok != (i != 2) {
 			t.Fatalf("retired=%v", retired)
 		}
 	}
-	assertRetired(t, db, ids[:2]...)
-	for _, id := range ids[2:] {
-		if has, _ := db.Has(KeyTask(id)); !has {
-			t.Fatalf("%s retired past the failing row", id)
-		}
+	assertRetired(t, db, ids[0], ids[1], ids[3], ids[4])
+	if has, _ := db.Has(KeyTask(ids[2])); !has {
+		t.Fatalf("%s retired with a corrupt identity", ids[2])
 	}
 }

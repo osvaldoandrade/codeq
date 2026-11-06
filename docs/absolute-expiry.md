@@ -54,8 +54,9 @@ Its rotating scan is bounded to 512 identities per normal sweep, so physical
 cleanup is asynchronous and its delay must be measured at installation load.
 Retirement is batched (ADR 0013): the sweep, the lease reaper and every claim
 path retire the expired rows they meet in one replicated commit per 256 rows.
-A claim behind a backlog of expired heads commits twice (retirement, then the
-lease), not once per expired row.
+A claim behind a backlog of expired heads commits twice (its lease, then the
+retirement), not once per expired row; a row that expires at lease time is
+retired with them and the claim leases the next live row.
 TTL/queue counts can reflect rows waiting for physical retirement.
 
 Retirement keeps a no-payload tombstone for 48 hours after actual retirement.

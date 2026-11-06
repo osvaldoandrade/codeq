@@ -37,25 +37,46 @@ was slow and the per-row pattern turned a backlog into an outage.
 - Expired absolute rows retire through `DB.purgeAbsoluteRows`, which takes
   `absoluteMu` once, stages every row into one Pebble batch and replicates it
   in one commit per `absoluteRetireBatch` (256) rows. The identity count is
-  read once and carried across the staged rows (`+1` for a restored row,
-  `-1`, clamped at zero, for an identity whose replay window closed), so the
-  stored count ends where the per-row path left it. Each row is staged in a
-  scratch batch, so a failing row adds nothing. Staging stops at the first
-  error. Rows staged before it commit and the error is returned, as with the
-  per-row path.
+  read when the retirement starts and reread after every commit, and carried
+  across the rows staged in between (`+1` for a restored row, `-1`, clamped
+  at zero, for an identity whose replay window closed), so the stored count
+  ends where the per-row path left it. Each row is staged in a scratch batch,
+  so a row that fails to stage adds nothing; it stays, the rows after it
+  still retire, and the first staging error is returned after the commit.
+- A retirement belongs to one leadership term. If the replicator reports a
+  new leadership epoch before a commit (this node lost and regained
+  leadership, so another leader may have written the rows and the count it
+  read), the remaining rows are abandoned unretired with
+  `errAbsoluteRetirementTermChanged`, or `NotLeaderError` when this node is
+  no longer leader, and a later pass rereads them.
 - `Claim` holds the hints of expired rows in flight instead of purging them
-  one by one. Before it commits a live task's lease, the held rows retire in
+  one by one. It commits the live task's lease first, with the lease start
+  stamped immediately before that commit, and then retires the held rows in
   one batch. A claim that meets N expired heads before a live task commits
-  twice (retirement, then lease), not N+1 times. If it finds no live task, or
-  fails or is canceled, the held rows still retire when it returns. That
-  commit does not depend on the request context, so a client that gave up
-  still leaves progress behind. A held hint whose row did not retire (failed
-  commit, staging error, or a row no longer expired) is republished, as a
-  failed per-row purge was.
-- `ClaimMany`, `moveDueDelayedForTenant`, the reaper lease sweep and
-  `dropExpiredBodies` collect their expired rows and call `purgeAbsoluteRows`
-  once. `ClaimMany` and the delayed move no longer commit an empty batch when
-  every row was expired.
+  twice (lease, then retirement), not N+1 times. Held rows are in flight, so
+  no other claimer can take them meanwhile; leasing first keeps the gap
+  between reading the live row and leasing it as short as it was in v0.5.12.
+- A live row whose deadline passes between its read and its lease commit
+  (`prepareAbsoluteBatch` refuses it with `task_expired`) is held as an
+  expired row, and the claim moves on to the next hint within its budget.
+  The refused lease writes nothing, so a moving expiry frontier costs reads,
+  never commits; the claim still commits once for its lease and once per
+  256 retired rows at return.
+- If the claim finds no live task, or fails or is canceled, the held rows
+  still retire when it returns. That commit does not depend on the request
+  context, so a client that gave up still leaves progress behind. A held hint
+  whose row did not retire (failed commit, staging error, or a row no longer
+  expired) is republished, as a failed per-row purge was. After a committed
+  lease, a retirement failure is logged and the lease is returned: the lease
+  is durable, and the unretired rows keep their hints for a later claim.
+- `ClaimMany` reads its popped rows, commits the leases of the live ones in
+  one batch and then retires the expired ones in one batch. A candidate that
+  expired before the lease batch committed is moved to the expired rows and
+  the rest is retried; each retry drops at least one row and none commits.
+  `ClaimMany` and the delayed move no longer commit an empty batch when every
+  row was expired.
+- `moveDueDelayedForTenant`, the reaper lease sweep and `dropExpiredBodies`
+  collect their expired rows and call `purgeAbsoluteRows` once.
 - `sweepAbsolute` stages its page into the same batched retirement: one
   commit per 256 identities, and `absoluteMu` is held for one or two commits
   instead of hundreds.
@@ -67,14 +88,26 @@ was slow and the per-row pattern turned a backlog into an outage.
   live task; Apple M4 Max): standalone Pebble with fsync went from about
   840 ms to 11 ms. A replicator charging 2 ms per commit went from 1.6–2.0 s
   to 17 ms, and from 201 to 2 commits.
-- One Raft entry carries up to 256 retirements. A measured 200-row
+- One retirement batch carries up to 256 rows. A measured 200-row
   retirement replicates 117 KB (about 600 bytes per row), so the largest
-  entry is about 150 KB. The Raft apply loop already merges up to 32
-  submitter batches into one entry.
+  retirement batch is about 150 KB. The Raft apply loop merges up to 128
+  (`raftMergeBatch`) concurrent submitter batches into one entry. Retirement
+  commits run under `absoluteMu`, so one merged entry carries at most one
+  retirement batch: the worst case is about 150 KB of retirement plus up to
+  127 other submitters' batches, whose sizes this ADR does not change.
 - Expired hints stay in flight a little longer, until the claim's retirement
-  commit. Another claimer that pops a duplicate hint for the same ID drops
-  it, as it already did for any in-flight hint. The holder republishes it if
-  the row does not retire.
+  commit after its lease. Another claimer that pops a duplicate hint for the
+  same ID drops it, as it already did for any in-flight hint. The holder
+  republishes it if the row does not retire. A process that stops between
+  the lease and the retirement leaves the rows pending; they are recovered
+  as hints on restart and retired by the next claim or the sweep.
+- Review amendment (2026-11-06): the first cut retired the held rows before
+  the lease commit. On a slow leader the first live row, the closest to its
+  deadline, expired during that retirement and the claim failed with
+  `task_expired` (HTTP 400), ending the long poll. Leasing first, holding a
+  row that expires at lease time, rereading the count per flush, abandoning a
+  retirement across a leadership change, and skipping a row that fails to
+  stage close that gap. Tests: `claim_expiry_frontier_test.go`.
 - The keyspace after a batched retirement equals the per-row result. The
   tests compare it key by key against a verbatim copy of the v0.5.12
   functions, including restored rows, idempotency and dedupe mappings,
@@ -107,7 +140,8 @@ was slow and the per-row pattern turned a backlog into an outage.
 - `internal/repository/pebble/absolute_expiry.go` (`purgeAbsoluteRows`,
   `absoluteRetirement`, `sweepAbsolute`) and `task_repository.go` (`Claim`,
   `retireHeld`, `ClaimMany`, `moveDueDelayedForTenant`, `dropExpiredBodies`).
-- Tests: `internal/repository/pebble/claim_expired_batch_test.go`; benchmark
+- Tests: `internal/repository/pebble/claim_expired_batch_test.go`,
+  `claim_expiry_frontier_test.go`; benchmark
   `claim_expired_batch_bench_test.go`.
 - Installation notes: `code-cloud-deployment`
   `docs/code-logs-platform-sources.md` (2026-10-21, v0.5.7) already recorded

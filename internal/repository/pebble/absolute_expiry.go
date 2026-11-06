@@ -917,9 +917,10 @@ func (d *DB) stageCompletedRetirement(b *pebbledb.Batch, task *domain.Task) erro
 //
 // retired[i] reports that tasks[i] is gone (or was never there) and its hint
 // can be dropped. A row that is not expired stays and retired[i] is false.
-// Rows are staged in order and staging stops at the first error. Rows staged
-// before it still commit, as the per-row path had committed them, and the
-// error is returned. A failed commit leaves its rows unretired.
+// A row that fails to stage stays too: its staging ran in a scratch batch and
+// added nothing, and the rows after it still retire, so one bad row cannot
+// pin the backlog behind it. The first staging error is returned after the
+// commit. A failed commit leaves its rows unretired.
 func (d *DB) purgeAbsoluteRows(tasks []*domain.Task) ([]bool, error) {
 	retired := make([]bool, len(tasks))
 	if len(tasks) == 0 {
@@ -933,13 +934,20 @@ func (d *DB) purgeAbsoluteRows(tasks []*domain.Task) ([]bool, error) {
 	}
 	defer retire.close()
 	var stageErr error
+	failed := 0
 	for i, task := range tasks {
 		if _, err := retire.flushIfFull(); err != nil {
-			return retired, fmt.Errorf("retire absolute tasks: %w", err)
+			return retired, joinErrors(stageErr, fmt.Errorf("retire absolute tasks: %w", err))
 		}
-		if stageErr = retire.stageExpiredRow(task, &retired[i]); stageErr != nil {
-			break
+		if err := retire.stageExpiredRow(task, &retired[i]); err != nil {
+			failed++
+			if stageErr == nil {
+				stageErr = fmt.Errorf("retire absolute task %s: %w", task.ID, err)
+			}
 		}
+	}
+	if failed > 1 {
+		stageErr = fmt.Errorf("%d absolute rows failed to stage; first: %w", failed, stageErr)
 	}
 	if _, err := retire.commit(); err != nil {
 		return retired, joinErrors(stageErr, fmt.Errorf("retire absolute tasks: %w", err))
@@ -956,12 +964,19 @@ const absoluteRetireBatch = 256
 // absoluteRetirement stages several retirements into one Pebble batch and
 // replicates them in one commit. The caller holds absoluteMu from
 // newAbsoluteRetirement through the last commit. The identity count is read
-// once and carried across the staged rows, so every row adjusts the running
-// value instead of the stored one the batch is about to replace.
+// when the retirement starts and again after every commit, and carried
+// across the rows staged in between, so every row adjusts the running value
+// instead of the stored one the batch is about to replace.
+//
+// A retirement belongs to one leadership term. If this node lost and
+// regained leadership since it started, another leader may have written the
+// rows and the count it read, so the rest is abandoned unretired
+// (errAbsoluteRetirementTermChanged) and a later pass rereads them.
 type absoluteRetirement struct {
 	d       *DB
 	b       *pebbledb.Batch
 	scratch *pebbledb.Batch
+	epoch   uint64
 	count   int64
 	changed bool
 	ids     map[string]struct{}
@@ -970,12 +985,26 @@ type absoluteRetirement struct {
 	marks []*bool
 }
 
+// errAbsoluteRetirementTermChanged reports staged retirements abandoned
+// because leadership changed after they were read.
+var errAbsoluteRetirementTermChanged = errors.New("leadership changed during absolute retirement; remaining rows left for a later pass")
+
 func (d *DB) newAbsoluteRetirement() (*absoluteRetirement, error) {
+	epoch := d.leadershipEpoch()
 	count, err := d.absoluteCount()
 	if err != nil {
 		return nil, err
 	}
-	return &absoluteRetirement{d: d, b: d.Batch(), scratch: d.Batch(), count: count, ids: map[string]struct{}{}}, nil
+	return &absoluteRetirement{d: d, b: d.Batch(), scratch: d.Batch(), epoch: epoch, count: count, ids: map[string]struct{}{}}, nil
+}
+
+// leadershipEpoch is the replicator's count of transitions to leader, or 0
+// for standalone Pebble and replicators that do not report one.
+func (d *DB) leadershipEpoch() uint64 {
+	if src, ok := d.repl.(interface{ LeadershipEpoch() uint64 }); ok {
+		return src.LeadershipEpoch()
+	}
+	return 0
 }
 
 func (r *absoluteRetirement) close() {
@@ -1061,22 +1090,13 @@ func (r *absoluteRetirement) commit() (int, error) {
 	if len(r.ids) == 0 {
 		return 0, nil
 	}
-	if r.changed {
-		if err := r.b.Set([]byte(absoluteCountKey), []byte(strconv.FormatInt(r.count, 10)), nil); err != nil {
-			return 0, err
-		}
-	}
-	err := r.d.commitBatchRaw(r.b)
-	// Never reuse a batch whose bytes a replicator may still reference.
-	_ = r.b.Close()
-	r.b = r.d.Batch()
+	err := r.replicate()
 	ids, expired, marks := r.ids, r.expired, r.marks
 	r.ids, r.expired, r.changed, r.marks = map[string]struct{}{}, 0, false, nil
+	// The next rows adjust the stored count, which this commit (or another
+	// leader's write, after a failure) may have changed; reread it.
+	countErr := r.rereadCount()
 	if err != nil {
-		// The stored count is unknown after a failed write; reread it.
-		if count, cerr := r.d.absoluteCount(); cerr == nil {
-			r.count = count
-		}
 		return 0, err
 	}
 	for _, mark := range marks {
@@ -1087,7 +1107,35 @@ func (r *absoluteRetirement) commit() (int, error) {
 	}
 	r.d.observeAbsoluteCount()
 	metrics.AbsoluteExpiredPurged.Add(float64(expired))
-	return expired, nil
+	return expired, countErr
+}
+
+// replicate commits the staged rows, with the running count when it changed,
+// within the leadership term the retirement started in, and starts a fresh
+// batch: a batch whose bytes a replicator may still reference is never reused.
+func (r *absoluteRetirement) replicate() error {
+	var err error
+	if r.changed {
+		err = r.b.Set([]byte(absoluteCountKey), []byte(strconv.FormatInt(r.count, 10)), nil)
+	}
+	if err == nil {
+		if r.d.leadershipEpoch() == r.epoch {
+			err = r.d.commitBatchRaw(r.b)
+		} else if err = r.d.RequireWriteLeader(); err == nil {
+			err = errAbsoluteRetirementTermChanged
+		}
+	}
+	_ = r.b.Close()
+	r.b = r.d.Batch()
+	return err
+}
+
+func (r *absoluteRetirement) rereadCount() error {
+	count, err := r.d.absoluteCount()
+	if err == nil {
+		r.count = count
+	}
+	return err
 }
 
 // joinErrors is errors.Join that returns a single non-nil error unwrapped, so
