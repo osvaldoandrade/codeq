@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/osvaldoandrade/codeq/internal/authclaims"
@@ -14,7 +15,8 @@ import (
 func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
-		if claims, ok := validateWith(workerValidator, header); ok {
+		claims, workerErr := validateWith(workerValidator, header)
+		if workerErr == nil && claims != nil {
 			if claims.HasScope(topicManageScope) {
 				c.AbortWithStatus(http.StatusForbidden)
 				return
@@ -27,7 +29,8 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 			}
 		}
 
-		if claims, ok := validateWith(producerValidator, header); ok {
+		claims, producerErr := validateWith(producerValidator, header)
+		if producerErr == nil && claims != nil {
 			if claims.HasScope(topicManageScope) {
 				c.AbortWithStatus(http.StatusForbidden)
 				return
@@ -36,17 +39,25 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 			return
 		}
 
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		// Unavailability of either validator is 503, never a refusal.
+		abortAuthFailure(c, auth.PreferUnavailable(workerErr, producerErr))
 	}
 }
 
-func validateWith(validator auth.Validator, header string) (*auth.Claims, bool) {
+// validateWith returns errNoValidator for an absent validator so a nil
+// validator never reads as an acceptance.
+func validateWith(validator auth.Validator, header string) (*auth.Claims, error) {
 	if validator == nil {
-		return nil, false
+		return nil, errNoValidator
 	}
 	claims, err := validateBearer(validator, header)
-	return claims, err == nil && claims != nil
+	if err == nil && claims == nil {
+		return nil, errNoValidator
+	}
+	return claims, err
 }
+
+var errNoValidator = errors.New("validator not configured")
 
 func anyAuthWorker(c *gin.Context, claims *auth.Claims) {
 	if !authorizeBindingScope(c, claims) {

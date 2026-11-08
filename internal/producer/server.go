@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/osvaldoandrade/codeq/internal/authclaims"
+	"github.com/osvaldoandrade/codeq/internal/authstatus"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/producer/producerpb"
 	"github.com/osvaldoandrade/codeq/internal/services"
@@ -190,7 +191,7 @@ func (s *Server) handleHello(stream producerpb.ProducerStream_StreamServer) (*st
 	}
 	claims, err := s.Validator.Validate(token)
 	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "auth failed: %v", err)
+		return nil, authstatus.Stream(err)
 	}
 	// Binding-scoped tokens are HTTP-only: the stream has no per-command or
 	// webhook authorization (platform ADR-0022 C1.2).

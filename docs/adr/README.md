@@ -65,3 +65,4 @@ Proposed → Accepted → (Superseded by NNNN | Deprecated)
 | [0011](0011-per-voter-raft-advertise-address.md) | Every Raft voter advertises its own peer address | Accepted |
 | [0012](0012-acknowledged-absolute-tasks-leave-nothing.md) | An acknowledged absolute task leaves nothing behind | Accepted |
 | [0013](0013-retire-expired-absolute-rows-in-batches.md) | Retire expired absolute rows in batches | Proposed |
+| [0014](0014-jwks-key-set-cache.md) | Cache the JWKS key set, bound its staleness and answer 503 when it is unusable | Proposed |

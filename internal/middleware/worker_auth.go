@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/osvaldoandrade/codeq/internal/authclaims"
@@ -39,7 +38,7 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 			err = validateWorkerShape(claims)
 		}
 		if err != nil {
-			promoted, status := promoteProducerToWorker(c, header, producerValidator, cfg)
+			promoted, status, promotionErr := promoteProducerToWorker(c, header, producerValidator, cfg)
 			switch status {
 			case http.StatusOK:
 				claims = promoted
@@ -47,7 +46,9 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 				c.AbortWithStatus(http.StatusForbidden)
 				return
 			default:
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				// An unavailable validator is 503 (ADR 0014); refusals keep
+				// the worker validator's fixed message.
+				abortAuthFailure(c, auth.PreferUnavailable(err, promotionErr))
 				return
 			}
 		}
@@ -69,10 +70,10 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 
 func validateWorkerShape(claims *auth.Claims) error {
 	if len(claims.EventTypes) == 0 {
-		return errors.New("missing eventTypes")
+		return errMissingEventTypes
 	}
 	if len(claims.Scopes) == 0 {
-		return errors.New("missing scope")
+		return errMissingScope
 	}
 	return nil
 }
@@ -80,23 +81,24 @@ func validateWorkerShape(claims *auth.Claims) error {
 // promoteProducerToWorker implements the ALLOW_PRODUCER_AS_WORKER
 // compatibility mode. It returns http.StatusOK with promoted claims,
 // http.StatusForbidden for a topic-controller token, or
-// http.StatusUnauthorized when promotion is unavailable. Binding-scoped
-// tokens and any token carrying codeq:publish are never promoted
-// (platform ADR-0022 C1.1).
-func promoteProducerToWorker(c *gin.Context, header string, producerValidator auth.Validator, cfg *config.Config) (*auth.Claims, int) {
+// http.StatusUnauthorized when promotion is unavailable, together with the
+// producer validator's error (nil when promotion was not attempted).
+// Binding-scoped tokens and any token carrying codeq:publish are never
+// promoted (platform ADR-0022 C1.1).
+func promoteProducerToWorker(c *gin.Context, header string, producerValidator auth.Validator, cfg *config.Config) (*auth.Claims, int, error) {
 	if cfg == nil || !cfg.AllowProducerAsWorker || producerValidator == nil {
-		return nil, http.StatusUnauthorized
+		return nil, http.StatusUnauthorized, nil
 	}
 	pclaims, err := validateBearer(producerValidator, header)
 	if err != nil {
-		return nil, http.StatusUnauthorized
+		return nil, http.StatusUnauthorized, err
 	}
 	if pclaims.HasScope(topicManageScope) {
-		return nil, http.StatusForbidden
+		return nil, http.StatusForbidden, nil
 	}
 	if authclaims.RequiresBindingScope(pclaims) {
 		RecordBindingDenial("producer_promotion", routeLabel(c))
-		return nil, http.StatusUnauthorized
+		return nil, http.StatusUnauthorized, nil
 	}
 	return &auth.Claims{
 		Subject:    pclaims.Subject,
@@ -108,7 +110,7 @@ func promoteProducerToWorker(c *gin.Context, header string, producerValidator au
 		Scopes:     append([]string(nil), promotedWorkerScopes...),
 		EventTypes: []string{"*"},
 		Raw:        pclaims.Raw,
-	}, http.StatusOK
+	}, http.StatusOK, nil
 }
 
 func GetWorkerClaims(c *gin.Context) (*auth.Claims, bool) {

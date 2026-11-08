@@ -1,8 +1,10 @@
 package middleware
 
 import (
-	"fmt"
+	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/osvaldoandrade/codeq/internal/authclaims"
@@ -24,7 +26,7 @@ func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFun
 	return func(c *gin.Context) {
 		claims, err := validateBearer(validator, c.GetHeader("Authorization"))
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			abortAuthFailure(c, err)
 			return
 		}
 		if !authorizeBindingScope(c, claims) {
@@ -44,15 +46,51 @@ func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFun
 	}
 }
 
+// Fixed authentication failure messages. Only these sentinels are echoed in
+// a 401 body; every other validator error becomes msgInvalidToken so the body
+// never carries verifier internals (JWKS URL, dial errors, issuer values).
+var (
+	errMissingAuthorization = errors.New("missing Authorization header")
+	errInvalidAuthorization = errors.New("invalid Authorization format")
+	errMissingEventTypes    = errors.New("missing eventTypes")
+	errMissingScope         = errors.New("missing scope")
+)
+
+const (
+	msgInvalidToken    = "invalid token"
+	msgAuthUnavailable = "authentication temporarily unavailable"
+)
+
 func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, error) {
 	if strings.TrimSpace(authHeader) == "" {
-		return nil, fmt.Errorf("missing Authorization header")
+		return nil, errMissingAuthorization
 	}
 	parts := strings.SplitN(authHeader, " ", 2)
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-		return nil, fmt.Errorf("invalid Authorization format")
+		return nil, errInvalidAuthorization
 	}
 	return validator.Validate(parts[1])
+}
+
+// abortAuthFailure answers 503 with Retry-After when the token could not be
+// evaluated (no usable key set, ADR 0014) and 401 with a fixed body when it
+// was refused. Neither path accepts the request.
+func abortAuthFailure(c *gin.Context, err error) {
+	if retry, ok := auth.RetryAfter(err); ok {
+		c.Header("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{tenantClaimsErrorKey: msgAuthUnavailable})
+		return
+	}
+	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{tenantClaimsErrorKey: publicAuthMessage(err)})
+}
+
+func publicAuthMessage(err error) string {
+	for _, fixed := range []error{errMissingAuthorization, errInvalidAuthorization, errMissingEventTypes, errMissingScope} {
+		if errors.Is(err, fixed) {
+			return fixed.Error()
+		}
+	}
+	return msgInvalidToken
 }
 
 func setProducerContext(c *gin.Context, cfg *config.Config, claims *auth.Claims, tenantID string) {

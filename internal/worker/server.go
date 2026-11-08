@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osvaldoandrade/codeq/internal/authclaims"
+	"github.com/osvaldoandrade/codeq/internal/authstatus"
 	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/internal/safeint"
 	"github.com/osvaldoandrade/codeq/internal/services"
@@ -254,7 +255,7 @@ func (s *Server) handleHello(stream workerpb.WorkerStream_StreamServer) (*stream
 		return nil, status.Error(codes.PermissionDenied, authclaims.ErrStreamNotAllowed.Error())
 	}
 	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "auth failed: %v", err)
+		return nil, authstatus.Stream(err)
 	}
 	workerID := strings.TrimSpace(hello.Hello.WorkerId)
 	if workerID == "" {
@@ -543,23 +544,25 @@ func (s *Server) authenticate(token string) (*auth.Claims, error) {
 			// Never promote a binding-scoped or codeq:publish token.
 			return nil, authclaims.ErrStreamNotAllowed
 		}
-		if perr == nil {
-			raw := pclaims.Raw
-			if raw == nil {
-				raw = map[string]any{}
-			}
-			return &auth.Claims{
-				Subject:    pclaims.Subject,
-				Email:      pclaims.Email,
-				Issuer:     "producer",
-				Audience:   []string{s.WorkerAudience},
-				ExpiresAt:  pclaims.ExpiresAt,
-				IssuedAt:   pclaims.IssuedAt,
-				Scopes:     []string{"codeq:claim", "codeq:heartbeat", "codeq:abandon", "codeq:nack", "codeq:result", "codeq:subscribe"},
-				EventTypes: []string{"*"},
-				Raw:        raw,
-			}, nil
+		if perr != nil {
+			// Unavailability of either validator is Unavailable (ADR 0014).
+			return nil, auth.PreferUnavailable(err, perr)
 		}
+		raw := pclaims.Raw
+		if raw == nil {
+			raw = map[string]any{}
+		}
+		return &auth.Claims{
+			Subject:    pclaims.Subject,
+			Email:      pclaims.Email,
+			Issuer:     "producer",
+			Audience:   []string{s.WorkerAudience},
+			ExpiresAt:  pclaims.ExpiresAt,
+			IssuedAt:   pclaims.IssuedAt,
+			Scopes:     []string{"codeq:claim", "codeq:heartbeat", "codeq:abandon", "codeq:nack", "codeq:result", "codeq:subscribe"},
+			EventTypes: []string{"*"},
+			Raw:        raw,
+		}, nil
 	}
 
 	return nil, err
