@@ -29,7 +29,7 @@ var (
 	JWKSKeySetDecisions = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Name:      "jwks_key_set_decisions_total",
-		Help:      "Token key lookups by key-set state (fresh, stale, unavailable).",
+		Help:      "Token key lookups by key-set state (fresh, stale, unavailable, kid_not_yet_known, canceled).",
 	}, []string{"state"})
 
 	JWKSKeySetAgeSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{

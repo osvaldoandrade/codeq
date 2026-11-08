@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -15,7 +16,7 @@ import (
 func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
-		claims, workerErr := validateWith(workerValidator, header)
+		claims, workerErr := validateWith(c.Request.Context(), workerValidator, header)
 		if workerErr == nil && claims != nil {
 			if claims.HasScope(topicManageScope) {
 				c.AbortWithStatus(http.StatusForbidden)
@@ -29,7 +30,7 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 			}
 		}
 
-		claims, producerErr := validateWith(producerValidator, header)
+		claims, producerErr := validateWith(c.Request.Context(), producerValidator, header)
 		if producerErr == nil && claims != nil {
 			if claims.HasScope(topicManageScope) {
 				c.AbortWithStatus(http.StatusForbidden)
@@ -46,11 +47,11 @@ func AnyAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg *c
 
 // validateWith returns errNoValidator for an absent validator so a nil
 // validator never reads as an acceptance.
-func validateWith(validator auth.Validator, header string) (*auth.Claims, error) {
+func validateWith(ctx context.Context, validator auth.Validator, header string) (*auth.Claims, error) {
 	if validator == nil {
 		return nil, errNoValidator
 	}
-	claims, err := validateBearer(validator, header)
+	claims, err := validateBearer(ctx, validator, header)
 	if err == nil && claims == nil {
 		return nil, errNoValidator
 	}

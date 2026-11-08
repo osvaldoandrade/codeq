@@ -27,7 +27,7 @@ func WorkerAuthMiddleware(workerValidator, producerValidator auth.Validator, cfg
 
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
-		claims, err := validateBearer(workerValidator, header)
+		claims, err := validateBearer(c.Request.Context(), workerValidator, header)
 		if err == nil && claims.HasScope(topicManageScope) {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
@@ -89,7 +89,7 @@ func promoteProducerToWorker(c *gin.Context, header string, producerValidator au
 	if cfg == nil || !cfg.AllowProducerAsWorker || producerValidator == nil {
 		return nil, http.StatusUnauthorized, nil
 	}
-	pclaims, err := validateBearer(producerValidator, header)
+	pclaims, err := validateBearer(c.Request.Context(), producerValidator, header)
 	if err != nil {
 		return nil, http.StatusUnauthorized, err
 	}

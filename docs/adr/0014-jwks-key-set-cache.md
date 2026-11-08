@@ -8,6 +8,11 @@
   tokens; `exp` with zero leeway, 360 s revocation bound), ADR 0010
   (`Retry-After` on bounded refusals), platform ADR-0022 C1.4/C1.5
 - **Ships in**: the CodeQ release after v0.5.13
+- **Revised**: 2026-11-08 after the independent security review (conditional
+  GO): an idle validator no longer trusts a set older than 6 min without
+  trying a refresh (F1); an unknown `kid` on a token issued after the fetch is
+  503 instead of 401 (F2); redirects stay on the configured origin (F3);
+  waits honour the request context (F4).
 
 ## Context
 
@@ -55,26 +60,66 @@ usable keys of the last successful fetch and its fetch time.
   (`clockSkew` is still accepted in the config and still does not extend
   them, preserving ADR 0003's bound).
 - **Refresh.** At most one refresh runs at a time; concurrent callers that need
-  it wait for that one (singleflight, bounded by the HTTP timeout, default 5 s,
-  capped at 10 s). A new attempt of **any** cause — cold start, unknown `kid`,
-  retry after failure, refresh-ahead — starts only when **30 s**
-  (`minRefreshInterval`) have passed since the previous attempt started. A set
-  older than **5 min** (`refreshInterval`, Tikti's `Cache-Control: max-age=300`)
-  is refreshed in the background by the next request, which does not wait and
-  is answered from the current set.
-- **Negative cache.** Every `kid` absent from the current set is refused (401)
-  without a fetch until the next attempt is permitted. A per-`kid` table would
-  add nothing: random `kid`s defeat it, and the global interval already bounds
-  fetches to one per 30 s per validator.
+  it wait for that one (singleflight). A wait ends at the HTTP timeout
+  (default 5 s, capped at 10 s) or when the caller's request context ends,
+  whichever is first; an abandoned wait answers 503 and never accepts, and the
+  shared refresh continues for the other waiters. A new attempt of **any**
+  cause — cold start, unknown `kid`, retry after failure, refresh-ahead —
+  starts only when **30 s** (`minRefreshInterval`) have passed since the
+  previous attempt started. Redirects are followed at most 3 times and only
+  within the configured origin (scheme, host and port); any other redirect
+  fails the refresh (`fetch_error`).
+- **Freshness.** By key-set age (time since its successful fetch), for a
+  token whose `kid` is in the set:
+  - **< 5 min** (`refreshInterval`, Tikti's `Cache-Control: max-age=300`):
+    verified from the set.
+  - **5–6 min** (`refreshInterval` + `refreshGrace` of 60 s): verified from the
+    set; the request starts a background refresh and does not wait.
+  - **≥ 6 min:** the request waits for a refresh (it starts one, or joins the
+    one in flight) and is decided on its result: after a successful refresh
+    only the new set counts, so a `kid` it no longer lists is refused (401). The
+    old set is used only when that refresh failed, or when an attempt made
+    within the last 30 s failed (then the request does not wait), and only up
+    to the staleness bound below. This is what keeps an idle validator — e.g.
+    the worker validator, used only on gRPC `Hello` — from trusting a set Tikti
+    could have replaced.
+- **Negative cache.** A `kid` absent from the current set gets no fetch until
+  the next attempt is permitted. A per-`kid` table would add nothing: random
+  `kid`s defeat it, and the global interval already bounds fetches to one per
+  30 s per validator. Its answer is 401, except for a token whose
+  **unverified** `iat` is no earlier than the set's fetch time minus 5 s and
+  no later than now plus 5 s: such a token may be signed by a key Tikti
+  published after the fetch (Tikti publishes only its current key and does
+  not pre-publish the next, `repos/tikti/internal/utils/jwks.go`), so it gets
+  **503 + `Retry-After`** (until the next permitted attempt, ≤ 30 s) and the
+  retry is decided by that refresh. The `iat` only chooses between two
+  refusals: it is read after the refresh-or-skip decision, so it never starts a
+  fetch and never contributes to an acceptance; a forged `iat` earns a 503
+  instead of a 401, and once a later refresh succeeds the same token is 401.
 - **Bounded staleness.** While refreshes fail, the last good set keeps
-  verifying for at most **15 min after its fetch** (`maxKeySetAge`).
+  verifying for at most **15 min after its fetch** (`maxKeySetAge`). Exact
+  bounds for a key Tikti removed:
+  - **Tikti answering** (every refresh attempt succeeds): the key verifies
+    only with a set younger than 6 min, so for **less than 6 min after the
+    last fetch that still listed it** — whether the validator is busy or idle.
+    (v0.5.13: about 5 min, but only by refetching on the request path.)
+  - **Tikti unreachable or failing**: until the first successful refresh, at
+    most **15 min after that fetch**; from 15 min on every token is 503 until
+    a refresh succeeds. As soon as one refresh succeeds the removal applies.
+  - **Latency cost**: past 6 min, a request that starts or joins a refresh
+    waits for it, at most the HTTP timeout (5 s default) or its own deadline;
+    during an outage this happens to the requests that coincide with the one
+    permitted attempt per 30 s. Below 6 min, or with a known-failed attempt in
+    the last 30 s, a known `kid` never waits.
 - **Outcomes.** A token that was evaluated and refused wraps
   `auth.ErrInvalidToken` → **401** with the fixed body `invalid token` (gRPC
   `Unauthenticated`, `invalid token`): bad signature, unknown `kid` after a
-  successful refresh, wrong issuer/audience, expired, missing `exp`,
-  disallowed algorithm, malformed. A token that **could not be evaluated** —
-  no set yet, the set is older than the bound, or an unknown `kid` while the
-  latest refresh failed — returns `*auth.UnavailableError` → **503** with
+  successful refresh (except the `iat` case above), wrong issuer/audience,
+  expired, missing `exp`, disallowed algorithm, malformed. A token that
+  **could not be evaluated** — no set yet, the set is older than the bound, an
+  unknown `kid` while the latest refresh failed, an unknown `kid` possibly
+  newer than the set, or a wait abandoned because the request context ended —
+  returns `*auth.UnavailableError` → **503** with
   `Retry-After` (seconds until the next permitted attempt, 1–30; the HTTP
   timeout while one is in flight) and the fixed body `authentication
   temporarily unavailable` (gRPC `Unavailable`). Middleware that tries
@@ -87,38 +132,49 @@ usable keys of the last successful fetch and its fetch time.
   fetch_timeout|fetch_error|http_status|too_large|invalid_document|
   duplicate_kid}`, `codeq_jwks_refresh_skipped_total{trigger=unknown_kid|
   refresh_ahead}`, `codeq_jwks_key_set_decisions_total{state=fresh|stale|
-  unavailable}`, histogram `codeq_jwks_key_set_age_seconds`. Logs: one `WARN
+  unavailable|kid_not_yet_known|canceled}` (`kid_not_yet_known` is the `iat`
+  503 above and is attacker-reachable, so it is kept out of `unavailable`;
+  `canceled` is an abandoned wait), histogram
+  `codeq_jwks_key_set_age_seconds`. Logs: one `WARN
   jwks refresh failed` per failed attempt (outcome, key-set age, bound,
   whether a usable set remains), `INFO jwks key set updated` only on first
   load or a `kid` change (counts only), `WARN jwks key set has no usable
   keys`.
 
 New code: `pkg/auth/errors.go` (`ErrInvalidToken`, `ErrUnavailable`,
-`UnavailableError`, `RetryAfter`, `PreferUnavailable`),
-`pkg/auth/jwks/{validator,metrics}.go`, `internal/authstatus` (gRPC mapping),
-and the HTTP mapping in `internal/middleware/auth.go`.
+`UnavailableError`, `RetryAfter`, `PreferUnavailable`), `pkg/auth/interface.go`
+(additive `ContextValidator` and `ValidateContext(ctx, v, token)`; validators
+without it are called as before), `pkg/auth/jwks/{validator,observer}.go`,
+`internal/authstatus` (gRPC mapping), and the HTTP mapping in
+`internal/middleware/auth.go`. HTTP middleware passes the request context and
+the producer and worker gRPC streams pass the stream context; `multi` passes
+it to its children.
 
 ## Why 15 minutes, and why it is safe
 
-- **Long enough.** With the 5-minute refresh-ahead and 30 s retries, a set is
-  at most ~5.5 min old when an outage starts. A single Tikti stall (10–60 s)
-  never reaches the bound; a 15-minute bound rides through roughly 9–10
+- **Long enough.** With refreshes starting from 5 min and 30 s retries, a busy
+  validator's set is at most ~5.5 min old when an outage starts (an idle one
+  is refreshed by its first request past 6 min). A single Tikti stall (10–60
+  s) never reaches the bound; a 15-minute bound rides through roughly 9–10
   minutes of *continuous* Tikti unavailability (for example a Tikti Pod
-  reschedule) with no client-visible effect for already-issued tokens.
+  reschedule) with no client-visible refusal for already-issued tokens (only
+  the bounded waits above).
 - **Short enough.** It is three times the freshness Tikti itself advertises
   (`max-age=300`) and the same order as the token lifetimes involved (Logs
   binding tokens ≤ 300 s). Past it, CodeQ stops trusting keys it cannot
   re-confirm and answers 503 rather than accept.
 - **Fail-closed is preserved.** The bound never admits a key that was not in a
   successfully fetched set. Staleness only lengthens how long a key **removed
-  upstream** keeps working, and only while CodeQ cannot reach Tikti: as soon
-  as one refresh succeeds the removal takes effect at once. Under normal
-  operation removal takes effect within ~5.5 min, which is better than before
-  (removed keys could stay cached indefinitely). Attackers cannot extend the
-  window — unknown-`kid` traffic never replaces or ages a good set, and a
-  failed or ambiguous refresh never shrinks it. Signature, issuer, audience,
-  `exp` and tenant checks are unchanged or stricter; 503 is never an
-  acceptance.
+  upstream** keeps working beyond the normal < 6 min, and only while CodeQ
+  cannot reach Tikti: as soon as one refresh succeeds the removal takes effect
+  at once. Under normal operation removal takes effect less than 6 min after
+  the last fetch that listed the key, busy or idle (v0.5.13: ~5 min, but keys
+  shared one timestamp, so a removed key could stay cached as long as other
+  fetches kept it fresh). Attackers cannot extend the window — unknown-`kid`
+  traffic never replaces or ages a good set, a failed or ambiguous refresh
+  never shrinks it, and a forged `iat` changes only 401 into 503. Signature,
+  issuer, audience, `exp` and tenant checks are unchanged or stricter; 503 is
+  never an acceptance.
 - **Residual.** To revoke a compromised Tikti key during a Tikti/CodeQ network
   partition faster than 15 min, restart the CodeQ voters (the cache is
   in-memory; a cold validator answers 503 until it fetches the new set).
@@ -128,8 +184,17 @@ and the HTTP mapping in `internal/middleware/auth.go`.
 - Tikti receives at most one JWKS request per 30 s per validator (two
   validators — producer and worker — per voter) under any traffic, plus the
   5-minute refresh-ahead; previously unbounded.
-- Valid tokens keep working through Tikti stalls; validation never waits for
-  Tikti while a usable set exists and the token's `kid` is known.
+- Valid tokens keep working through Tikti stalls. Validation of a known `kid`
+  never waits while the set is younger than 6 min; past that it waits at most
+  the HTTP timeout (or its own deadline) for one refresh, and during an outage
+  only requests that coincide with the one attempt per 30 s wait.
+- **Key rotation.** Tikti publishes only its current key, so tokens signed by
+  a new key can reach a validator that fetched before the rotation. If no
+  attempt was made in the last 30 s, the request refreshes and is accepted. If
+  one was, it gets 503 + `Retry-After` ≤ 30 s (its `iat` postdates the fetch)
+  and the retry is accepted; only a Tikti clock more than 5 s behind CodeQ can
+  still turn this into a 401 for up to 30 s. Clients must retry 503 (the Logs
+  runtime collectors do). No rotation procedure is needed beyond that.
 - Clients see a new **503 + `Retry-After`** on authentication. CodeQ already
   answers 503 + `Retry-After` for leader forwarding (`leader_unavailable`).
   The Logs runtime (`code-admin-logs-runtime` `internal/httpapi/server.go`
@@ -180,8 +245,15 @@ and the HTTP mapping in `internal/middleware/auth.go`.
 
 ## References
 
-- `pkg/auth/jwks/cache_test.go`, `internal/middleware/auth_failure_test.go`,
-  `internal/authstatus/status_test.go`, `pkg/auth/errors_test.go`.
+- `pkg/auth/jwks/cache_test.go`, `pkg/auth/jwks/freshness_test.go` (review
+  regressions: `TestIdleValidatorRefusesRemovedKeyPastGrace`,
+  `TestPastGraceStaleSetOnlyAfterFailedRefresh`,
+  `TestUnknownKidIssuedAfterFetchIsRetryable`,
+  `TestWaiterHonorsRequestContext`,
+  `TestJWKSRedirectsStayOnTheConfiguredOrigin`),
+  `internal/middleware/auth_failure_test.go`,
+  `internal/authstatus/status_test.go`, `pkg/auth/errors_test.go`,
+  `pkg/auth/interface_test.go`.
 - `docs/security/tenant-claim-threat-model.md` (JWKS amplification, stale-key
   residual, error disclosure rows).
 - Tikti `internal/workloadidentity/jwks_verifier.go` (same 1 MiB, 2048-bit and

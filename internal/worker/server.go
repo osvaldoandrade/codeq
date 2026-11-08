@@ -249,7 +249,7 @@ func (s *Server) handleHello(stream workerpb.WorkerStream_StreamServer) (*stream
 	if s.Validator == nil {
 		return nil, status.Errorf(codes.Internal, "no worker validator configured")
 	}
-	claims, err := s.authenticate(hello.Hello.Token)
+	claims, err := s.authenticate(stream.Context(), hello.Hello.Token)
 	if errors.Is(err, authclaims.ErrStreamNotAllowed) {
 		metrics.BindingScopeDeniedTotal.WithLabelValues(authclaims.ErrStreamNotAllowed.Error(), "grpc_worker_stream").Inc()
 		return nil, status.Error(codes.PermissionDenied, authclaims.ErrStreamNotAllowed.Error())
@@ -519,13 +519,13 @@ func (s *Server) handleAbandon(ctx context.Context, sess *streamSession, req *wo
 	}})
 }
 
-func (s *Server) authenticate(token string) (*auth.Claims, error) {
+func (s *Server) authenticate(ctx context.Context, token string) (*auth.Claims, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, errors.New("missing token")
 	}
 
-	claims, err := s.Validator.Validate(token)
+	claims, err := auth.ValidateContext(ctx, s.Validator, token)
 	// Binding-scoped tokens are HTTP-only (platform ADR-0022 C1.2).
 	if err == nil && authclaims.RequiresBindingScope(claims) {
 		return nil, authclaims.ErrStreamNotAllowed
@@ -539,33 +539,39 @@ func (s *Server) authenticate(token string) (*auth.Claims, error) {
 	}
 
 	if s.AllowProducerAsWorker && s.ProducerValidator != nil {
-		pclaims, perr := s.ProducerValidator.Validate(token)
-		if perr == nil && authclaims.RequiresBindingScope(pclaims) {
-			// Never promote a binding-scoped or codeq:publish token.
-			return nil, authclaims.ErrStreamNotAllowed
-		}
-		if perr != nil {
-			// Unavailability of either validator is Unavailable (ADR 0014).
-			return nil, auth.PreferUnavailable(err, perr)
-		}
-		raw := pclaims.Raw
-		if raw == nil {
-			raw = map[string]any{}
-		}
-		return &auth.Claims{
-			Subject:    pclaims.Subject,
-			Email:      pclaims.Email,
-			Issuer:     "producer",
-			Audience:   []string{s.WorkerAudience},
-			ExpiresAt:  pclaims.ExpiresAt,
-			IssuedAt:   pclaims.IssuedAt,
-			Scopes:     []string{"codeq:claim", "codeq:heartbeat", "codeq:abandon", "codeq:nack", "codeq:result", "codeq:subscribe"},
-			EventTypes: []string{"*"},
-			Raw:        raw,
-		}, nil
+		return s.promoteProducer(ctx, token, err)
 	}
 
 	return nil, err
+}
+
+// promoteProducer implements ALLOW_PRODUCER_AS_WORKER for a token the worker
+// validator did not accept (workerErr).
+func (s *Server) promoteProducer(ctx context.Context, token string, workerErr error) (*auth.Claims, error) {
+	pclaims, perr := auth.ValidateContext(ctx, s.ProducerValidator, token)
+	if perr == nil && authclaims.RequiresBindingScope(pclaims) {
+		// Never promote a binding-scoped or codeq:publish token.
+		return nil, authclaims.ErrStreamNotAllowed
+	}
+	if perr != nil {
+		// Unavailability of either validator is Unavailable (ADR 0014).
+		return nil, auth.PreferUnavailable(workerErr, perr)
+	}
+	raw := pclaims.Raw
+	if raw == nil {
+		raw = map[string]any{}
+	}
+	return &auth.Claims{
+		Subject:    pclaims.Subject,
+		Email:      pclaims.Email,
+		Issuer:     "producer",
+		Audience:   []string{s.WorkerAudience},
+		ExpiresAt:  pclaims.ExpiresAt,
+		IssuedAt:   pclaims.IssuedAt,
+		Scopes:     []string{"codeq:claim", "codeq:heartbeat", "codeq:abandon", "codeq:nack", "codeq:result", "codeq:subscribe"},
+		EventTypes: []string{"*"},
+		Raw:        raw,
+	}, nil
 }
 
 func validateWorkerClaims(claims *auth.Claims) error {

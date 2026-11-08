@@ -187,12 +187,19 @@ func newHarness(t *testing.T) *testHarness {
 	return &testHarness{v: v, clock: clock, jwks: fixture, logs: logs}
 }
 
-// token signs a valid token for kid whose exp follows the fake clock.
+// token signs a valid token for kid, issued an hour before the fake clock
+// (before any key-set fetch of a test), whose exp follows the fake clock.
 func (h *testHarness) token(t *testing.T, key *rsa.PrivateKey, kid string) string {
+	t.Helper()
+	return h.tokenIssuedAt(t, key, kid, h.clock.Now().Add(-time.Hour))
+}
+
+// tokenIssuedAt signs a valid token for kid with the given iat.
+func (h *testHarness) tokenIssuedAt(t *testing.T, key *rsa.PrivateKey, kid string, iat time.Time) string {
 	t.Helper()
 	now := h.clock.Now().Unix()
 	return signToken(t, key, kid, map[string]any{
-		claimIss: testIssuer, claimAud: testAudience, claimSub: "svc", claimExp: now + 3600, claimIat: now,
+		claimIss: testIssuer, claimAud: testAudience, claimSub: "svc", claimExp: now + 3600, claimIat: iat.Unix(),
 	})
 }
 
@@ -377,8 +384,19 @@ func TestRotationAcceptsNewKidAndDropsRemovedKid(t *testing.T) {
 	}
 
 	h.jwks.set(serveKeys, jwkFor("k2", &keys[1].PublicKey))
-	// Inside the interval the new kid is negatively cached.
+	// Inside the interval the new kid is negatively cached. A token issued
+	// before the set was fetched is refused; one issued after it may carry a
+	// key published since (Tikti does not pre-publish), so it is answered
+	// 503 + Retry-After until the next permitted refresh, never accepted.
 	requireInvalid(t, mustErr(h.v.Validate(h.token(t, keys[1], "k2"))))
+	h.clock.Advance(time.Second)
+	retry := requireUnavailable(t, mustErr(h.v.Validate(h.tokenIssuedAt(t, keys[1], "k2", h.clock.Now()))))
+	if retry < time.Second || retry > h.v.minRefreshInterval {
+		t.Fatalf("Retry-After %v outside [1s, %v]", retry, h.v.minRefreshInterval)
+	}
+	if got := h.jwks.fetches.Load(); got != 1 {
+		t.Fatalf("unknown kids inside the interval fetched %d times, want 1", got)
+	}
 	h.clock.Advance(h.v.minRefreshInterval)
 	if _, err := h.v.Validate(h.token(t, keys[1], "k2")); err != nil {
 		t.Fatalf("rotated key rejected after refresh: %v", err)
@@ -592,16 +610,30 @@ func TestParseRSAPublicKeyBounds(t *testing.T) {
 }
 
 func TestRefuseUnsafeRedirect(t *testing.T) {
-	https := &http.Request{URL: mustURL(t, "https://idp.example/jwks")}
-	http1 := &http.Request{URL: mustURL(t, "http://idp.example/jwks")}
-	if err := refuseUnsafeRedirect(http1, []*http.Request{https}); err == nil {
-		t.Fatal("HTTPS to HTTP redirect allowed")
+	req := func(raw string) *http.Request { return &http.Request{URL: mustURL(t, raw)} }
+	origin := req("https://idp.example/jwks")
+	for _, target := range []string{"https://idp.example/keys", "https://IDP.example/jwks?v=2"} {
+		if err := refuseUnsafeRedirect(req(target), []*http.Request{origin}); err != nil {
+			t.Fatalf("same-origin redirect to %s refused: %v", target, err)
+		}
 	}
-	if err := refuseUnsafeRedirect(https, []*http.Request{https, https, https}); err == nil {
+	for _, target := range []string{
+		"http://idp.example/jwks",        // scheme downgrade
+		"https://idp.example:8443/jwks",  // other port
+		"https://evil.example/jwks",      // other host
+		"https://idp.example.evil/jwks",  // suffix confusion
+		"https://user@evil.example/jwks", // userinfo does not change the host check
+	} {
+		if err := refuseUnsafeRedirect(req(target), []*http.Request{origin}); err == nil {
+			t.Fatalf("cross-origin redirect to %s allowed", target)
+		}
+	}
+	plain := req("http://idp.example/jwks")
+	if err := refuseUnsafeRedirect(req("https://idp.example/jwks"), []*http.Request{plain}); err == nil {
+		t.Fatal("scheme change allowed (the origin is scheme, host and port)")
+	}
+	if err := refuseUnsafeRedirect(req("https://idp.example/4"), []*http.Request{origin, origin, origin}); err == nil {
 		t.Fatal("redirect chain not bounded")
-	}
-	if err := refuseUnsafeRedirect(https, []*http.Request{http1}); err != nil {
-		t.Fatalf("upgrade refused: %v", err)
 	}
 }
 

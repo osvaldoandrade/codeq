@@ -19,11 +19,23 @@ const (
 	outcomeDuplicateKid    = "duplicate_kid"
 )
 
+// Refresh triggers reported when the minimum interval suppresses a refresh.
+const (
+	triggerUnknownKid   = "unknown_kid"
+	triggerRefreshAhead = "refresh_ahead"
+)
+
 // Key-set states reported per key lookup.
 const (
 	decisionFresh       = "fresh"       // set younger than the refresh interval
 	decisionStale       = "stale"       // older than the refresh interval, within the bound
 	decisionUnavailable = "unavailable" // no usable set: the request is answered 503
+	// decisionKidNotYetKnown: unknown kid in a fresh-enough set whose token
+	// iat is not older than the fetch; answered 503 + Retry-After (rotation).
+	decisionKidNotYetKnown = "kid_not_yet_known"
+	// decisionCanceled: the request context ended while waiting for a
+	// refresh; answered 503 (the client is usually gone).
+	decisionCanceled = "canceled"
 )
 
 // Observer receives validator events whose string arguments come from fixed
@@ -32,8 +44,8 @@ const (
 //   - RefreshCompleted outcome: success, no_usable_keys, fetch_timeout,
 //     fetch_error, http_status, too_large, invalid_document, duplicate_kid.
 //   - RefreshSkipped trigger: unknown_kid, refresh_ahead.
-//   - KeyLookup state: fresh, stale, unavailable; keySetAge is zero for
-//     unavailable.
+//   - KeyLookup state: fresh, stale, unavailable, kid_not_yet_known,
+//     canceled; keySetAge is zero for unavailable and canceled.
 //
 // Implementations must be cheap and must not block.
 type Observer interface {
@@ -82,7 +94,7 @@ func stateFor(age, refreshInterval time.Duration) string {
 }
 
 func observeDecision(state string, age time.Duration) {
-	if state == decisionUnavailable {
+	if state == decisionUnavailable || state == decisionCanceled {
 		age = 0
 	}
 	observer().KeyLookup(state, age)

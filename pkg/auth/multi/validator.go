@@ -4,6 +4,7 @@
 package multi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,9 +52,15 @@ func newValidatorFromJSON(raw json.RawMessage) (auth.Validator, error) {
 
 // Validate accepts a token when any configured child validator accepts it.
 func (v *validator) Validate(token string) (*auth.Claims, error) {
+	return v.ValidateContext(context.Background(), token)
+}
+
+// ValidateContext is Validate with ctx passed to every child validator that
+// may wait (ADR 0014).
+func (v *validator) ValidateContext(ctx context.Context, token string) (*auth.Claims, error) {
 	var validationErrors []error
 	for _, provider := range v.providers {
-		claims, err := provider.Validate(token)
+		claims, err := auth.ValidateContext(ctx, provider, token)
 		if err == nil {
 			return claims, nil
 		}

@@ -1,6 +1,7 @@
 package multi
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -49,5 +50,31 @@ func TestProviderRegistration(t *testing.T) {
 	]}`)
 	if _, err := auth.NewValidator(auth.ProviderConfig{Type: "multi", Config: raw}); err != nil {
 		t.Fatalf("registered multi provider error = %v", err)
+	}
+}
+
+type ctxKey struct{}
+
+// recordingValidator reports the context value it was called with.
+type recordingValidator struct{ seen *string }
+
+func (r recordingValidator) Validate(string) (*auth.Claims, error) {
+	return nil, auth.ErrInvalidToken
+}
+
+func (r recordingValidator) ValidateContext(ctx context.Context, _ string) (*auth.Claims, error) {
+	*r.seen, _ = ctx.Value(ctxKey{}).(string)
+	return nil, auth.ErrInvalidToken
+}
+
+func TestMultiValidatorPassesContextToChildren(t *testing.T) {
+	var seen string
+	instance := &validator{providers: []auth.Validator{recordingValidator{seen: &seen}, recordingValidator{seen: &seen}}}
+	ctx := context.WithValue(context.Background(), ctxKey{}, "request")
+	if _, err := auth.ValidateContext(ctx, instance, "token"); err == nil {
+		t.Fatal("refused by every child but accepted")
+	}
+	if seen != "request" {
+		t.Fatalf("child saw context value %q, want %q", seen, "request")
 	}
 }

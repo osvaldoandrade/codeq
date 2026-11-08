@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
@@ -24,7 +25,7 @@ func AuthMiddleware(validator auth.Validator, cfg *config.Config) gin.HandlerFun
 		}
 	}
 	return func(c *gin.Context) {
-		claims, err := validateBearer(validator, c.GetHeader("Authorization"))
+		claims, err := validateBearer(c.Request.Context(), validator, c.GetHeader("Authorization"))
 		if err != nil {
 			abortAuthFailure(c, err)
 			return
@@ -61,7 +62,9 @@ const (
 	msgAuthUnavailable = "authentication temporarily unavailable"
 )
 
-func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, error) {
+// validateBearer validates the bearer token; ctx bounds any key-set refresh
+// the validator waits for (ADR 0014).
+func validateBearer(ctx context.Context, validator auth.Validator, authHeader string) (*auth.Claims, error) {
 	if strings.TrimSpace(authHeader) == "" {
 		return nil, errMissingAuthorization
 	}
@@ -69,7 +72,7 @@ func validateBearer(validator auth.Validator, authHeader string) (*auth.Claims, 
 	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
 		return nil, errInvalidAuthorization
 	}
-	return validator.Validate(parts[1])
+	return auth.ValidateContext(ctx, validator, parts[1])
 }
 
 // abortAuthFailure answers 503 with Retry-After when the token could not be

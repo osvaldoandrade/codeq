@@ -189,7 +189,7 @@ func (s *Server) handleHello(stream producerpb.ProducerStream_StreamServer) (*st
 	if token == "" {
 		return nil, status.Errorf(codes.Unauthenticated, "missing token")
 	}
-	claims, err := s.Validator.Validate(token)
+	claims, err := auth.ValidateContext(stream.Context(), s.Validator, token)
 	if err != nil {
 		return nil, authstatus.Stream(err)
 	}

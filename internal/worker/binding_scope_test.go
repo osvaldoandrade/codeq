@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -31,11 +32,11 @@ func TestAuthenticateRefusesBindingScopedTokens(t *testing.T) {
 		WorkerAudience:        "codeq-worker",
 	}
 	for _, token := range []string{"binding", "publish"} {
-		if _, err := s.authenticate(token); !errors.Is(err, authclaims.ErrStreamNotAllowed) {
+		if _, err := s.authenticate(context.Background(), token); !errors.Is(err, authclaims.ErrStreamNotAllowed) {
 			t.Fatalf("%s: err = %v, want ErrStreamNotAllowed", token, err)
 		}
 	}
-	claims, err := s.authenticate("legacy")
+	claims, err := s.authenticate(context.Background(), "legacy")
 	if err != nil || len(claims.EventTypes) != 1 || claims.EventTypes[0] != "*" {
 		t.Fatalf("legacy promotion changed: %v %+v", err, claims)
 	}

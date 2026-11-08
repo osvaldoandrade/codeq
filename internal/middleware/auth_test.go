@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -117,7 +118,7 @@ func TestWorkerAuthValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validator init: %v", err)
 	}
-	claims, err := validateBearer(validator, "Bearer "+tok)
+	claims, err := validateBearer(context.Background(), validator, "Bearer "+tok)
 	if err != nil {
 		t.Fatalf("expected valid token: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestWorkerAuthInvalidAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validator init: %v", err)
 	}
-	_, err = validateBearer(validator, "Bearer "+tok)
+	_, err = validateBearer(context.Background(), validator, "Bearer "+tok)
 	if err == nil {
 		t.Fatalf("expected error for invalid audience")
 	}
