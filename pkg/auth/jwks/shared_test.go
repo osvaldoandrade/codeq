@@ -114,8 +114,10 @@ func TestScopedValidatorsShareOneKeySetCachePerURL(t *testing.T) {
 }
 
 // During a Tikti outage a request that tries the worker and then the producer
-// validator waits for one refresh, not one per validator: the second sees the
-// attempt that just failed and decides at once on the bounded stale set.
+// validator waits for at most one refresh, not one per validator: the worker
+// refuses the producer's token before any key lookup (another audience), and
+// once one validator's refresh failed the other sees that attempt and decides
+// at once on the bounded stale set.
 func TestSharedCacheWaitsForOneRefreshAcrossValidators(t *testing.T) {
 	keys := testKeys(t)
 	fixture := newJWKSFixture(t)
@@ -136,10 +138,18 @@ func TestSharedCacheWaitsForOneRefreshAcrossValidators(t *testing.T) {
 
 	ctx := context.Background()
 	token := sign("producer-aud") // signed before any timing
-	requireInvalid(t, mustErr(worker.ValidateContext(ctx, token)))
+	workerToken := sign("worker-aud")
 	started := time.Now()
+	requireInvalid(t, mustErr(worker.ValidateContext(ctx, token)))
+	if waited := time.Since(started); waited >= worker.httpTimeout {
+		t.Fatalf("the worker validator waited %v to refuse another audience", waited)
+	}
 	if _, err := producer.ValidateContext(ctx, token); err != nil {
 		t.Fatalf("producer validator refused a known kid within the staleness bound: %v", err)
+	}
+	started = time.Now()
+	if _, err := worker.ValidateContext(ctx, workerToken); err != nil {
+		t.Fatalf("worker validator refused a known kid within the staleness bound: %v", err)
 	}
 	if waited := time.Since(started); waited >= worker.httpTimeout {
 		t.Fatalf("the second validator waited %v for its own refresh", waited)

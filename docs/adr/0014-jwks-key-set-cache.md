@@ -19,6 +19,9 @@
   validators of a process share one key-set cache per URL (P3-2); a gRPC
   `Unavailable` carries the retry delay as `google.rpc.RetryInfo` (P3-7);
   the rollout section states the current Conveste voter sizing (P3-8).
+  Then, after the final security review: a token naming another issuer or
+  audience is 401 before any key lookup, so no "could not check" path answers
+  it 503 (L-1), and it starts, joins and waits for no refresh (I-1).
 
 ## Context
 
@@ -56,7 +59,9 @@ usable keys of the last successful fetch and its fetch time.
   its own issuer and audience. The any-auth middleware and producer promotion
   try the worker and then the producer validator; with a shared cache such a
   request waits for at most one refresh (5 s by default), not one per
-  validator, and Tikti sees half the requests. The key set is the same
+  validator, and Tikti sees half the requests. A token meant for the other
+  validator's audience is refused by the first one before any key lookup, so
+  it does not wait at all there. The key set is the same
   document whichever validator fetched it, so sharing it changes no trust
   decision.
 
@@ -78,6 +83,18 @@ usable keys of the last successful fetch and its fetch time.
   `exp` **required**; `exp`/`nbf` with **zero leeway** as before
   (`clockSkew` is still accepted in the config and still does not extend
   them, preserving ADR 0003's bound).
+- **Another issuer or audience first.** Before any key lookup the validator
+  reads the token's **unverified** `iss` and `aud`. Unless `iss` equals its
+  issuer and `aud` contains its audience, the token is refused (401,
+  `invalid issuer` / `invalid audience` internally): a token for another
+  issuer or audience is 401 at once, because it could never be accepted
+  whatever key signed it. It therefore never gets a 503 on any path below (no
+  set yet, a set past the bound, a failed refresh, a known `kid` past the
+  grace window with nothing to fall back on, an unknown `kid`), and it never
+  starts, joins or waits for a refresh, so foreign tokens cannot use the
+  refresh slot. This check only ever refuses: acceptance still requires the
+  verified signature and the parser's exact issuer and audience checks. It
+  records no key-set decision (no lookup happened).
 - **Refresh.** At most one refresh runs at a time; concurrent callers that need
   it wait for that one (singleflight). A wait ends at the HTTP timeout
   (default 5 s, capped at 10 s) or when the caller's request context ends,
@@ -105,19 +122,18 @@ usable keys of the last successful fetch and its fetch time.
 - **Negative cache.** A `kid` absent from the current set gets no fetch until
   the next attempt is permitted. A per-`kid` table would add nothing: random
   `kid`s defeat it, and the global interval already bounds fetches to one per
-  30 s per cache. Its answer is 401, except for a token whose **unverified**
-  `iss` equals this validator's issuer, whose unverified `aud` contains its
-  audience, and whose unverified `iat` is no earlier than the set's fetch
+  30 s per cache. Its answer is 401, except for a token (which, as above,
+  names this validator's issuer and audience) whose **unverified** `iat` is
+  no earlier than the set's fetch
   time minus 5 s and no later than now plus 5 s: such a token may be signed
   by a key Tikti published after the fetch (Tikti publishes only its current
   key and does not pre-publish the next, `repos/tikti/internal/utils/jwks.go`),
   so it gets **503 + `Retry-After`** (until the next permitted attempt,
   ≤ 30 s) and the retry is decided by that refresh. A token for another
-  issuer or audience could never be accepted whatever key signed it, so it is
-  401 at once and cannot be used to force 503s. These unverified claims only
-  choose between 401 and 503: they are read after the refresh-or-skip
-  decision, so they never start a fetch and never contribute to an
-  acceptance. To earn a 503 instead of a 401 a forged token must name this
+  issuer or audience is 401 at once (above) and cannot be used to force
+  503s. The unverified `iat` only chooses between 401 and 503: it is read
+  after the refresh-or-skip decision, so it never starts a fetch and never
+  contributes to an acceptance. To earn a 503 instead of a 401 a forged token must name this
   validator's issuer and audience and carry a current `iat`, and once a later
   refresh succeeds the same token is 401.
 - **Bounded staleness.** While refreshes fail, the last good set keeps
@@ -137,10 +153,12 @@ usable keys of the last successful fetch and its fetch time.
     the last 30 s, a known `kid` never waits.
 - **Outcomes.** A token that was evaluated and refused wraps
   `auth.ErrInvalidToken` → **401** with the fixed body `invalid token` (gRPC
-  `Unauthenticated`, `invalid token`): bad signature, unknown `kid` after a
-  successful refresh (except the issuer/audience/`iat` case above), wrong issuer/audience,
+  `Unauthenticated`, `invalid token`): another issuer or audience (before
+  any key lookup), bad signature, unknown `kid` after a successful refresh
+  (except the `iat` case above),
   expired, missing `exp`, disallowed algorithm, malformed. A token that
-  **could not be evaluated** — no set yet, the set is older than the bound, an
+  **could not be evaluated** and names this validator's issuer and
+  audience — no set yet, the set is older than the bound, an
   unknown `kid` while the latest refresh failed, an unknown `kid` possibly
   newer than the set, or a wait abandoned because the request context ended —
   returns `*auth.UnavailableError` → **503** with
@@ -292,7 +310,9 @@ it to its children.
   `TestUnknownKidIssuedAfterFetchIsRetryable`,
   `TestUnknownKidForeignIssuerOrAudienceIsRefused`,
   `TestWaiterHonorsRequestContext`,
-  `TestJWKSRedirectsStayOnTheConfiguredOrigin`), `pkg/auth/jwks/shared_test.go`
+  `TestJWKSRedirectsStayOnTheConfiguredOrigin`), `pkg/auth/jwks/foreign_test.go`
+  (`TestForeignTokenIsRefusedOnEveryUnavailablePath`,
+  `TestForeignTokenStartsNoRefresh`), `pkg/auth/jwks/shared_test.go`
   (`TestScopedValidatorsShareOneKeySetCachePerURL`,
   `TestSharedCacheWaitsForOneRefreshAcrossValidators`),
   `pkg/auth/multi/validator_test.go` (`TestScopedMultiSharesChildKeySetCache`),

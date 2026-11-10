@@ -281,7 +281,17 @@ func (v *Validator) ValidateContext(ctx context.Context, tokenString string) (*a
 			keyErr = invalid("missing kid")
 			return nil, keyErr
 		}
-		key, err := v.keyFor(ctx, kid, token.Method.Alg(), v.unverifiedHint(claims))
+		// A token naming another issuer or audience could never be
+		// accepted, whatever key signed it: it is refused (401) before the
+		// key lookup, so it never earns a 503 nor starts or waits for a
+		// refresh. This only ever refuses; acceptance still needs the
+		// verified signature and the parser's issuer and audience checks.
+		hint, reason := v.unverifiedHint(claims)
+		if reason != "" {
+			keyErr = invalid(reason)
+			return nil, keyErr
+		}
+		key, err := v.keyFor(ctx, kid, token.Method.Alg(), hint)
 		if err != nil {
 			keyErr = err
 			return nil, err
@@ -309,9 +319,9 @@ func parseFailureReason(err error) string {
 	case errors.Is(err, jwt.ErrTokenRequiredClaimMissing):
 		return "required claim missing"
 	case errors.Is(err, jwt.ErrTokenInvalidIssuer):
-		return "invalid issuer"
+		return reasonInvalidIssuer
 	case errors.Is(err, jwt.ErrTokenInvalidAudience):
-		return "invalid audience"
+		return reasonInvalidAudience
 	case errors.Is(err, jwt.ErrTokenSignatureInvalid):
 		return "invalid signature"
 	case errors.Is(err, jwt.ErrTokenNotValidYet):
@@ -320,6 +330,13 @@ func parseFailureReason(err error) string {
 		return "invalid token"
 	}
 }
+
+// Fixed refusal reasons shared by the parser mapping and the check of the
+// unverified issuer and audience before the key lookup.
+const (
+	reasonInvalidIssuer   = "invalid issuer"
+	reasonInvalidAudience = "invalid audience"
+)
 
 // invalid wraps auth.ErrInvalidToken with a fixed, token-free reason.
 func invalid(reason string) error {
@@ -361,32 +378,31 @@ func buildClaims(claims jwt.MapClaims) *auth.Claims {
 type tokenHint struct {
 	// issuedAt is the unverified iat; zero when absent or malformed.
 	issuedAt time.Time
-	// ours is set when the unverified iss equals this validator's issuer and
-	// the unverified aud contains its audience: only such a token could be
-	// accepted once the key is known.
-	ours bool
 }
 
-func (v *Validator) unverifiedHint(claims jwt.MapClaims) tokenHint {
+// unverifiedHint reads the unverified claims a key lookup may use. reason is
+// non-empty, and the token must be refused at once, unless the unverified iss
+// equals this validator's issuer and the unverified aud contains its
+// audience: only such a token could be accepted once its key is known.
+func (v *Validator) unverifiedHint(claims jwt.MapClaims) (tokenHint, string) {
 	var hint tokenHint
 	if iat, err := claims.GetIssuedAt(); err == nil && iat != nil {
 		hint.issuedAt = iat.Time
 	}
 	iss, err := claims.GetIssuer()
 	if err != nil || iss != v.issuer {
-		return hint
+		return hint, reasonInvalidIssuer
 	}
 	audiences, err := claims.GetAudience()
 	if err != nil {
-		return hint
+		return hint, reasonInvalidAudience
 	}
 	for _, aud := range audiences {
 		if aud == v.audience {
-			hint.ours = true
-			break
+			return hint, ""
 		}
 	}
-	return hint
+	return hint, reasonInvalidAudience
 }
 
 // keyFor returns the verification key for kid from a usable key set.
@@ -401,6 +417,11 @@ func (v *Validator) unverifiedHint(claims jwt.MapClaims) tokenHint {
 //     minRefreshInterval has elapsed since the last attempt; otherwise the
 //     kid is negatively cached for the rest of that interval.
 //   - No usable set: *auth.UnavailableError.
+//
+// The cache is shared by validators with different audiences (auth.Scope),
+// so it never sees one: ValidateContext calls keyFor only for a token whose
+// unverified iss and aud name the calling validator, and refuses (401) every
+// other token before any of the 503 decisions below or any refresh.
 func (c *keyCache) keyFor(ctx context.Context, kid, alg string, hint tokenHint) (*rsa.PublicKey, error) {
 	c.mu.Lock()
 	now := c.now()
@@ -502,21 +523,20 @@ func (c *keyCache) awaitKey(ctx context.Context, call *refreshCall, kid, alg str
 }
 
 // unknownKid classifies a kid absent from a successfully fetched set. A token
-// that names this validator's issuer and audience and whose unverified iat
-// is not earlier than the set's fetch time (minus issuedAtSkew) nor later
+// (which names this validator's issuer and audience; see keyFor) whose
+// unverified iat is not earlier than the set's fetch time (minus issuedAtSkew) nor later
 // than now (plus issuedAtSkew) may be signed by a key published after that
 // fetch (Tikti publishes only its current key, so rotation is not
 // pre-announced): it gets 503 + Retry-After so the client retries once the
-// next permitted refresh can see the key. Anything else is refused (401): a
-// token for another issuer or audience could never be accepted, whatever
-// key signed it. These unverified claims only choose between 401 and 503:
-// the choice is made after the refresh-or-skip decision, so it neither
-// verifies anything nor starts a fetch. A forged token needs this
-// validator's own issuer and audience and an iat within the window to earn
-// a 503, and it is refused again once a later refresh succeeds.
+// next permitted refresh can see the key. Anything else is refused (401).
+// The unverified iat only chooses between 401 and 503: the choice is made
+// after the refresh-or-skip decision, so it neither verifies anything nor
+// starts a fetch. A forged token needs this validator's own issuer and
+// audience and an iat within the window to earn a 503, and it is refused
+// again once a later refresh succeeds.
 func (c *keyCache) unknownKid(set *keySet, now time.Time, hint tokenHint, retry time.Duration) error {
 	age := now.Sub(set.fetchedAt)
-	if hint.ours && !hint.issuedAt.IsZero() &&
+	if !hint.issuedAt.IsZero() &&
 		!hint.issuedAt.Before(set.fetchedAt.Add(-issuedAtSkew)) &&
 		!hint.issuedAt.After(now.Add(issuedAtSkew)) {
 		observeDecision(decisionKidNotYetKnown, age)

@@ -835,6 +835,10 @@ func (r *TaskRepository) recoverQueues() error {
 		if !ok {
 			continue
 		}
+		// Every committed seq raises the counter, the keys the cap refuses
+		// included: a new leader that enqueued nothing yet must number its
+		// next task after the whole backlog, or FIFO inverts after failover.
+		r.db.RaiseSeq(seq)
 		// A refused hint keeps its pending key in Pebble and leaves the
 		// queue overflowed; a claim refills it once the queue drains.
 		r.sendHintLocked(cmd, tenantID, prio, seq, id)

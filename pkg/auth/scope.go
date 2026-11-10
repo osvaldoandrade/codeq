@@ -24,6 +24,11 @@ func NewScope() *Scope {
 // Shared returns the value stored under key, storing create() on first use.
 // key must be comparable; providers use an unexported key type so no other
 // provider can collide with it.
+//
+// create runs under the scope's lock, so every Shared call of the scope waits
+// for it: it must only build the value (no I/O, no wait, nothing that blocks)
+// and must not call Shared or any other method of this scope, which would
+// deadlock.
 func (s *Scope) Shared(key any, create func() any) any {
 	s.mu.Lock()
 	defer s.mu.Unlock()

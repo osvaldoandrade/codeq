@@ -11,6 +11,11 @@
   leader stuck before its rebuild warns (P2-1), the footprint sample no
   longer takes the dispatch lock (P3-3), the GC share excludes idle marking
   (P3-5), and the roll guidance and memory bound are restated (P3-1, P3-6).
+  Revised again on 2026-11-10 after the second architecture review: the
+  rebuild raises the sequence counter past every pending key, refused ones
+  included (F1); the dispatch-lock hold of a refill or rebuild is bounded and
+  documented (F2); overflow under failover, lease expiry, delayed moves and
+  absolute expiry is tested (F3); and rollback has a precondition (F4).
 
 ## Context
 
@@ -109,6 +114,14 @@ Two more defects surfaced in the same investigation:
     for it. A rebuild that marks queues logs one
     `event=codeq_hint_queue_overflow` WARN with the number of queues and the
     cap (no command or tenant).
+  - The rebuild raises the pending-sequence counter (`RaiseSeq`) for every
+    pending key it scans, before the cap decides whether the key gets a hint.
+    A voter's counter is seeded only when it opens its store; a follower that
+    wins an election has enqueued nothing since, so the rebuild is what moves
+    its counter past the committed backlog. The keys the cap refuses are the
+    newest, highest sequences: raising only for queued hints let a new leader
+    number its next task inside the backlog, where it was claimed before
+    older tasks.
   - FIFO order, the queued/in-flight dedupe and the claim inspection budget
     are unchanged.
 - **Reaper gate.** In Raft mode the reaper sweeps only after
@@ -193,6 +206,27 @@ Two more defects surfaced in the same investigation:
 - A queue deeper than the cap costs one bounded scan per refill instead of a
   crash loop or a stuck leader; it is visible as
   `codeq_dispatch_overflowed_queues` and `codeq_hint_queue_overflow`.
+- A refill and a rebuild hold `dispatchMu` for their whole Pebble scan, so
+  every claim, publish and lease release of the shard waits behind them.
+  Measured on Apple silicon: a refill that queues 100,000 hints holds it
+  14–15 ms, and a rebuild over 250,000 pending keys 76–87 ms (architecture
+  review; a re-run on an M4 Max gave 8–10 ms and about 60 ms). Expect 3–5×
+  that on a 1-vCPU voter: about 45–75 ms per refill and 0.25–0.45 s for such
+  a rebuild. A refill runs only when an overflowed queue drains, so at most
+  once per 100,000 claims of that tuple; a rebuild runs once per election
+  win and at startup. The scans were not moved out of the lock: the hold is
+  rare, bounded by the cap and the backlog, and visible in claim latency.
+
+## Rollback
+
+v0.5.13 and v0.5.12 recover a queue by publishing every pending key into a
+100,000-slot channel and fail when one is full: with more than 100,000
+pending tasks in any `(command, tenant, priority)` their constructor panics
+and every voter that restarts on that image crash-loops. Roll back only
+after confirming that no queue is that deep: no `event=codeq_hint_queue_overflow`
+WARN since the voters last started and `codeq_dispatch_overflowed_queues`
+is 0 on every voter (or `QueueStats` ready counts below 100,000 per
+priority). Otherwise drain the deep queue first, or roll forward.
 
 ## Alternatives considered
 
@@ -222,7 +256,16 @@ Two more defects surfaced in the same investigation:
   `TestPublishBeyondCapRefillsInOrder`,
   `TestClaimManyDrainsOverflowedQueueInOrder`,
   `TestOverflowConcurrentPublishAndClaimDeliversEveryTaskOnce`,
-  `TestDispatchFootprintDoesNotWaitForDispatchLock`).
+  `TestDispatchFootprintDoesNotWaitForDispatchLock`),
+  `dispatch_overflow_lifecycle_test.go`
+  (`TestRebuildRaisesSeqPastOverflowedBacklog`,
+  `TestLeaseExpiryRequeueIntoOverflowedQueue`,
+  `TestDelayedMoveIntoOverflowedQueue`,
+  `TestAbsoluteExpiryRetirementWhileOverflowed`) and
+  `dispatch_overflow_failover_test.go`
+  (`TestRaftFailoverOverOverflowedQueueKeepsFIFO`: three in-process voters,
+  the leader closes over a backlog deeper than the cap, and a follower that
+  never enqueued wins).
 - `internal/repository/pebble/reaper_leader_ready_test.go`
   (`TestReaperWarnsWhenDeferredForAMinute`), `reaper_progress_test.go`,
   `internal/memlimit/pressure_test.go`

@@ -98,6 +98,9 @@ func TestGCBusyMetricsExcludeIdleMarkAndExist(t *testing.T) {
 			t.Errorf("%s counts GC work that does not take CPU from the program", name)
 		}
 	}
+	// The runtime updates the CPU classes and the live heap at the end of a
+	// GC cycle; a test binary shuffled to run this test first has had none.
+	runtime.GC()
 	if r := readRuntime(); r.allCPU <= 0 || r.gcCPU < 0 || r.gcCPU > r.allCPU {
 		t.Fatalf("runtime reading out of range: %+v", r)
 	}
