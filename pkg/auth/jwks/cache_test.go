@@ -26,6 +26,7 @@ import (
 const (
 	testIssuer   = "test-issuer"
 	testAudience = "test-audience"
+	testSubject  = "svc"
 	claimIss     = "iss"
 	claimAud     = "aud"
 	claimExp     = "exp"
@@ -199,7 +200,7 @@ func (h *testHarness) tokenIssuedAt(t *testing.T, key *rsa.PrivateKey, kid strin
 	t.Helper()
 	now := h.clock.Now().Unix()
 	return signToken(t, key, kid, map[string]any{
-		claimIss: testIssuer, claimAud: testAudience, claimSub: "svc", claimExp: now + 3600, claimIat: iat.Unix(),
+		claimIss: testIssuer, claimAud: testAudience, claimSub: testSubject, claimExp: now + 3600, claimIat: iat.Unix(),
 	})
 }
 
@@ -508,7 +509,7 @@ func TestMissingExpIsRefused(t *testing.T) {
 	keys := testKeys(t)
 	h := newHarness(t)
 	h.jwks.set(serveKeys, jwkFor("k1", &keys[0].PublicKey))
-	token := signToken(t, keys[0], "k1", map[string]any{claimIss: testIssuer, claimAud: testAudience, claimSub: "svc"})
+	token := signToken(t, keys[0], "k1", map[string]any{claimIss: testIssuer, claimAud: testAudience, claimSub: testSubject})
 	err := mustErr(h.v.Validate(token))
 	requireInvalid(t, err)
 	if !strings.Contains(err.Error(), "required claim missing") {

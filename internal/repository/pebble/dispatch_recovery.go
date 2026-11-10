@@ -2,6 +2,8 @@ package pebble
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
@@ -129,17 +131,26 @@ func (r *TaskRepository) barrier(ctx context.Context) error {
 	return nil
 }
 
+// rebuildWarnEvery rate-limits the warning of a failed election-time
+// rebuild; claims and reaper ticks retry the rebuild meanwhile.
+const rebuildWarnEvery = 5 * time.Minute
+
 // watchLeadership rebuilds the dispatch index on each election win and
 // drops it on each loss. The goroutine exits when LeaderObservation is
 // closed, which raft.DB.Close does by closing stopCh.
 func (r *TaskRepository) watchLeadership(src leadershipSource) {
+	var lastWarn time.Time
 	// The rebuild reads Pebble outside any request; runOpen keeps it from
 	// racing DB.Close during shutdown.
 	rebuild := func() bool {
 		return r.db.runOpen(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			_ = r.ensureLeaderDispatch(ctx)
+			err := r.ensureLeaderDispatch(ctx)
 			cancel()
+			if warnRebuildFailure(err, time.Now(), &lastWarn) {
+				slog.Warn("codeq: election-time dispatch rebuild failed; claims and reaper sweeps wait for it and retry",
+					"event", "codeq_dispatch_rebuild_failed", "errorClass", dispatchErrorClass(err))
+			}
 		})
 	}
 	if src.IsLeader() && !rebuild() {
@@ -163,11 +174,53 @@ func (r *TaskRepository) watchLeadership(src leadershipSource) {
 	}
 }
 
+// warnRebuildFailure reports whether a failed election-time rebuild should
+// be logged now: not for success or a lost leadership, and at most once per
+// rebuildWarnEvery. Only the watcher goroutine uses lastWarn.
+func warnRebuildFailure(err error, now time.Time, lastWarn *time.Time) bool {
+	var notLeader *NotLeaderError
+	if err == nil || errors.As(err, &notLeader) {
+		return false
+	}
+	if !lastWarn.IsZero() && now.Sub(*lastWarn) < rebuildWarnEvery {
+		return false
+	}
+	*lastWarn = now
+	return true
+}
+
+// Fixed classes of a leader-readiness failure; logs carry these instead of
+// the error text.
+const (
+	errClassNone      = "none"
+	errClassNotLeader = "not_leader"
+	errClassTimeout   = "timeout"
+	errClassCanceled  = "canceled"
+	errClassOther     = "barrier_or_storage"
+)
+
+// dispatchErrorClass is the fixed class of a leader-readiness failure.
+func dispatchErrorClass(err error) string {
+	var notLeader *NotLeaderError
+	switch {
+	case err == nil:
+		return errClassNone
+	case errors.As(err, &notLeader), errors.Is(err, ErrNotLeader):
+		return errClassNotLeader
+	case errors.Is(err, context.DeadlineExceeded):
+		return errClassTimeout
+	case errors.Is(err, context.Canceled):
+		return errClassCanceled
+	default:
+		return errClassOther
+	}
+}
+
 // rebuildLocked replaces process-local dispatch state with a scan of
 // the replicated Pebble keyspace. Caller holds dispatchMu.
 func (r *TaskRepository) rebuildLocked() error {
+	defer r.noteFootprintLocked()
 	r.drainHintsLocked()
-	r.queued = make(map[string]struct{})
 	if err := r.recoverQueues(); err != nil {
 		return err
 	}
@@ -179,10 +232,12 @@ func (r *TaskRepository) rebuildLocked() error {
 	return r.recoverLeases()
 }
 
-// drainHintsLocked drops every hint queue. The rebuild that follows scans
-// the pending keys back. Caller holds dispatchMu.
+// drainHintsLocked drops every hint queue and overflow mark. The rebuild
+// that follows scans the pending keys back. Caller holds dispatchMu.
 func (r *TaskRepository) drainHintsLocked() {
 	clear(r.queues)
+	clear(r.overflow)
+	r.queued = make(map[string]struct{})
 }
 
 func (r *TaskRepository) resetDelayedLocked() {
@@ -193,9 +248,12 @@ func (r *TaskRepository) resetDelayedLocked() {
 }
 
 // sendHintLocked publishes one hint. The queue of (cmd, tenant, prio) is
-// created on its first hint. It reports false only when the queue already
-// holds maxHintsPerQueue hints. Caller holds dispatchMu (NewTaskRepository's
-// recovery runs before any other goroutine can see the repository).
+// created on its first hint. It reports false when the hint was not queued:
+// the queue holds hintCap hints or is already overflowed. Either way the
+// queue is (or stays) overflowed, so its pending keys, this one included,
+// are refilled in key order once it drains. Caller holds dispatchMu
+// (NewTaskRepository's recovery runs before any other goroutine can see the
+// repository).
 func (r *TaskRepository) sendHintLocked(cmd domain.Command, tenantID string, prio int, seq uint64, id string) bool {
 	if _, ok := r.inflight[id]; ok {
 		return true
@@ -204,18 +262,83 @@ func (r *TaskRepository) sendHintLocked(cmd domain.Command, tenantID string, pri
 		return true
 	}
 	key := queueKey(cmd, tenantID, prio)
+	defer r.noteFootprintLocked()
+	if _, over := r.overflow[key]; over {
+		return false
+	}
+	if !r.pushHintLocked(key, seq, id) {
+		r.overflow[key] = overflowQueue{cmd: cmd, tenantID: tenantID, prio: prio}
+		return false
+	}
+	return true
+}
+
+// pushHintLocked appends one hint to the queue of key unless it holds
+// hintCap hints. Caller holds dispatchMu and has checked the dedupe sets.
+func (r *TaskRepository) pushHintLocked(key string, seq uint64, id string) bool {
 	q := r.queues[key]
 	if q == nil {
 		q = &hintQueue{}
 		r.queues[key] = q
 	}
-	if q.len() >= maxHintsPerQueue {
+	if q.len() >= r.hintCap {
 		return false
 	}
 	q.push(pendingHint{seq: seq, id: id})
 	r.queued[id] = struct{}{}
 	r.db.RaiseSeq(seq)
 	return true
+}
+
+// refillLocked queues the oldest pending keys of an overflowed queue, up to
+// hintCap, skipping tasks already queued or in flight, and reports whether
+// it queued any. Claims call it only once the queue has drained, so the scan
+// re-reads at most the in-flight keys before it finds new work: a bounded
+// cost per hintCap claims. The queue leaves the overflow set when the scan
+// reaches the end of its keys; a storage error keeps it there for the next
+// claim. Caller holds dispatchMu.
+func (r *TaskRepository) refillLocked(key string) bool {
+	o, over := r.overflow[key]
+	if !over {
+		return false
+	}
+	lower, upper := PrefixPendingPrio(o.cmd, o.tenantID, o.prio)
+	it, err := r.db.Iter(lower, upper)
+	if err != nil {
+		return false
+	}
+	defer it.Close()
+	added, full := 0, false
+	for valid := it.First(); valid; valid = it.Next() {
+		seq, id, ok := parsePendingSuffix(it.Key(), len(lower))
+		if !ok {
+			continue
+		}
+		if _, busy := r.inflight[id]; busy {
+			continue
+		}
+		if _, queued := r.queued[id]; queued {
+			continue
+		}
+		if !r.pushHintLocked(key, seq, id) {
+			full = true
+			break
+		}
+		added++
+	}
+	if it.Error() == nil && !full {
+		delete(r.overflow, key)
+	}
+	return added > 0
+}
+
+// parsePendingSuffix reads <seq_be8>/<id> after a PrefixPendingPrio prefix
+// of length prefixLen.
+func parsePendingSuffix(k []byte, prefixLen int) (uint64, string, bool) {
+	if len(k) < prefixLen+8+2 || k[prefixLen+8] != '/' {
+		return 0, "", false
+	}
+	return beUint64(k[prefixLen : prefixLen+8]), string(k[prefixLen+9:]), true
 }
 
 func (r *TaskRepository) popHint(cmd domain.Command, tenantID string, prio int) (pendingHint, bool) {
@@ -226,25 +349,18 @@ func (r *TaskRepository) popHint(cmd domain.Command, tenantID string, prio int) 
 // not already in flight. A nil budget preserves the batch-claim traversal.
 // Single claims account for every removed hint, including a reserved task,
 // before inspecting its body. A queue that drains is dropped, so an idle
-// tuple holds no memory and a probe of an empty priority allocates nothing.
+// tuple holds no memory and a probe of an empty priority allocates nothing;
+// an overflowed queue is refilled from Pebble when it is found empty.
 func (r *TaskRepository) popHintWithinBudget(ctx context.Context, cmd domain.Command, tenantID string, prio int, remaining *int) (pendingHint, bool) {
+	key := queueKey(cmd, tenantID, prio)
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
-	key := queueKey(cmd, tenantID, prio)
-	q := r.queues[key]
-	if q == nil {
-		return pendingHint{}, false
-	}
-	defer func() {
-		if q.len() == 0 {
-			delete(r.queues, key)
-		}
-	}()
+	defer r.noteFootprintLocked()
 	for remaining == nil || *remaining > 0 {
 		if ctx.Err() != nil {
 			return pendingHint{}, false
 		}
-		h, ok := q.pop()
+		h, ok := r.nextHintLocked(key)
 		if !ok {
 			return pendingHint{}, false
 		}
@@ -261,26 +377,60 @@ func (r *TaskRepository) popHintWithinBudget(ctx context.Context, cmd domain.Com
 	return pendingHint{}, false
 }
 
-// DispatchFootprint is the leader-local claim index held in memory: hint
-// queues, hints and in-flight claims. Memory is proportional to these
-// counts. It is sampled on a timer for metrics and memory-pressure logs.
-type DispatchFootprint struct {
-	Queues   int
-	Hints    int
-	InFlight int
-	Leases   int
+// nextHintLocked removes the oldest hint of key, refilling an empty
+// overflowed queue from Pebble first. A queue that drains is dropped. Caller
+// holds dispatchMu.
+func (r *TaskRepository) nextHintLocked(key string) (pendingHint, bool) {
+	for {
+		q := r.queues[key]
+		if q == nil {
+			if !r.refillLocked(key) {
+				return pendingHint{}, false
+			}
+			continue
+		}
+		h, ok := q.pop()
+		if q.len() == 0 {
+			delete(r.queues, key)
+		}
+		if ok {
+			return h, true
+		}
+	}
 }
 
-// DispatchFootprint samples the dispatch index under its lock (lock order:
-// dispatchMu, then the lease table).
+// DispatchFootprint is the leader-local claim index held in memory: hint
+// queues, hints, in-flight claims and leases, plus the queues whose pending
+// keys exceed their cap (Overflowed). Memory is proportional to these counts.
+// It is sampled on a timer for metrics and memory-pressure logs.
+type DispatchFootprint struct {
+	Queues     int
+	Hints      int
+	InFlight   int
+	Leases     int
+	Overflowed int
+}
+
+// DispatchFootprint samples the dispatch index without taking dispatchMu, so
+// the storage monitor never waits behind a rebuild or a refill; the counters
+// are stored under that lock after every change.
 func (r *TaskRepository) DispatchFootprint() DispatchFootprint {
-	r.dispatchMu.Lock()
-	defer r.dispatchMu.Unlock()
-	f := DispatchFootprint{Queues: len(r.queues), InFlight: len(r.inflight), Leases: r.leases.Len()}
-	for _, q := range r.queues {
-		f.Hints += q.len()
+	return DispatchFootprint{
+		Queues:     int(r.footprint.queues.Load()),
+		Hints:      int(r.footprint.hints.Load()),
+		InFlight:   int(r.footprint.inflight.Load()),
+		Leases:     r.leases.Len(),
+		Overflowed: int(r.footprint.overflowed.Load()),
 	}
-	return f
+}
+
+// noteFootprintLocked stores the dispatch index sizes for DispatchFootprint.
+// queued holds exactly the ids of the queued hints. Caller holds dispatchMu.
+func (r *TaskRepository) noteFootprintLocked() {
+	r.footprint.queues.Store(int64(len(r.queues)))
+	r.footprint.hints.Store(int64(len(r.queued)))
+	r.footprint.inflight.Store(int64(len(r.inflight)))
+	r.footprint.overflowed.Store(int64(len(r.overflow)))
 }
 
 // ObserveDispatchMetrics publishes DispatchFootprint under the shard label
@@ -290,6 +440,7 @@ func (r *TaskRepository) ObserveDispatchMetrics(shard string) DispatchFootprint 
 	metrics.DispatchHintQueues.WithLabelValues(shard).Set(float64(f.Queues))
 	metrics.DispatchHints.WithLabelValues(shard).Set(float64(f.Hints))
 	metrics.DispatchInFlight.WithLabelValues(shard).Set(float64(f.InFlight))
+	metrics.DispatchOverflowedQueues.WithLabelValues(shard).Set(float64(f.Overflowed))
 	metrics.LeaseEntries.WithLabelValues(shard).Set(float64(f.Leases))
 	return f
 }
@@ -297,6 +448,7 @@ func (r *TaskRepository) ObserveDispatchMetrics(shard string) DispatchFootprint 
 func (r *TaskRepository) finishHint(cmd domain.Command, tenantID string, prio int, h pendingHint, republish bool) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
+	defer r.noteFootprintLocked()
 	delete(r.inflight, h.id)
 	if republish {
 		r.sendHintLocked(cmd, tenantID, prio, h.seq, h.id)

@@ -138,7 +138,8 @@ func TestHintQueueFIFOAcrossCompaction(t *testing.T) {
 }
 
 // The per-queue cap of the former channel is kept: a full queue refuses a
-// hint (its pending key stays durable for the next rebuild).
+// hint, whose pending key stays durable, and is marked overflowed so claims
+// refill it from storage once it drains.
 func TestHintQueueRefusesBeyondCap(t *testing.T) {
 	db := openTestDB(t)
 	repo := NewTaskRepository(db, time.UTC, "fixed", 1, 5)
@@ -151,6 +152,9 @@ func TestHintQueueRefusesBeyondCap(t *testing.T) {
 	}
 	if repo.sendHintLocked("cap-topic", "tenant-a", 0, maxHintsPerQueue+1, "one-too-many") {
 		t.Fatal("full queue accepted a hint")
+	}
+	if _, over := repo.overflow[queueKey("cap-topic", "tenant-a", 0)]; !over {
+		t.Fatal("a refused hint did not mark its queue overflowed")
 	}
 	if !repo.sendHintLocked("cap-topic", "tenant-a", 1, 1, "other-priority") {
 		t.Fatal("a full queue blocked another priority")

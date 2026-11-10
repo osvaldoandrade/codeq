@@ -68,6 +68,10 @@ var (
 	DispatchHints = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "dispatch_hints", Help: "Claim hints held in memory per shard."}, []string{shardLabel})
 	// DispatchInFlight is the number of hints a claim is processing per shard.
 	DispatchInFlight = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "dispatch_inflight", Help: "Claim hints being processed per shard."}, []string{shardLabel})
+	// DispatchOverflowedQueues is the number of hint queues per shard whose
+	// pending tasks exceed the per-queue hint cap; claims refill them from
+	// storage in order (ADR 0015).
+	DispatchOverflowedQueues = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "dispatch_overflowed_queues", Help: "Claim hint queues per shard holding more pending tasks than the per-queue hint cap; refilled from storage as they drain."}, []string{shardLabel})
 	// LeaseEntries is the size of the in-memory lease table per shard.
 	LeaseEntries = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "lease_entries", Help: "Entries in the in-memory lease table per shard."}, []string{shardLabel})
 )
@@ -83,7 +87,7 @@ func init() {
 		PebbleCacheCapacityBytes, PebbleMemTableBytes,
 		MemoryContainerLimitBytes, MemoryGoLimitBytes,
 		MemoryGoLiveHeapBytes, MemoryGCCPUFraction, MemoryPressureWarnings,
-		DispatchHintQueues, DispatchHints, DispatchInFlight, LeaseEntries,
+		DispatchHintQueues, DispatchHints, DispatchInFlight, DispatchOverflowedQueues, LeaseEntries,
 		MemoryPebbleSizingFloored, MemoryPebbleMinSafeLimitBytes,
 	)
 }

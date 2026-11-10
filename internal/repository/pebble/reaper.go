@@ -183,27 +183,55 @@ func (s sweepResult) outcome() string {
 	}
 }
 
-// stallWatch rate-limits the warning of one sweep that keeps re-reading due
-// work without finishing any of it. Only the sweep's own goroutine uses it.
-type stallWatch struct {
+// sustained rate-limits the warning of a condition that persists across
+// ticks: it warns once the condition has held for stallWarnAfter, then at
+// most every stallWarnEvery while it lasts.
+type sustained struct {
 	since    time.Time
 	lastWarn time.Time
 }
 
-// observe records one sweep and reports whether to warn now.
-func (w *stallWatch) observe(now time.Time, outcome string) bool {
-	if outcome != outcomeStalled {
-		w.since = time.Time{}
+// observe records one tick and reports whether to warn now.
+func (s *sustained) observe(now time.Time, holds bool) bool {
+	if !holds {
+		s.since = time.Time{}
 		return false
 	}
-	if w.since.IsZero() {
-		w.since = now
+	if s.since.IsZero() {
+		s.since = now
 	}
-	if now.Sub(w.since) < stallWarnAfter || (!w.lastWarn.IsZero() && now.Sub(w.lastWarn) < stallWarnEvery) {
+	if now.Sub(s.since) < stallWarnAfter || (!s.lastWarn.IsZero() && now.Sub(s.lastWarn) < stallWarnEvery) {
 		return false
 	}
-	w.lastWarn = now
+	s.lastWarn = now
 	return true
+}
+
+// stallWatch follows the two conditions one sweep warns about: a sweep that
+// keeps re-reading due work without finishing any of it (stalled), and a
+// leader whose ticks stay deferred because it has not applied its log and
+// rebuilt its dispatch index (deferred). Only the sweep's own goroutine
+// uses it.
+type stallWatch struct {
+	stalled  sustained
+	deferred sustained
+}
+
+// observe records one tick by outcome and reports whether to warn now about
+// that outcome's condition. A deferred tick says nothing about due work; a
+// tick that ran ends the deferral.
+func (w *stallWatch) observe(now time.Time, outcome string) bool {
+	if outcome == outcomeDeferred {
+		return w.deferred.observe(now, true)
+	}
+	w.deferred.observe(now, false)
+	return w.stalled.observe(now, outcome == outcomeStalled)
+}
+
+// reset forgets both conditions: a follower does not sweep, so a later term
+// starts its own watch.
+func (w *stallWatch) reset() {
+	*w = stallWatch{}
 }
 
 func (r *Reaper) clock() time.Time {
@@ -236,6 +264,7 @@ func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(con
 				// Follower in raft mode: leader's reaper handles all
 				// sweeps. Failover catches up on the next tick after
 				// election.
+				stall.reset()
 				continue
 			}
 			r.tickWhenReady(ctx, tick, label, &stall)
@@ -245,18 +274,28 @@ func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(con
 
 // tickWhenReady runs the sweep once this leader has applied its log and
 // rebuilt its dispatch index; until then the tick is deferred, never run on
-// a state older than the committed log.
+// a state older than the committed log. A leader deferred for stallWarnAfter
+// is stuck before its rebuild (claims fail and no lease or TTL is swept), so
+// it warns, rate limited, with the error class only.
 func (r *Reaper) tickWhenReady(ctx context.Context, tick func(context.Context) (sweepResult, error), label string, stall *stallWatch) {
 	if r.leaderReady != nil {
 		readyCtx, cancel := context.WithTimeout(ctx, leaderReadyTimeout)
 		err := r.leaderReady(readyCtx)
 		cancel()
 		if err != nil {
+			class := dispatchErrorClass(err)
 			metrics.ReaperTicks.WithLabelValues(label, outcomeDeferred).Inc()
-			r.logger.Debug("reaper tick deferred until the leader has applied its log", "sweep", label, "err", err)
+			r.logger.Debug("reaper tick deferred until the leader has applied its log", "sweep", label, "errorClass", class)
+			if stall.observe(r.clock(), outcomeDeferred) {
+				r.logger.Warn("reaper sweeps deferred: this leader has not applied its log and rebuilt its dispatch index",
+					"event", "codeq_reaper_deferred", "sweep", label, "errorClass", class,
+					"deferredFor", r.clock().Sub(stall.deferred.since).Round(time.Second).String())
+			}
 			return
 		}
 	}
+	// The leader is ready: the deferral ends even if the sweep then fails.
+	stall.deferred.observe(r.clock(), false)
 	r.runTick(ctx, tick, label, stall)
 }
 
@@ -278,7 +317,7 @@ func (r *Reaper) runTick(ctx context.Context, tick func(context.Context) (sweepR
 	}
 	if stall.observe(r.clock(), outcome) {
 		r.logger.Warn("reaper sweep is making no progress: due entries stay and are re-read every tick",
-			"event", "codeq_reaper_stalled", "sweep", label, "due", res.due, "stalledFor", r.clock().Sub(stall.since).Round(time.Second).String())
+			"event", "codeq_reaper_stalled", "sweep", label, "due", res.due, "stalledFor", r.clock().Sub(stall.stalled.since).Round(time.Second).String())
 	}
 }
 
@@ -495,33 +534,18 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 	return nil
 }
 
-// sweepTTL drops aged-out task hashes (and their lease entries) up to
+// ttlSweep drops aged-out task hashes (and their lease entries) up to
 // ttlBatch per tick. CleanupExpired on the foreground path is bounded too;
 // the reaper exists so an idle deployment still trims stale data.
-func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
-	res, err := r.ttlSweepDetailed(ctx)
-	return res.removed, err
-}
-
-// ttlSweepResult extends sweepResult with the rows the sweep removed.
-type ttlSweepResult struct {
-	sweepResult
-	removed int
-}
-
+//
+// It counts the due TTL index entries as the sweep's due work: an entry the
+// sweep cannot drop stays at the head of the index and is read again by
+// every later sweep. The rotating absolute sweep that runs first is not
+// counted as due; most identities it visits legitimately need nothing.
 func (r *Reaper) ttlSweep(ctx context.Context) (sweepResult, error) {
-	res, err := r.ttlSweepDetailed(ctx)
-	return res.sweepResult, err
-}
-
-// ttlSweepDetailed counts the due TTL index entries as the sweep's due work:
-// an entry the sweep cannot drop stays at the head of the index and is read
-// again by every later sweep. The rotating absolute sweep that runs first is
-// not counted; most identities it visits legitimately need nothing.
-func (r *Reaper) ttlSweepDetailed(ctx context.Context) (ttlSweepResult, error) {
 	absoluteRemoved, err := r.db.sweepAbsolute(ctx, r.ttlBatch)
 	if err != nil {
-		return ttlSweepResult{}, err
+		return sweepResult{}, err
 	}
 	before := time.Now().In(r.tz)
 	lower, _ := PrefixTTL()
@@ -530,14 +554,13 @@ func (r *Reaper) ttlSweepDetailed(ctx context.Context) (ttlSweepResult, error) {
 	upper = append(upper, be8(unixSeconds(before)+1)...)
 	hits, err := collectTTLHits(r.db, lower, upper, r.ttlBatch)
 	if err != nil || len(hits) == 0 {
-		return ttlSweepResult{sweepResult: sweepResult{done: absoluteRemoved}, removed: absoluteRemoved}, err
+		return sweepResult{done: absoluteRemoved}, err
 	}
-	n, err := dropExpiredBodies(r.db, hits)
-	if err != nil {
-		return ttlSweepResult{removed: absoluteRemoved + n}, err
+	if _, err := dropExpiredBodies(r.db, hits); err != nil {
+		return sweepResult{}, err
 	}
 	left, err := remainingTTLHits(r.db, hits)
-	return ttlSweepResult{sweepResult: sweepResult{due: len(hits), done: absoluteRemoved + len(hits) - left}, removed: absoluteRemoved + n}, err
+	return sweepResult{due: len(hits), done: absoluteRemoved + len(hits) - left}, err
 }
 
 // remainingTTLHits counts the due index entries a sweep left in place; the

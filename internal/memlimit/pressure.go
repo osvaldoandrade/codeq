@@ -11,9 +11,18 @@ import (
 const (
 	liveHeapMetric = "/gc/heap/live:bytes"
 	goLimitMetric  = "/gc/gomemlimit:bytes"
-	gcCPUMetric    = "/cpu/classes/gc/total:cpu-seconds"
 	allCPUMetric   = "/cpu/classes/total:cpu-seconds"
 )
+
+// gcBusyCPUMetrics are the GC CPU classes that take CPU from the program:
+// mark assists, dedicated mark workers and stop-the-world pauses. Idle mark
+// work (/cpu/classes/gc/mark/idle) only runs on otherwise idle Ps, so
+// /cpu/classes/gc/total, which includes it, reads high on an idle voter.
+var gcBusyCPUMetrics = []string{
+	"/cpu/classes/gc/mark/assist:cpu-seconds",
+	"/cpu/classes/gc/mark/dedicated:cpu-seconds",
+	"/cpu/classes/gc/pause:cpu-seconds",
+}
 
 // Default thresholds of the pressure monitor. A live heap at 90% of the soft
 // limit leaves the GC almost no room: past it the runtime collects back to
@@ -33,7 +42,8 @@ type Pressure struct {
 	// GoLimitBytes is the soft limit in effect; 0 when there is none.
 	GoLimitBytes uint64
 	// GCCPUFraction is the share of the CPU available to Go (GOMAXPROCS)
-	// spent in GC since the previous sample.
+	// the GC took from the program since the previous sample: assists,
+	// dedicated mark workers and pauses, not idle-priority marking.
 	GCCPUFraction float64
 	// Over reports that the sample crossed a threshold.
 	Over bool
@@ -83,14 +93,27 @@ type runtimeReading struct {
 }
 
 func readRuntime() runtimeReading {
-	samples := []metrics.Sample{{Name: liveHeapMetric}, {Name: goLimitMetric}, {Name: gcCPUMetric}, {Name: allCPUMetric}}
+	samples := make([]metrics.Sample, 0, 3+len(gcBusyCPUMetrics))
+	samples = append(samples, metrics.Sample{Name: liveHeapMetric}, metrics.Sample{Name: goLimitMetric}, metrics.Sample{Name: allCPUMetric})
+	for _, name := range gcBusyCPUMetrics {
+		samples = append(samples, metrics.Sample{Name: name})
+	}
 	metrics.Read(samples)
 	return runtimeReading{
 		liveHeap: sampleUint(samples[0]),
 		goLimit:  sampleUint(samples[1]),
-		gcCPU:    sampleFloat(samples[2]),
-		allCPU:   sampleFloat(samples[3]),
+		allCPU:   sampleFloat(samples[2]),
+		gcCPU:    sumFloat(samples[3:]),
 	}
+}
+
+// sumFloat adds the float samples; an unsupported metric counts as zero.
+func sumFloat(samples []metrics.Sample) float64 {
+	total := 0.0
+	for _, s := range samples {
+		total += sampleFloat(s)
+	}
+	return total
 }
 
 // Sample reads the runtime. Over is set when the live heap reaches the heap

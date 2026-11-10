@@ -72,6 +72,7 @@ func (r *TaskRepository) tryReserve(taskID string) bool {
 		return false
 	}
 	r.inflight[taskID] = struct{}{}
+	r.noteFootprintLocked()
 	return true
 }
 
@@ -83,6 +84,7 @@ func (r *TaskRepository) release(taskID string) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
 	delete(r.inflight, taskID)
+	r.noteFootprintLocked()
 }
 
 // lockDelayed takes the delayed-move flag of (cmd, tenant), waiting while

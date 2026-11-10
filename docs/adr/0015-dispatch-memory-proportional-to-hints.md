@@ -6,6 +6,11 @@
 - **Amends**: nothing on the wire; process-local dispatch index, reaper
   scheduling and observability only
 - **Ships in**: the CodeQ release after v0.5.13
+- **Revised**: 2026-11-10 after the architecture and release reviews: a
+  queue deeper than the hint cap no longer fails the rebuild (P2-2), a
+  leader stuck before its rebuild warns (P2-1), the footprint sample no
+  longer takes the dispatch lock (P3-3), the GC share excludes idle marking
+  (P3-5), and the roll guidance and memory bound are restated (P3-1, P3-6).
 
 ## Context
 
@@ -72,6 +77,12 @@ Two more defects surfaced in the same investigation:
   and stale rows.
 - **No telemetry.** Conveste scrapes no CodeQ metrics, and none of this left
   a log line.
+- **Crash loop on a deep queue** (pre-existing). A rebuild that met more than
+  100,000 pending tasks in one `(command, tenant, priority)` failed. At
+  startup the constructor panicked, so every voter would crash-loop; on a
+  running leader every claim failed, and with the reaper gate below, lease
+  and TTL sweeps would stop too. A publish refused at the cap was recovered
+  only by the next rebuild.
 
 ## Decision
 
@@ -82,9 +93,22 @@ Two more defects surfaced in the same investigation:
     publish, released when it drains, and dropped by the leadership rebuild.
   - Probing a priority never allocates, so dispatch memory is proportional
     to the hints held: about 24 bytes plus the id per hint.
-  - The 100,000-hint cap per queue is kept (`maxHintsPerQueue`). Beyond it,
-    publish drops the hint (its pending key stays durable) and recovery
-    fails loudly, as before.
+  - The 100,000-hint cap per queue is kept (`maxHintsPerQueue`). A hint
+    refused at the cap, by a publish or by a rebuild, keeps its pending key
+    durable and marks the queue **overflowed**. An overflowed queue accepts
+    no new hint, so tasks published meanwhile wait behind the refused ones
+    and FIFO order stays the order of the pending keys.
+  - A claim (single or batch) that finds an overflowed queue empty refills
+    it from Pebble: it scans that tuple's pending keys in order, skips tasks
+    in flight, and queues up to the cap. The scan therefore re-reads only the
+    in-flight keys before it finds new work, a bounded cost per cap's worth
+    of claims. The queue leaves the overflow set when a refill reaches the end
+    of its keys; a storage error keeps it there for the next claim.
+  - A rebuild or restart over a deeper queue seeds its oldest 100,000 tasks
+    and marks it overflowed; it never fails and the constructor never panics
+    for it. A rebuild that marks queues logs one
+    `event=codeq_hint_queue_overflow` WARN with the number of queues and the
+    cap (no command or tenant).
   - FIFO order, the queued/in-flight dedupe and the claim inspection budget
     are unchanged.
 - **Reaper gate.** In Raft mode the reaper sweeps only after
@@ -93,19 +117,37 @@ Two more defects surfaced in the same investigation:
   term, and the dispatch index and lease table were rebuilt from that state.
   - Until then the tick is deferred: counted as `deferred`, logged at DEBUG,
     and nothing is written.
+  - Deferred ticks go through the same sustained-condition watch as stalled
+    sweeps. After one minute of continuous deferral the sweep logs
+    `event=codeq_reaper_deferred` at WARN with the sweep, the error class
+    (`not_leader`, `timeout`, `canceled` or `barrier_or_storage`) and how long
+    it has been deferred, at most once per 5 minutes. No error text or tenant
+    data is logged. A tick that runs ends the deferral; a follower tick
+    resets both watches.
+  - The election-time rebuild logs `event=codeq_dispatch_rebuild_failed` at
+    WARN with the error class when it fails while this voter still leads, at
+    most once per 5 minutes.
   - The reaper therefore also completes a rebuild that failed at election on
-    an idle leader.
+    an idle leader, and a leader stuck before its rebuild is visible in logs
+    within a minute.
 - **Visibility.** Recurrences are visible in logs and metrics.
   - The storage monitor (every 5 s, every voter) publishes:
-    - `codeq_memory_go_live_heap_bytes` and `codeq_memory_gc_cpu_fraction`;
+    - `codeq_memory_go_live_heap_bytes` and `codeq_memory_gc_cpu_fraction`.
+      The GC share counts mark assists, dedicated mark workers and pauses,
+      the GC work that takes CPU from the program. Idle-priority marking
+      (counted by `/cpu/classes/gc/total`) runs only on otherwise idle CPU
+      and would flag idle voters.
     - `codeq_dispatch_hint_queues`, `codeq_dispatch_hints`,
-      `codeq_dispatch_inflight` and `codeq_lease_entries` per shard.
+      `codeq_dispatch_inflight`, `codeq_dispatch_overflowed_queues` and
+      `codeq_lease_entries` per shard. The dispatch sizes are atomic counters
+      stored under the dispatch lock after each change, so the sample never
+      waits behind a rebuild or a refill.
   - When the live heap stays at or above 90% of the soft limit, or the GC
     takes at least 25% of the CPU available to Go, for two consecutive
     samples, it logs `event=codeq_memory_pressure` at WARN at most once per
     5 minutes. The line carries the live heap, the limit, the GC share,
-    whether the voter leads, and the dispatch footprint
-    (`memory_pressure_warnings_total` counts these warnings).
+    whether the voter leads, and the dispatch footprint, overflowed queues
+    included (`memory_pressure_warnings_total` counts these warnings).
   - Every reaper sweep is counted in
     `codeq_reaper_ticks_total{sweep,outcome}`, where outcome is `idle`,
     `progress`, `stalled` (due work found and none finished), `error` or
@@ -118,6 +160,13 @@ Two more defects surfaced in the same investigation:
 - A leader's dispatch memory no longer depends on how many topics and
   priorities its claimers name. An idle topic holds nothing. A backlog costs
   memory per queued task, bounded by the per-queue cap as before.
+- Hint memory has no global bound, only the per-queue cap. A voter's hints
+  total at most 100,000 × the number of `(command, tenant, priority)` tuples
+  with pending work, about 24 bytes plus the id each. Followers keep the hints
+  their constructor recovered (their queues receive no publishes or claims)
+  until they lead and rebuild. A process-wide cap was not added: it would
+  have to choose which tenant's queue stops dispatching. `codeq_dispatch_hints`
+  and the `codeq_memory_pressure` footprint expose the total.
 - Every hint operation already took `dispatchMu`; the queue adds no lock and
   replaces channel operations with slice operations under the same mutex.
 - Raft entries, the FSM, snapshots, the HTTP and gRPC APIs and the
@@ -128,14 +177,22 @@ Two more defects surfaced in the same investigation:
   requeued that much later; no lease can expire unnoticed.
 - Mixed-version rolls are safe. Everything changed is process-local or
   observability, so a v0.5.13 voter and a voter with this change replicate
-  and apply the same entries. A v0.5.13 voter that wins an election during
-  the roll still carries the defect until it is replaced, so roll the
-  current leader last.
+  and apply the same entries. The installation agent rolls voters one at a
+  time in reverse ordinal order without regard to leadership, so the leader
+  cannot be rolled last on purpose; a v0.5.13 voter can lead for about one
+  roll step and carries the defect only while it does. After the roll,
+  verify that the leader (`/raft/status`) is a Pod running the new image,
+  and watch `event=codeq_memory_pressure` and `codeq_memory_gc_cpu_fraction`
+  on it for the next hours.
 - Operators get the first signal of a recurrence in the logs.
   `codeq_memory_pressure` with large `dispatchQueues` would point at a new
   per-tuple leak; with a small footprint it points elsewhere (Pebble, request
   backlog). `codeq_reaper_stalled` names the sweep and the work it keeps
-  re-reading.
+  re-reading; `codeq_reaper_deferred` and `codeq_dispatch_rebuild_failed`
+  name a leader that cannot complete its rebuild.
+- A queue deeper than the cap costs one bounded scan per refill instead of a
+  crash loop or a stuck leader; it is visible as
+  `codeq_dispatch_overflowed_queues` and `codeq_hint_queue_overflow`.
 
 ## Alternatives considered
 
@@ -159,6 +216,15 @@ Two more defects surfaced in the same investigation:
 - `internal/repository/pebble/dispatch_memory_test.go`
   (`TestClaimProbesRetainNoDispatchMemory` fails on v0.5.13 with 297 MiB
   retained).
-- `internal/repository/pebble/reaper_leader_ready_test.go`,
-  `reaper_progress_test.go`, `internal/memlimit/pressure_test.go`.
+- `internal/repository/pebble/dispatch_overflow_test.go`
+  (`TestRestartWithMorePendingThanCapSeedsCapAndDrainsInOrder`,
+  `TestRebuildWithMorePendingThanCapSucceeds`,
+  `TestPublishBeyondCapRefillsInOrder`,
+  `TestClaimManyDrainsOverflowedQueueInOrder`,
+  `TestOverflowConcurrentPublishAndClaimDeliversEveryTaskOnce`,
+  `TestDispatchFootprintDoesNotWaitForDispatchLock`).
+- `internal/repository/pebble/reaper_leader_ready_test.go`
+  (`TestReaperWarnsWhenDeferredForAMinute`), `reaper_progress_test.go`,
+  `internal/memlimit/pressure_test.go`
+  (`TestGCBusyMetricsExcludeIdleMarkAndExist`).
 - ADR 0010, ADR 0012, ADR 0013; `internal/memlimit` (soft limit derivation).

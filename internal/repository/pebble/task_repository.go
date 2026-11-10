@@ -100,6 +100,19 @@ type TaskRepository struct {
 	queued        map[string]struct{}
 	inflight      map[string]struct{}
 
+	// overflow lists the queues whose durable pending keys may hold tasks
+	// their hint queue does not: a hint was refused at hintCap (ADR 0015).
+	// While a queue is listed it accepts no new hint, so FIFO order stays
+	// the order of its pending keys; a claim that finds it empty refills it
+	// from Pebble (refillLocked), and it leaves the list once a refill
+	// reaches the end of its keys. Guarded by dispatchMu.
+	overflow map[string]overflowQueue
+	// hintCap is the per-queue hint cap: maxHintsPerQueue, lowered by tests.
+	hintCap int
+	// footprint mirrors the sizes of the dispatch index so DispatchFootprint
+	// never waits on dispatchMu, which a rebuild holds for a whole scan.
+	footprint dispatchCounters
+
 	// clock, when set, replaces time.Now for now(). Tests use it to move
 	// the absolute-expiry clock at the instant a lease is stamped;
 	// production leaves it nil.
@@ -153,11 +166,26 @@ type pendingHint struct {
 }
 
 // maxHintsPerQueue bounds how many task IDs one (cmd, tenant, prio) queue
-// stages in memory, as the former channel capacity did. A hint published to
-// a full queue is dropped; its pending key stays durable and the next
-// leadership rebuild (or restart) scans it back. Memory is paid per hint
-// held (about 24 bytes plus the id), never per probed tuple.
+// stages in memory, as the former channel capacity did. A hint refused at the
+// cap, whether published or met by a rebuild, leaves its pending key durable
+// and marks the queue overflowed: claims refill it from Pebble in key order
+// once it drains (refillLocked). Memory is paid per hint held (about 24
+// bytes plus the id), never per probed tuple.
 const maxHintsPerQueue = 100_000
+
+// overflowQueue names the (cmd, tenant, prio) of an overflowed hint queue so
+// a refill can scan its pending keys.
+type overflowQueue struct {
+	cmd      domain.Command
+	tenantID string
+	prio     int
+}
+
+// dispatchCounters are the sizes of the dispatch index, stored under
+// dispatchMu after every change and read without it.
+type dispatchCounters struct {
+	queues, hints, inflight, overflowed atomic.Int64
+}
 
 const (
 	minPriority         = 0
@@ -198,6 +226,12 @@ func (rt *reconcileTracker) shouldRun(cmd domain.Command, tenantID string) bool 
 // NewTaskRepository wires an open Pebble DB into the TaskRepository contract.
 // tz is used for the "now" timestamps embedded in task JSON.
 func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffBaseSeconds, backoffMaxSeconds int) *TaskRepository {
+	return newTaskRepository(db, tz, backoffPolicy, backoffBaseSeconds, backoffMaxSeconds, maxHintsPerQueue)
+}
+
+// newTaskRepository is NewTaskRepository with the per-queue hint cap; tests
+// lower it to exercise overflow without 100,000 tasks.
+func newTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffBaseSeconds, backoffMaxSeconds, hintCap int) *TaskRepository {
 	if backoffBaseSeconds <= 0 {
 		backoffBaseSeconds = 5
 	}
@@ -218,11 +252,14 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 		queues:             make(map[string]*hintQueue),
 		queued:             make(map[string]struct{}),
 		inflight:           make(map[string]struct{}),
+		overflow:           make(map[string]overflowQueue),
+		hintCap:            hintCap,
 	}
 	r.dispatchCond = sync.NewCond(&r.dispatchMu)
-	// Re-seed in-memory queue channels from any pending keys that
-	// survived a previous shutdown. Has to happen before any handler
-	// starts serving claims; that's why we do it in the constructor.
+	// Re-seed in-memory hint queues from any pending keys that survived a
+	// previous shutdown. Has to happen before any handler starts serving
+	// claims; that's why we do it in the constructor. A queue deeper than
+	// the cap is seeded up to it and refilled by claims, never a panic.
 	if err := r.recoverQueues(); err != nil {
 		panic(fmt.Sprintf("pebble queue recovery: %v", err))
 	}
@@ -235,6 +272,7 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 	if err := r.recoverLeases(); err != nil {
 		panic(fmt.Sprintf("pebble lease recovery: %v", err))
 	}
+	r.noteFootprintLocked()
 	if src, ok := r.db.repl.(leadershipSource); ok {
 		// goroutine: exits when LeaderObservation closes (raft.DB.Close).
 		go r.watchLeadership(src)
@@ -390,9 +428,9 @@ func enqueueLocation(delayed bool) domain.TaskLocation {
 // announceEnqueue runs after the enqueue batch commits. It publishes the ID
 // on the fast-path hint queue (or counts the delayed entry) and updates the
 // metrics. If the queue happens to be full (cap reached) the hint is
-// dropped — the pending key is durable in Pebble, and any reaper or restart
-// will rediscover it. A drop here is a perf regression (claim falls back to
-// a scan), not a correctness one.
+// dropped — the pending key is durable in Pebble and the overflowed queue is
+// refilled from it by a claim once it drains. A drop here costs a bounded
+// scan, not correctness.
 func (r *TaskRepository) announceEnqueue(task *domain.Task, delayed bool, pendingSeq uint64) {
 	metrics.TaskCreatedTotal.WithLabelValues(string(task.Command)).Inc()
 	if delayed {
@@ -552,9 +590,9 @@ func (r *TaskRepository) idempoStripe(key string) *sync.Mutex {
 }
 
 // publishPending pushes a (seq, id) hint onto the per-queue FIFO. A full
-// queue drops the hint; the pending key is already durable, and the next
-// leadership rebuild (or process restart) scans it back onto the queue.
-// There is no claim-time scan.
+// (or already overflowed) queue drops the hint: the pending key is already
+// durable, the queue is marked overflowed, and a claim that drains the queue
+// refills it from Pebble in key order (refillLocked).
 //
 // While a Raft rebuild has not finished, the hint is skipped on purpose:
 // the rebuild scans Pebble and would otherwise pair with this send.
@@ -750,14 +788,13 @@ func (r *TaskRepository) delayedCounter(cmd domain.Command, tenantID string) *at
 }
 
 // recoverQueues scans every pending key under codeq/q/.../pending/* at
-// startup and re-seeds the matching hint queue. Without this, IDs that were
-// durably enqueued before a restart would never be claimed (the queue
-// would stay empty until new producers pushed).
+// startup (and on each leadership rebuild) and re-seeds the matching hint
+// queue. Without this, IDs that were durably enqueued before a restart would
+// never be claimed (the queue would stay empty until new producers pushed).
 //
-// Runs once during NewTaskRepository so the workload is paid up-front
-// rather than spread across the first batch of claims. Linear in the
-// number of pending keys; for very deep queues this could be made
-// concurrent or chunked.
+// A queue reaching hintCap is seeded with its oldest hintCap keys and marked
+// overflowed, as a publish refused at the cap marks it; claims refill it in
+// key order as it drains. Linear in the number of pending keys.
 func (r *TaskRepository) recoverQueues() error {
 	lower := []byte(pQueue)
 	upper := prefixUpper(lower)
@@ -798,12 +835,13 @@ func (r *TaskRepository) recoverQueues() error {
 		if !ok {
 			continue
 		}
-		// A queue already holding maxHintsPerQueue hints refuses the
-		// recovery hint. The pending key stays in Pebble, but the rebuild
-		// fails loudly rather than silently leaving a task undispatched.
-		if !r.sendHintLocked(cmd, tenantID, prio, seq, id) {
-			return fmt.Errorf("hint queue full during recovery for queue %s/%s/%d (raise maxHintsPerQueue)", cmd, tenantID, prio)
-		}
+		// A refused hint keeps its pending key in Pebble and leaves the
+		// queue overflowed; a claim refills it once the queue drains.
+		r.sendHintLocked(cmd, tenantID, prio, seq, id)
+	}
+	if n := len(r.overflow); n > 0 {
+		slog.Warn("codeq: pending tasks exceed the hint queue cap; claims refill the queues from storage in order",
+			"event", "codeq_hint_queue_overflow", "queues", n, "cap", r.hintCap)
 	}
 	return it.Error()
 }

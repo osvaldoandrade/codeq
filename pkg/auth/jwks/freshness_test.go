@@ -103,10 +103,13 @@ func TestPastGraceStaleSetOnlyAfterFailedRefresh(t *testing.T) {
 			}
 			// Within the minimum interval the recent failure is known: no
 			// wait and no fetch.
+			// The token is signed before the clock starts: only validation
+			// is timed, not RSA signing under the race detector.
+			token := h.token(t, keys[0], "k1")
 			before := h.jwks.fetches.Load()
 			started = time.Now()
 			for i := 0; i < 10; i++ {
-				if _, err := h.v.Validate(h.token(t, keys[0], "k1")); err != nil {
+				if _, err := h.v.Validate(token); err != nil {
 					t.Fatalf("outage: cached key rejected: %v", err)
 				}
 			}

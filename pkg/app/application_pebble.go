@@ -739,9 +739,13 @@ func (rt *pebbleRuntime) applyOptions(app *Application) error {
 	return nil
 }
 
+// installValidators builds the configured producer and worker validators in
+// one auth.Scope, so validators of the same JWKS URL share one key-set cache
+// and a request that tries both waits for at most one refresh (ADR 0014).
 func (rt *pebbleRuntime) installValidators(app *Application) error {
+	scope := auth.NewScope()
 	if app.ProducerValidator == nil && rt.cfg.ProducerAuthProvider != "" {
-		v, err := auth.NewValidator(auth.ProviderConfig{Type: rt.cfg.ProducerAuthProvider, Config: rt.cfg.ProducerAuthConfig})
+		v, err := auth.NewScopedValidator(scope, auth.ProviderConfig{Type: rt.cfg.ProducerAuthProvider, Config: rt.cfg.ProducerAuthConfig})
 		if err != nil {
 			rt.closeAfterFailure()
 			return err
@@ -749,7 +753,7 @@ func (rt *pebbleRuntime) installValidators(app *Application) error {
 		app.ProducerValidator = v
 	}
 	if app.WorkerValidator == nil && rt.cfg.WorkerAuthProvider != "" {
-		v, err := auth.NewValidator(auth.ProviderConfig{Type: rt.cfg.WorkerAuthProvider, Config: rt.cfg.WorkerAuthConfig})
+		v, err := auth.NewScopedValidator(scope, auth.ProviderConfig{Type: rt.cfg.WorkerAuthProvider, Config: rt.cfg.WorkerAuthConfig})
 		if err != nil {
 			rt.closeAfterFailure()
 			return err
@@ -804,6 +808,7 @@ func (rt *pebbleRuntime) observeEngines() {
 			dispatch.Hints += f.Hints
 			dispatch.InFlight += f.InFlight
 			dispatch.Leases += f.Leases
+			dispatch.Overflowed += f.Overflowed
 		}
 	}
 	rt.observeMemoryPressure(time.Now(), dispatch)
@@ -838,6 +843,7 @@ func (rt *pebbleRuntime) observeMemoryPressure(now time.Time, dispatch pebblerep
 		"dispatchHints", dispatch.Hints,
 		"dispatchInFlight", dispatch.InFlight,
 		"leases", dispatch.Leases,
+		"dispatchOverflowedQueues", dispatch.Overflowed,
 	)
 }
 

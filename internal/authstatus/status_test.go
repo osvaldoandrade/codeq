@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -24,5 +25,32 @@ func TestStreamMapsUnavailableAndRefusalToFixedStatuses(t *testing.T) {
 	}
 	if st := status.Convert(Stream(errors.New("anything"))); st.Code() != codes.Unauthenticated {
 		t.Fatalf("unclassified error mapped to %v", st.Code())
+	}
+}
+
+// Review P3-7: a stream client gets the same retry delay an HTTP client reads
+// from Retry-After, as a google.rpc.RetryInfo status detail.
+func TestStreamUnavailableCarriesRetryInfo(t *testing.T) {
+	for _, tc := range []struct {
+		retry time.Duration
+		want  time.Duration
+	}{
+		{7 * time.Second, 7 * time.Second},
+		{1500 * time.Millisecond, 2 * time.Second},
+		{0, time.Second},
+	} {
+		st := status.Convert(Stream(&auth.UnavailableError{RetryAfter: tc.retry}))
+		var got *errdetails.RetryInfo
+		for _, d := range st.Details() {
+			if info, ok := d.(*errdetails.RetryInfo); ok {
+				got = info
+			}
+		}
+		if got == nil || got.GetRetryDelay().AsDuration() != tc.want {
+			t.Fatalf("retry %v: RetryInfo = %v, want %v", tc.retry, got, tc.want)
+		}
+	}
+	if details := status.Convert(Stream(auth.ErrInvalidToken)).Details(); len(details) != 0 {
+		t.Fatalf("a refusal carries details: %v", details)
 	}
 }

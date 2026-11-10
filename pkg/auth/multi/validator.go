@@ -25,9 +25,16 @@ type validator struct {
 
 func init() {
 	auth.RegisterProvider("multi", newValidatorFromJSON)
+	auth.RegisterScopedProvider("multi", newScopedValidatorFromJSON)
 }
 
 func newValidatorFromJSON(raw json.RawMessage) (auth.Validator, error) {
+	return newScopedValidatorFromJSON(raw, nil)
+}
+
+// newScopedValidatorFromJSON builds the children with scope, so a child JWKS
+// validator shares its key-set cache with the process's other validators.
+func newScopedValidatorFromJSON(raw json.RawMessage, scope *auth.Scope) (auth.Validator, error) {
 	var cfg config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("multi auth: invalid config: %w", err)
@@ -41,7 +48,7 @@ func newValidatorFromJSON(raw json.RawMessage) (auth.Validator, error) {
 		if provider.Type == "" || provider.Type == "multi" {
 			return nil, fmt.Errorf("multi auth: provider %d has an invalid type", index)
 		}
-		nested, err := auth.NewValidator(provider)
+		nested, err := auth.NewScopedValidator(scope, provider)
 		if err != nil {
 			return nil, fmt.Errorf("multi auth: configure provider %d: %w", index, err)
 		}

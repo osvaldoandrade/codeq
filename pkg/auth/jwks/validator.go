@@ -109,15 +109,25 @@ type refreshCall struct {
 	err  error
 }
 
-// Validator validates JWT tokens using JWKS
+// Validator validates JWT tokens using JWKS. Its key-set cache may be shared
+// with the other validators of the same auth.Scope and key-set URL.
 type Validator struct {
-	jwksURL  string
+	*keyCache
 	issuer   string
 	audience string
-	client   *http.Client
 	parser   *jwt.Parser
-	logger   *slog.Logger
-	now      func() time.Time
+}
+
+// keyCache is the key set of one JWKS URL, its refresh state and its
+// bounds. Validators built in one auth.Scope for the same URL and HTTP
+// timeout share it, so the producer and worker validators of a process
+// fetch, rate-limit and wait together (ADR 0014). It holds no issuer or
+// audience: every validator applies its own.
+type keyCache struct {
+	jwksURL string
+	client  *http.Client
+	logger  *slog.Logger
+	now     func() time.Time
 
 	httpTimeout        time.Duration
 	refreshInterval    time.Duration
@@ -138,6 +148,7 @@ type Validator struct {
 func init() {
 	// Register JWKS provider in the global registry
 	auth.RegisterProvider("jwks", NewValidatorFromJSON)
+	auth.RegisterScopedProvider("jwks", newScopedValidatorFromJSON)
 }
 
 // NewValidatorFromJSON creates a validator from JSON configuration
@@ -149,12 +160,34 @@ func NewValidatorFromJSON(configJSON json.RawMessage) (auth.Validator, error) {
 	return NewValidator(cfg)
 }
 
-// NewValidator creates a new JWKS validator
+// NewValidator creates a new JWKS validator with its own key-set cache.
 func NewValidator(cfg Config) (auth.Validator, error) {
 	return newValidator(cfg)
 }
 
+// newScopedValidatorFromJSON is NewValidatorFromJSON sharing the key-set
+// cache of scope's other JWKS validators for the same URL and HTTP timeout.
+func newScopedValidatorFromJSON(configJSON json.RawMessage, scope *auth.Scope) (auth.Validator, error) {
+	var cfg Config
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, fmt.Errorf("invalid JWKS config: %w", err)
+	}
+	return newSharedValidator(cfg, scope)
+}
+
+// cacheKey identifies a shared key-set cache within an auth.Scope.
+type cacheKey struct {
+	jwksURL     string
+	httpTimeout time.Duration
+}
+
 func newValidator(cfg Config) (*Validator, error) {
+	return newSharedValidator(cfg, nil)
+}
+
+// newSharedValidator builds a validator whose key-set cache is shared through
+// scope; a nil scope gives it its own.
+func newSharedValidator(cfg Config, scope *auth.Scope) (*Validator, error) {
 	if cfg.JwksURL == "" {
 		return nil, errors.New("jwksURL is required")
 	}
@@ -170,10 +203,29 @@ func newValidator(cfg Config) (*Validator, error) {
 	}
 	timeout = min(timeout, maxHTTPTimeout)
 
-	v := &Validator{
-		jwksURL:            cfg.JwksURL,
-		issuer:             cfg.Issuer,
-		audience:           cfg.Audience,
+	var cache *keyCache
+	if scope != nil {
+		cache, _ = scope.Shared(cacheKey{jwksURL: cfg.JwksURL, httpTimeout: timeout}, func() any {
+			return newKeyCache(cfg.JwksURL, timeout)
+		}).(*keyCache)
+	}
+	if cache == nil {
+		cache = newKeyCache(cfg.JwksURL, timeout)
+	}
+	v := &Validator{keyCache: cache, issuer: cfg.Issuer, audience: cfg.Audience}
+	v.parser = jwt.NewParser(
+		jwt.WithValidMethods(allowedAlgorithms),
+		jwt.WithIssuer(v.issuer),
+		jwt.WithAudience(v.audience),
+		jwt.WithExpirationRequired(),
+		jwt.WithTimeFunc(func() time.Time { return v.now() }),
+	)
+	return v, nil
+}
+
+func newKeyCache(jwksURL string, timeout time.Duration) *keyCache {
+	return &keyCache{
+		jwksURL:            jwksURL,
 		httpTimeout:        timeout,
 		refreshInterval:    defaultRefreshInterval,
 		refreshGrace:       defaultRefreshGrace,
@@ -186,14 +238,6 @@ func newValidator(cfg Config) (*Validator, error) {
 			CheckRedirect: refuseUnsafeRedirect,
 		},
 	}
-	v.parser = jwt.NewParser(
-		jwt.WithValidMethods(allowedAlgorithms),
-		jwt.WithIssuer(v.issuer),
-		jwt.WithAudience(v.audience),
-		jwt.WithExpirationRequired(),
-		jwt.WithTimeFunc(func() time.Time { return v.now() }),
-	)
-	return v, nil
 }
 
 // refuseUnsafeRedirect bounds redirects and keeps them on the configured
@@ -237,7 +281,7 @@ func (v *Validator) ValidateContext(ctx context.Context, tokenString string) (*a
 			keyErr = invalid("missing kid")
 			return nil, keyErr
 		}
-		key, err := v.keyFor(ctx, kid, token.Method.Alg(), unverifiedIssuedAt(claims))
+		key, err := v.keyFor(ctx, kid, token.Method.Alg(), v.unverifiedHint(claims))
 		if err != nil {
 			keyErr = err
 			return nil, err
@@ -311,15 +355,38 @@ func buildClaims(claims jwt.MapClaims) *auth.Claims {
 	return result
 }
 
-// unverifiedIssuedAt returns the token's iat before its signature is
-// checked. It only ever selects 503 over 401 for an unknown kid; it never
-// contributes to an acceptance.
-func unverifiedIssuedAt(claims jwt.MapClaims) time.Time {
-	iat, err := claims.GetIssuedAt()
-	if err != nil || iat == nil {
-		return time.Time{}
+// tokenHint is what an unknown kid's 503-or-401 choice reads from the token
+// before its signature is checked. It only ever selects 503 over 401; it
+// never contributes to an acceptance.
+type tokenHint struct {
+	// issuedAt is the unverified iat; zero when absent or malformed.
+	issuedAt time.Time
+	// ours is set when the unverified iss equals this validator's issuer and
+	// the unverified aud contains its audience: only such a token could be
+	// accepted once the key is known.
+	ours bool
+}
+
+func (v *Validator) unverifiedHint(claims jwt.MapClaims) tokenHint {
+	var hint tokenHint
+	if iat, err := claims.GetIssuedAt(); err == nil && iat != nil {
+		hint.issuedAt = iat.Time
 	}
-	return iat.Time
+	iss, err := claims.GetIssuer()
+	if err != nil || iss != v.issuer {
+		return hint
+	}
+	audiences, err := claims.GetAudience()
+	if err != nil {
+		return hint
+	}
+	for _, aud := range audiences {
+		if aud == v.audience {
+			hint.ours = true
+			break
+		}
+	}
+	return hint
 }
 
 // keyFor returns the verification key for kid from a usable key set.
@@ -334,39 +401,39 @@ func unverifiedIssuedAt(claims jwt.MapClaims) time.Time {
 //     minRefreshInterval has elapsed since the last attempt; otherwise the
 //     kid is negatively cached for the rest of that interval.
 //   - No usable set: *auth.UnavailableError.
-func (v *Validator) keyFor(ctx context.Context, kid, alg string, issuedAt time.Time) (*rsa.PublicKey, error) {
-	v.mu.Lock()
-	now := v.now()
-	set := v.usableSetLocked(now)
+func (c *keyCache) keyFor(ctx context.Context, kid, alg string, hint tokenHint) (*rsa.PublicKey, error) {
+	c.mu.Lock()
+	now := c.now()
+	set := c.usableSetLocked(now)
 	if key, ok := set.lookup(kid); ok {
-		return v.knownKidLocked(ctx, set, key, now, kid, alg, issuedAt)
+		return c.knownKidLocked(ctx, set, key, now, kid, alg, hint)
 	}
-	return v.unknownKidLocked(ctx, set, now, kid, alg, issuedAt)
+	return c.unknownKidLocked(ctx, set, now, kid, alg, hint)
 }
 
-// knownKidLocked decides a kid present in set. It is called with v.mu held
+// knownKidLocked decides a kid present in set. It is called with c.mu held
 // and releases it.
-func (v *Validator) knownKidLocked(ctx context.Context, set *keySet, key verificationKey, now time.Time, kid, alg string, issuedAt time.Time) (*rsa.PublicKey, error) {
+func (c *keyCache) knownKidLocked(ctx context.Context, set *keySet, key verificationKey, now time.Time, kid, alg string, hint tokenHint) (*rsa.PublicKey, error) {
 	age := now.Sub(set.fetchedAt)
-	if age < v.refreshInterval+v.refreshGrace {
-		if age >= v.refreshInterval {
-			v.startRefreshLocked(now, triggerRefreshAhead)
+	if age < c.refreshInterval+c.refreshGrace {
+		if age >= c.refreshInterval {
+			c.startRefreshLocked(now, triggerRefreshAhead)
 		}
-		v.mu.Unlock()
-		observeDecision(stateFor(age, v.refreshInterval), age)
+		c.mu.Unlock()
+		observeDecision(stateFor(age, c.refreshInterval), age)
 		return checkAlg(key, alg)
 	}
-	call := v.startRefreshLocked(now, triggerRefreshAhead)
+	call := c.startRefreshLocked(now, triggerRefreshAhead)
 	if call != nil {
-		v.mu.Unlock()
-		return v.awaitKey(ctx, call, kid, alg, issuedAt)
+		c.mu.Unlock()
+		return c.awaitKey(ctx, call, kid, alg, hint)
 	}
 	// The attempt made within minRefreshInterval did not replace this set,
 	// so it failed: Tikti is unreachable and the set stays usable up to
 	// maxKeySetAge. Anything else is unexpected and fails closed.
-	failed := v.lastAttemptFailed
-	retry := v.retryAfterLocked(now)
-	v.mu.Unlock()
+	failed := c.lastAttemptFailed
+	retry := c.retryAfterLocked(now)
+	c.mu.Unlock()
 	if !failed {
 		observeDecision(decisionUnavailable, 0)
 		return nil, &auth.UnavailableError{RetryAfter: retry}
@@ -376,19 +443,19 @@ func (v *Validator) knownKidLocked(ctx context.Context, set *keySet, key verific
 }
 
 // unknownKidLocked decides a kid absent from set (which may be nil). It is
-// called with v.mu held and releases it.
-func (v *Validator) unknownKidLocked(ctx context.Context, set *keySet, now time.Time, kid, alg string, issuedAt time.Time) (*rsa.PublicKey, error) {
-	call := v.startRefreshLocked(now, triggerUnknownKid)
+// called with c.mu held and releases it.
+func (c *keyCache) unknownKidLocked(ctx context.Context, set *keySet, now time.Time, kid, alg string, hint tokenHint) (*rsa.PublicKey, error) {
+	call := c.startRefreshLocked(now, triggerUnknownKid)
 	if call != nil {
-		v.mu.Unlock()
-		return v.awaitKey(ctx, call, kid, alg, issuedAt)
+		c.mu.Unlock()
+		return c.awaitKey(ctx, call, kid, alg, hint)
 	}
-	lastFailed := v.lastAttemptFailed
-	retry := v.retryAfterLocked(now)
-	v.mu.Unlock()
+	lastFailed := c.lastAttemptFailed
+	retry := c.retryAfterLocked(now)
+	c.mu.Unlock()
 	if set != nil && !lastFailed {
 		// Absent from a set fetched successfully within the interval.
-		return nil, v.unknownKid(set, now, issuedAt, retry)
+		return nil, c.unknownKid(set, now, hint, retry)
 	}
 	observeDecision(decisionUnavailable, 0)
 	return nil, &auth.UnavailableError{RetryAfter: retry}
@@ -396,24 +463,24 @@ func (v *Validator) unknownKidLocked(ctx context.Context, set *keySet, now time.
 
 // awaitKey waits for call (bounded by the HTTP timeout and ctx) and decides
 // kid on the key set it left behind.
-func (v *Validator) awaitKey(ctx context.Context, call *refreshCall, kid, alg string, issuedAt time.Time) (*rsa.PublicKey, error) {
+func (c *keyCache) awaitKey(ctx context.Context, call *refreshCall, kid, alg string, hint tokenHint) (*rsa.PublicKey, error) {
 	select {
 	case <-call.done:
 	case <-ctx.Done():
 		// The shared refresh continues for the other waiters; this caller
 		// is gone and gets no decision, which is never an acceptance.
-		v.mu.Lock()
-		retry := v.retryAfterLocked(v.now())
-		v.mu.Unlock()
+		c.mu.Lock()
+		retry := c.retryAfterLocked(c.now())
+		c.mu.Unlock()
 		observeDecision(decisionCanceled, 0)
 		return nil, &auth.UnavailableError{RetryAfter: retry}
 	}
 
-	v.mu.Lock()
-	now := v.now()
-	set := v.usableSetLocked(now)
-	retry := v.retryAfterLocked(now)
-	v.mu.Unlock()
+	c.mu.Lock()
+	now := c.now()
+	set := c.usableSetLocked(now)
+	retry := c.retryAfterLocked(now)
+	c.mu.Unlock()
 	if set == nil {
 		observeDecision(decisionUnavailable, 0)
 		return nil, &auth.UnavailableError{RetryAfter: retry}
@@ -422,7 +489,7 @@ func (v *Validator) awaitKey(ctx context.Context, call *refreshCall, kid, alg st
 	if key, ok := set.keys[kid]; ok {
 		// Either the refresh succeeded and still publishes kid, or it failed
 		// and the previous set is within maxKeySetAge.
-		observeDecision(stateFor(age, v.refreshInterval), age)
+		observeDecision(stateFor(age, c.refreshInterval), age)
 		return checkAlg(key, alg)
 	}
 	if call.err != nil {
@@ -431,26 +498,31 @@ func (v *Validator) awaitKey(ctx context.Context, call *refreshCall, kid, alg st
 		observeDecision(decisionUnavailable, age)
 		return nil, &auth.UnavailableError{RetryAfter: retry}
 	}
-	return nil, v.unknownKid(set, now, issuedAt, retry)
+	return nil, c.unknownKid(set, now, hint, retry)
 }
 
 // unknownKid classifies a kid absent from a successfully fetched set. A token
-// whose unverified iat is not earlier than the set's fetch time may be signed
-// by a key published after that fetch (Tikti publishes only its current key,
-// so rotation is not pre-announced): it gets 503 + Retry-After so the client
-// retries once the next permitted refresh can see the key. Anything else is
-// refused. A forged iat only turns a 401 into a 503: the decision is made
-// after the refresh-or-skip choice, so it neither verifies anything nor
-// starts a fetch, and it stops applying once a later refresh succeeds.
-func (v *Validator) unknownKid(set *keySet, now, issuedAt time.Time, retry time.Duration) error {
+// that names this validator's issuer and audience and whose unverified iat
+// is not earlier than the set's fetch time (minus issuedAtSkew) nor later
+// than now (plus issuedAtSkew) may be signed by a key published after that
+// fetch (Tikti publishes only its current key, so rotation is not
+// pre-announced): it gets 503 + Retry-After so the client retries once the
+// next permitted refresh can see the key. Anything else is refused (401): a
+// token for another issuer or audience could never be accepted, whatever
+// key signed it. These unverified claims only choose between 401 and 503:
+// the choice is made after the refresh-or-skip decision, so it neither
+// verifies anything nor starts a fetch. A forged token needs this
+// validator's own issuer and audience and an iat within the window to earn
+// a 503, and it is refused again once a later refresh succeeds.
+func (c *keyCache) unknownKid(set *keySet, now time.Time, hint tokenHint, retry time.Duration) error {
 	age := now.Sub(set.fetchedAt)
-	if !issuedAt.IsZero() &&
-		!issuedAt.Before(set.fetchedAt.Add(-issuedAtSkew)) &&
-		!issuedAt.After(now.Add(issuedAtSkew)) {
+	if hint.ours && !hint.issuedAt.IsZero() &&
+		!hint.issuedAt.Before(set.fetchedAt.Add(-issuedAtSkew)) &&
+		!hint.issuedAt.After(now.Add(issuedAtSkew)) {
 		observeDecision(decisionKidNotYetKnown, age)
 		return &auth.UnavailableError{RetryAfter: retry}
 	}
-	observeDecision(stateFor(age, v.refreshInterval), age)
+	observeDecision(stateFor(age, c.refreshInterval), age)
 	return invalid("unknown kid")
 }
 
@@ -471,90 +543,90 @@ func checkAlg(key verificationKey, alg string) (*rsa.PublicKey, error) {
 }
 
 // usableSetLocked returns the last good set when it is within maxKeySetAge.
-func (v *Validator) usableSetLocked(now time.Time) *keySet {
-	if v.set == nil || now.Sub(v.set.fetchedAt) > v.maxKeySetAge {
+func (c *keyCache) usableSetLocked(now time.Time) *keySet {
+	if c.set == nil || now.Sub(c.set.fetchedAt) > c.maxKeySetAge {
 		return nil
 	}
-	return v.set
+	return c.set
 }
 
 // retryAfterLocked is the delay until a refresh may have produced a set.
-func (v *Validator) retryAfterLocked(now time.Time) time.Duration {
-	if v.inflight != nil {
-		return v.httpTimeout
+func (c *keyCache) retryAfterLocked(now time.Time) time.Duration {
+	if c.inflight != nil {
+		return c.httpTimeout
 	}
-	wait := v.lastAttempt.Add(v.minRefreshInterval).Sub(now)
+	wait := c.lastAttempt.Add(c.minRefreshInterval).Sub(now)
 	return max(wait, time.Second)
 }
 
 // startRefreshLocked joins the in-flight refresh, starts a new one when the
 // minimum interval since the last attempt has elapsed, or returns nil.
-func (v *Validator) startRefreshLocked(now time.Time, trigger string) *refreshCall {
-	if v.inflight != nil {
-		return v.inflight
+func (c *keyCache) startRefreshLocked(now time.Time, trigger string) *refreshCall {
+	if c.inflight != nil {
+		return c.inflight
 	}
-	if !v.lastAttempt.IsZero() && now.Sub(v.lastAttempt) < v.minRefreshInterval {
+	if !c.lastAttempt.IsZero() && now.Sub(c.lastAttempt) < c.minRefreshInterval {
 		observer().RefreshSkipped(trigger)
 		return nil
 	}
 	call := &refreshCall{done: make(chan struct{})}
-	v.inflight = call
-	v.lastAttempt = now
-	go v.runRefresh(call)
+	c.inflight = call
+	c.lastAttempt = now
+	go c.runRefresh(call)
 	return call
 }
 
-func (v *Validator) runRefresh(call *refreshCall) {
-	ctx, cancel := context.WithTimeout(context.Background(), v.httpTimeout)
+func (c *keyCache) runRefresh(call *refreshCall) {
+	ctx, cancel := context.WithTimeout(context.Background(), c.httpTimeout)
 	defer cancel()
-	keys, outcome := v.fetch(ctx)
+	keys, outcome := c.fetch(ctx)
 
-	v.mu.Lock()
-	now := v.now()
-	previous := v.set
+	c.mu.Lock()
+	now := c.now()
+	previous := c.set
 	if authoritative(outcome) {
 		// A well-formed answer replaces the whole set: keys it no longer
 		// publishes stop verifying at once, even when none remain usable.
-		v.set = &keySet{keys: keys, fetchedAt: now}
-		v.lastAttemptFailed = false
+		c.set = &keySet{keys: keys, fetchedAt: now}
+		c.lastAttemptFailed = false
 	} else {
 		call.err = errors.New(outcome)
-		v.lastAttemptFailed = true
+		c.lastAttemptFailed = true
 	}
-	v.mu.Unlock()
+	c.mu.Unlock()
 
 	observer().RefreshCompleted(outcome)
-	v.logRefresh(outcome, previous, keys, now)
+	c.logRefresh(outcome, previous, keys, now)
 
 	// Release joiners only after the outcome is observable, and clear
 	// inflight last so no new attempt can start before this one is done.
-	v.mu.Lock()
-	v.inflight = nil
-	v.mu.Unlock()
+	c.mu.Lock()
+	c.inflight = nil
+	c.mu.Unlock()
 	close(call.done)
 }
 
-func (v *Validator) logRefresh(outcome string, previous *keySet, keys map[string]verificationKey, now time.Time) {
+func (c *keyCache) logRefresh(outcome string, previous *keySet, keys map[string]verificationKey, now time.Time) {
 	age := -1.0
 	if previous != nil {
 		age = now.Sub(previous.fetchedAt).Seconds()
 	}
 	if outcome == outcomeNoUsableKeys {
 		_, removed := diffKids(previous, keys)
-		v.logger.Warn("jwks key set has no usable keys",
+		c.logger.Warn("jwks key set has no usable keys",
 			"component", "jwks", "outcome", outcome, "key_count", 0, "keys_removed", removed)
 		return
 	}
 	if outcome != outcomeSuccess {
-		v.logger.Warn("jwks refresh failed",
+		c.logger.Warn("jwks refresh failed",
 			"component", "jwks", "outcome", outcome,
-			"key_set_age_seconds", math.Round(age), "key_set_max_age_seconds", v.maxKeySetAge.Seconds(),
-			"usable_key_set", previous != nil && age <= v.maxKeySetAge.Seconds())
+			"key_set_age_seconds", math.Round(age), "key_set_max_age_seconds", c.maxKeySetAge.Seconds(),
+			"usable_key_set", previous != nil && age <= c.maxKeySetAge.Seconds())
 		return
 	}
 	added, removed := diffKids(previous, keys)
 	if previous == nil || added > 0 || removed > 0 {
-		v.logger.Info("jwks key set updated",
+		c.logger.Info("jwks key set updated",
 			"component", "jwks", "outcome", outcome, "key_count", len(keys),
 			"keys_added", added, "keys_removed", removed,
 			"previous_key_set_age_seconds", math.Round(age))
@@ -580,13 +652,13 @@ func diffKids(previous *keySet, keys map[string]verificationKey) (added, removed
 
 // fetch downloads and validates the key set. The returned outcome is one of
 // the fixed refresh outcome values; no error text leaves this function.
-func (v *Validator) fetch(ctx context.Context) (map[string]verificationKey, string) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.jwksURL, nil)
+func (c *keyCache) fetch(ctx context.Context) (map[string]verificationKey, string) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.jwksURL, nil)
 	if err != nil {
 		return nil, outcomeFetchError
 	}
 	req.Header.Set("Accept", "application/jwk-set+json, application/json")
-	resp, err := v.client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || isTimeout(err) {
 			return nil, outcomeFetchTimeout

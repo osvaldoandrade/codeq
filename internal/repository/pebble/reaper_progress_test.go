@@ -56,8 +56,38 @@ func TestStallWatchWarnsAfterSustainedStallAndRateLimits(t *testing.T) {
 	if w.observe(t0.Add(stallWarnAfter+2*time.Minute), outcomeProgress) {
 		t.Fatal("progress warned")
 	}
-	if w.observe(t0.Add(stallWarnAfter+3*time.Minute), outcomeIdle) || !w.since.IsZero() {
+	if w.observe(t0.Add(stallWarnAfter+3*time.Minute), outcomeIdle) || !w.stalled.since.IsZero() {
 		t.Fatal("idle sweep did not reset the stall")
+	}
+}
+
+// Deferred ticks have their own sustained watch: they neither reset nor feed
+// the stall of the sweep, a tick that runs ends the deferral, and a follower
+// tick forgets both.
+func TestStallWatchTracksDeferralSeparately(t *testing.T) {
+	var w stallWatch
+	t0 := time.Unix(1_000_000, 0)
+	w.observe(t0, outcomeStalled)
+	if w.observe(t0.Add(30*time.Second), outcomeDeferred) {
+		t.Fatal("first deferred tick warned")
+	}
+	if w.stalled.since.IsZero() {
+		t.Fatal("a deferred tick reset the stall")
+	}
+	if !w.observe(t0.Add(30*time.Second+stallWarnAfter), outcomeDeferred) {
+		t.Fatal("sustained deferral did not warn")
+	}
+	if w.observe(t0.Add(30*time.Second+stallWarnAfter+time.Minute), outcomeDeferred) {
+		t.Fatal("deferral warning not rate limited")
+	}
+	w.observe(t0.Add(3*stallWarnAfter), outcomeIdle)
+	if !w.deferred.since.IsZero() || !w.stalled.since.IsZero() {
+		t.Fatal("a tick that ran did not end the deferral and the stall")
+	}
+	w.observe(t0.Add(4*stallWarnAfter), outcomeDeferred)
+	w.reset()
+	if !w.deferred.since.IsZero() || !w.deferred.lastWarn.IsZero() {
+		t.Fatal("reset kept the deferral")
 	}
 }
 

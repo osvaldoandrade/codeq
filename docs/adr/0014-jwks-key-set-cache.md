@@ -13,6 +13,12 @@
   trying a refresh (F1); an unknown `kid` on a token issued after the fetch is
   503 instead of 401 (F2); redirects stay on the configured origin (F3);
   waits honour the request context (F4).
+- **Revised**: 2026-11-10 after the second architecture, security and
+  release reviews: an unknown `kid` earns 503 only for a token naming this
+  validator's issuer and audience (security Low-1); the producer and worker
+  validators of a process share one key-set cache per URL (P3-2); a gRPC
+  `Unavailable` carries the retry delay as `google.rpc.RetryInfo` (P3-7);
+  the rollout section states the current Conveste voter sizing (P3-8).
 
 ## Context
 
@@ -38,8 +44,21 @@ Conveste, `https://conveste.codefoundry.cc`). Through v0.5.13
 
 ## Decision
 
-`pkg/auth/jwks` keeps one immutable, whole **key set** per validator: the
+`pkg/auth/jwks` keeps one immutable, whole **key set** per key-set cache: the
 usable keys of the last successful fetch and its fetch time.
+
+- **One cache per URL per process.** A validator built with
+  `jwks.NewValidator` has its own cache. The process builds its producer and
+  worker validators (and the children of a `multi` validator) in one
+  `auth.Scope` (`auth.NewScope`, `auth.NewScopedValidator`), and validators of
+  that scope with the same JWKS URL and HTTP timeout share one cache: one key
+  set, one refresh in flight, one 30 s attempt interval. Each validator keeps
+  its own issuer and audience. The any-auth middleware and producer promotion
+  try the worker and then the producer validator; with a shared cache such a
+  request waits for at most one refresh (5 s by default), not one per
+  validator, and Tikti sees half the requests. The key set is the same
+  document whichever validator fetched it, so sharing it changes no trust
+  decision.
 
 - **Trust.** A token verifies only against a key present in a set that was
   fetched successfully. A well-formed `200` JWKS **replaces the whole set at
@@ -86,16 +105,21 @@ usable keys of the last successful fetch and its fetch time.
 - **Negative cache.** A `kid` absent from the current set gets no fetch until
   the next attempt is permitted. A per-`kid` table would add nothing: random
   `kid`s defeat it, and the global interval already bounds fetches to one per
-  30 s per validator. Its answer is 401, except for a token whose
-  **unverified** `iat` is no earlier than the set's fetch time minus 5 s and
-  no later than now plus 5 s: such a token may be signed by a key Tikti
-  published after the fetch (Tikti publishes only its current key and does
-  not pre-publish the next, `repos/tikti/internal/utils/jwks.go`), so it gets
-  **503 + `Retry-After`** (until the next permitted attempt, ≤ 30 s) and the
-  retry is decided by that refresh. The `iat` only chooses between two
-  refusals: it is read after the refresh-or-skip decision, so it never starts a
-  fetch and never contributes to an acceptance; a forged `iat` earns a 503
-  instead of a 401, and once a later refresh succeeds the same token is 401.
+  30 s per cache. Its answer is 401, except for a token whose **unverified**
+  `iss` equals this validator's issuer, whose unverified `aud` contains its
+  audience, and whose unverified `iat` is no earlier than the set's fetch
+  time minus 5 s and no later than now plus 5 s: such a token may be signed
+  by a key Tikti published after the fetch (Tikti publishes only its current
+  key and does not pre-publish the next, `repos/tikti/internal/utils/jwks.go`),
+  so it gets **503 + `Retry-After`** (until the next permitted attempt,
+  ≤ 30 s) and the retry is decided by that refresh. A token for another
+  issuer or audience could never be accepted whatever key signed it, so it is
+  401 at once and cannot be used to force 503s. These unverified claims only
+  choose between 401 and 503: they are read after the refresh-or-skip
+  decision, so they never start a fetch and never contribute to an
+  acceptance. To earn a 503 instead of a 401 a forged token must name this
+  validator's issuer and audience and carry a current `iat`, and once a later
+  refresh succeeds the same token is 401.
 - **Bounded staleness.** While refreshes fail, the last good set keeps
   verifying for at most **15 min after its fetch** (`maxKeySetAge`). Exact
   bounds for a key Tikti removed:
@@ -114,7 +138,7 @@ usable keys of the last successful fetch and its fetch time.
 - **Outcomes.** A token that was evaluated and refused wraps
   `auth.ErrInvalidToken` → **401** with the fixed body `invalid token` (gRPC
   `Unauthenticated`, `invalid token`): bad signature, unknown `kid` after a
-  successful refresh (except the `iat` case above), wrong issuer/audience,
+  successful refresh (except the issuer/audience/`iat` case above), wrong issuer/audience,
   expired, missing `exp`, disallowed algorithm, malformed. A token that
   **could not be evaluated** — no set yet, the set is older than the bound, an
   unknown `kid` while the latest refresh failed, an unknown `kid` possibly
@@ -122,7 +146,11 @@ usable keys of the last successful fetch and its fetch time.
   returns `*auth.UnavailableError` → **503** with
   `Retry-After` (seconds until the next permitted attempt, 1–30; the HTTP
   timeout while one is in flight) and the fixed body `authentication
-  temporarily unavailable` (gRPC `Unavailable`). Middleware that tries
+  temporarily unavailable`. On the gRPC streams it is `Unavailable` with the
+  same fixed message and a `google.rpc.RetryInfo` status detail whose
+  `retry_delay` is the `Retry-After` value in whole seconds (the standard
+  gRPC retry hint, sent in the `grpc-status-details-bin` trailer; clients that
+  ignore details are unaffected). Middleware that tries
   several validators (worker, producer promotion, any-auth, `multi`) answers
   503 when any of them was unavailable and none accepted. Only the fixed
   sentinels `missing Authorization header`, `invalid Authorization format`,
@@ -132,8 +160,9 @@ usable keys of the last successful fetch and its fetch time.
   fetch_timeout|fetch_error|http_status|too_large|invalid_document|
   duplicate_kid}`, `codeq_jwks_refresh_skipped_total{trigger=unknown_kid|
   refresh_ahead}`, `codeq_jwks_key_set_decisions_total{state=fresh|stale|
-  unavailable|kid_not_yet_known|canceled}` (`kid_not_yet_known` is the `iat`
-  503 above and is attacker-reachable, so it is kept out of `unavailable`;
+  unavailable|kid_not_yet_known|canceled}` (`kid_not_yet_known` is the
+  issuer/audience/`iat` 503 above and is attacker-reachable for anyone who
+  knows the issuer and audience, so it is kept out of `unavailable`;
   `canceled` is an abandoned wait), histogram
   `codeq_jwks_key_set_age_seconds`. Logs: one `WARN
   jwks refresh failed` per failed attempt (outcome, key-set age, bound,
@@ -144,8 +173,11 @@ usable keys of the last successful fetch and its fetch time.
 New code: `pkg/auth/errors.go` (`ErrInvalidToken`, `ErrUnavailable`,
 `UnavailableError`, `RetryAfter`, `PreferUnavailable`), `pkg/auth/interface.go`
 (additive `ContextValidator` and `ValidateContext(ctx, v, token)`; validators
-without it are called as before), `pkg/auth/jwks/{validator,observer}.go`,
-`internal/authstatus` (gRPC mapping), and the HTTP mapping in
+without it are called as before), `pkg/auth/scope.go` (additive `Scope`,
+`NewScope`, `RegisterScopedProvider`, `NewScopedValidator`; providers without
+a scoped factory are built as by `NewValidator`),
+`pkg/auth/jwks/{validator,observer}.go`, `internal/authstatus` (gRPC mapping
+and `RetryInfo`), and the HTTP mapping in
 `internal/middleware/auth.go`. HTTP middleware passes the request context and
 the producer and worker gRPC streams pass the stream context; `multi` passes
 it to its children.
@@ -172,7 +204,8 @@ it to its children.
   shared one timestamp, so a removed key could stay cached as long as other
   fetches kept it fresh). Attackers cannot extend the window — unknown-`kid`
   traffic never replaces or ages a good set, a failed or ambiguous refresh
-  never shrinks it, and a forged `iat` changes only 401 into 503. Signature,
+  never shrinks it, and forged `iss`/`aud`/`iat` claims change only 401 into
+  503. Signature,
   issuer, audience, `exp` and tenant checks are unchanged or stricter; 503 is
   never an acceptance.
 - **Residual.** To revoke a compromised Tikti key during a Tikti/CodeQ network
@@ -181,9 +214,10 @@ it to its children.
 
 ## Consequences
 
-- Tikti receives at most one JWKS request per 30 s per validator (two
-  validators — producer and worker — per voter) under any traffic, plus the
-  5-minute refresh-ahead; previously unbounded.
+- Tikti receives at most one JWKS request per 30 s per key-set URL per voter
+  under any traffic (the producer and worker validators share one cache;
+  configurations naming different URLs or HTTP timeouts get one cache each),
+  plus the 5-minute refresh-ahead; previously unbounded.
 - Valid tokens keep working through Tikti stalls. Validation of a known `kid`
   never waits while the set is younger than 6 min; past that it waits at most
   the HTTP timeout (or its own deadline) for one refresh, and during an outage
@@ -208,18 +242,21 @@ it to its children.
   Logs, AI and Trino tokens) sets `exp`; static (non-JWKS) providers are
   unaffected.
 - Validators start one short-lived goroutine per refresh attempt; memory per
-  validator is one small map. No new dependency, configuration key or Pod
-  resource.
+  key-set cache is one small map. No new configuration key or Pod resource;
+  `google.golang.org/genproto/googleapis/rpc`, already in the module graph
+  through gRPC, becomes a direct dependency for `RetryInfo`.
 
 ## Rollout and rollback
 
 - Image-only change. Releasing it rolls the three CodeQ voters on Code and on
-  Conveste (Conveste voters now request 125m / 384Mi per Conveste ADR-0071
-  Amendment 90; this change adds no measurable CPU or memory). No schema,
+  Conveste. Conveste voters run at the owner-approved sizing of 2026-11-06
+  (Conveste ADR-0071): requests 500m CPU / 512Mi, limits 1000m CPU / 512Mi;
+  this change adds no measurable CPU or memory and changes no request or
+  limit. No schema,
   storage, Raft, CRD or chart change; mixed-version voters during the roll are
   compatible because validation is local to each voter.
 - Verify after rollout: `codeq_jwks_refresh_total{outcome="success"}` rises
-  about once per 5 min per validator; `codeq_jwks_key_set_decisions_total
+  about once per 5 min per key-set cache; `codeq_jwks_key_set_decisions_total
   {state="unavailable"}` stays 0 outside Tikti outages; Logs publishes show no
   401 during Tikti stalls.
 - Rollback: redeploy the previous CodeQ image (v0.5.13). No state to migrate
@@ -233,6 +270,10 @@ it to its children.
 - **Background refresher goroutine per validator.** `auth.Validator` has no
   lifecycle (`Close`), so it would leak in tests and embedders; request-driven
   refresh-ahead gives the same latency property without it.
+- **Package-global cache registry keyed by URL.** It would share caches
+  implicitly, but validators have no `Close`, so it would keep caches (and
+  their state) alive across embedders and tests in one binary; the process
+  builds its validators in one explicit `auth.Scope` instead.
 - **Unbounded stale use.** Would keep trusting removed keys indefinitely during
   a partition; rejected.
 - **Keep the old set when a well-formed JWKS has no usable keys.** More
@@ -249,11 +290,16 @@ it to its children.
   regressions: `TestIdleValidatorRefusesRemovedKeyPastGrace`,
   `TestPastGraceStaleSetOnlyAfterFailedRefresh`,
   `TestUnknownKidIssuedAfterFetchIsRetryable`,
+  `TestUnknownKidForeignIssuerOrAudienceIsRefused`,
   `TestWaiterHonorsRequestContext`,
-  `TestJWKSRedirectsStayOnTheConfiguredOrigin`),
+  `TestJWKSRedirectsStayOnTheConfiguredOrigin`), `pkg/auth/jwks/shared_test.go`
+  (`TestScopedValidatorsShareOneKeySetCachePerURL`,
+  `TestSharedCacheWaitsForOneRefreshAcrossValidators`),
+  `pkg/auth/multi/validator_test.go` (`TestScopedMultiSharesChildKeySetCache`),
   `internal/middleware/auth_failure_test.go`,
-  `internal/authstatus/status_test.go`, `pkg/auth/errors_test.go`,
-  `pkg/auth/interface_test.go`.
+  `internal/authstatus/status_test.go` (`TestStreamUnavailableCarriesRetryInfo`),
+  `pkg/auth/errors_test.go`, `pkg/auth/interface_test.go`,
+  `pkg/auth/scope_test.go`.
 - `docs/security/tenant-claim-threat-model.md` (JWKS amplification, stale-key
   residual, error disclosure rows).
 - Tikti `internal/workloadidentity/jwks_verifier.go` (same 1 MiB, 2048-bit and

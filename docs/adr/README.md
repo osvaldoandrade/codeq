@@ -62,6 +62,7 @@ Proposed → Accepted → (Superseded by NNNN | Deprecated)
 | [0007](0007-task-progress.md) | Task progress reported by the lease holder | Proposed |
 | [0008](0008-client-chosen-task-ids.md) | Client-chosen task IDs | Proposed |
 | [0009](0009-dlq-operations.md) | Requeue and delete dead-lettered tasks | Proposed |
+| [0010](0010-absolute-task-expiry.md) | Opt-in absolute task expiration | Implementation authorized |
 | [0011](0011-per-voter-raft-advertise-address.md) | Every Raft voter advertises its own peer address | Accepted |
 | [0012](0012-acknowledged-absolute-tasks-leave-nothing.md) | An acknowledged absolute task leaves nothing behind | Accepted |
 | [0013](0013-retire-expired-absolute-rows-in-batches.md) | Retire expired absolute rows in batches | Proposed |

@@ -3,6 +3,8 @@ package memlimit
 import (
 	"math"
 	"runtime"
+	"runtime/metrics"
+	"strings"
 	"testing"
 	"time"
 )
@@ -77,5 +79,34 @@ func TestPressureMonitorReadsLiveRuntime(t *testing.T) {
 	runtime.GC()
 	if p := m.Sample(); p.LiveHeapBytes == 0 || p.GCCPUFraction < 0 || p.GCCPUFraction > 1 {
 		t.Fatalf("live runtime sample implausible: %+v", p)
+	}
+}
+
+// The GC share counts only the CPU the GC takes from the program. Idle mark
+// workers run on otherwise idle Ps, so counting them (as
+// /cpu/classes/gc/total does) flagged idle voters.
+func TestGCBusyMetricsExcludeIdleMarkAndExist(t *testing.T) {
+	supported := map[string]bool{}
+	for _, d := range metrics.All() {
+		supported[d.Name] = true
+	}
+	for _, name := range gcBusyCPUMetrics {
+		if !supported[name] {
+			t.Errorf("runtime does not publish %s", name)
+		}
+		if strings.Contains(name, "idle") || strings.Contains(name, "/gc/total") {
+			t.Errorf("%s counts GC work that does not take CPU from the program", name)
+		}
+	}
+	if r := readRuntime(); r.allCPU <= 0 || r.gcCPU < 0 || r.gcCPU > r.allCPU {
+		t.Fatalf("runtime reading out of range: %+v", r)
+	}
+}
+
+func TestSumFloatIgnoresUnsupportedSamples(t *testing.T) {
+	samples := []metrics.Sample{{Name: "/cpu/classes/gc/pause:cpu-seconds"}, {Name: "/no/such/metric:seconds"}}
+	metrics.Read(samples)
+	if got := sumFloat(samples); got != sampleFloat(samples[0]) {
+		t.Fatalf("sum = %v, want the supported sample only (%v)", got, sampleFloat(samples[0]))
 	}
 }
