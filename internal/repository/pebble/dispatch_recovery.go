@@ -7,6 +7,7 @@ import (
 
 	"github.com/bytedance/sonic"
 
+	"github.com/osvaldoandrade/codeq/internal/metrics"
 	"github.com/osvaldoandrade/codeq/pkg/domain"
 )
 
@@ -44,6 +45,15 @@ func (r *TaskRepository) ensureLeaderDispatch(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// EnsureLeaderDispatch is ensureLeaderDispatch for background work outside
+// this package's request paths: it returns once this process leads, a
+// barrier has applied every entry committed before its term, and the
+// dispatch index has been rebuilt from that state. Standalone Pebble
+// returns immediately.
+func (r *TaskRepository) EnsureLeaderDispatch(ctx context.Context) error {
+	return r.ensureLeaderDispatch(ctx)
 }
 
 // dispatchPass either finishes the leadership check or waits for the
@@ -169,17 +179,10 @@ func (r *TaskRepository) rebuildLocked() error {
 	return r.recoverLeases()
 }
 
+// drainHintsLocked drops every hint queue. The rebuild that follows scans
+// the pending keys back. Caller holds dispatchMu.
 func (r *TaskRepository) drainHintsLocked() {
-	r.queues.Range(func(_, v any) bool {
-		q := v.(*queueChan)
-		for {
-			select {
-			case <-q.ch:
-			default:
-				return true
-			}
-		}
-	})
+	clear(r.queues)
 }
 
 func (r *TaskRepository) resetDelayedLocked() {
@@ -189,6 +192,10 @@ func (r *TaskRepository) resetDelayedLocked() {
 	})
 }
 
+// sendHintLocked publishes one hint. The queue of (cmd, tenant, prio) is
+// created on its first hint. It reports false only when the queue already
+// holds maxHintsPerQueue hints. Caller holds dispatchMu (NewTaskRepository's
+// recovery runs before any other goroutine can see the repository).
 func (r *TaskRepository) sendHintLocked(cmd domain.Command, tenantID string, prio int, seq uint64, id string) bool {
 	if _, ok := r.inflight[id]; ok {
 		return true
@@ -196,46 +203,95 @@ func (r *TaskRepository) sendHintLocked(cmd domain.Command, tenantID string, pri
 	if _, ok := r.queued[id]; ok {
 		return true
 	}
-	q := r.channelFor(cmd, tenantID, prio)
-	select {
-	case q.ch <- pendingHint{seq: seq, id: id}:
-		r.queued[id] = struct{}{}
-		r.db.RaiseSeq(seq)
-		return true
-	default:
+	key := queueKey(cmd, tenantID, prio)
+	q := r.queues[key]
+	if q == nil {
+		q = &hintQueue{}
+		r.queues[key] = q
+	}
+	if q.len() >= maxHintsPerQueue {
 		return false
 	}
+	q.push(pendingHint{seq: seq, id: id})
+	r.queued[id] = struct{}{}
+	r.db.RaiseSeq(seq)
+	return true
 }
 
-func (r *TaskRepository) popHint(q *queueChan) (pendingHint, bool) {
-	return r.popHintWithinBudget(context.Background(), q, nil)
+func (r *TaskRepository) popHint(cmd domain.Command, tenantID string, prio int) (pendingHint, bool) {
+	return r.popHintWithinBudget(context.Background(), cmd, tenantID, prio, nil)
 }
 
-// A nil budget preserves the batch-claim traversal. Single claims account for
-// every removed hint, including a reserved task, before inspecting its body.
-func (r *TaskRepository) popHintWithinBudget(ctx context.Context, q *queueChan, remaining *int) (pendingHint, bool) {
+// popHintWithinBudget takes the oldest hint of (cmd, tenant, prio) that is
+// not already in flight. A nil budget preserves the batch-claim traversal.
+// Single claims account for every removed hint, including a reserved task,
+// before inspecting its body. A queue that drains is dropped, so an idle
+// tuple holds no memory and a probe of an empty priority allocates nothing.
+func (r *TaskRepository) popHintWithinBudget(ctx context.Context, cmd domain.Command, tenantID string, prio int, remaining *int) (pendingHint, bool) {
 	r.dispatchMu.Lock()
 	defer r.dispatchMu.Unlock()
+	key := queueKey(cmd, tenantID, prio)
+	q := r.queues[key]
+	if q == nil {
+		return pendingHint{}, false
+	}
+	defer func() {
+		if q.len() == 0 {
+			delete(r.queues, key)
+		}
+	}()
 	for remaining == nil || *remaining > 0 {
 		if ctx.Err() != nil {
 			return pendingHint{}, false
 		}
-		select {
-		case h := <-q.ch:
-			if remaining != nil {
-				*remaining--
-			}
-			delete(r.queued, h.id)
-			if _, busy := r.inflight[h.id]; busy {
-				continue
-			}
-			r.inflight[h.id] = struct{}{}
-			return h, true
-		default:
+		h, ok := q.pop()
+		if !ok {
 			return pendingHint{}, false
 		}
+		if remaining != nil {
+			*remaining--
+		}
+		delete(r.queued, h.id)
+		if _, busy := r.inflight[h.id]; busy {
+			continue
+		}
+		r.inflight[h.id] = struct{}{}
+		return h, true
 	}
 	return pendingHint{}, false
+}
+
+// DispatchFootprint is the leader-local claim index held in memory: hint
+// queues, hints and in-flight claims. Memory is proportional to these
+// counts. It is sampled on a timer for metrics and memory-pressure logs.
+type DispatchFootprint struct {
+	Queues   int
+	Hints    int
+	InFlight int
+	Leases   int
+}
+
+// DispatchFootprint samples the dispatch index under its lock (lock order:
+// dispatchMu, then the lease table).
+func (r *TaskRepository) DispatchFootprint() DispatchFootprint {
+	r.dispatchMu.Lock()
+	defer r.dispatchMu.Unlock()
+	f := DispatchFootprint{Queues: len(r.queues), InFlight: len(r.inflight), Leases: r.leases.Len()}
+	for _, q := range r.queues {
+		f.Hints += q.len()
+	}
+	return f
+}
+
+// ObserveDispatchMetrics publishes DispatchFootprint under the shard label
+// and returns it. Sampled on the storage monitor's timer, never per request.
+func (r *TaskRepository) ObserveDispatchMetrics(shard string) DispatchFootprint {
+	f := r.DispatchFootprint()
+	metrics.DispatchHintQueues.WithLabelValues(shard).Set(float64(f.Queues))
+	metrics.DispatchHints.WithLabelValues(shard).Set(float64(f.Hints))
+	metrics.DispatchInFlight.WithLabelValues(shard).Set(float64(f.InFlight))
+	metrics.LeaseEntries.WithLabelValues(shard).Set(float64(f.Leases))
+	return f
 }
 
 func (r *TaskRepository) finishHint(cmd domain.Command, tenantID string, prio int, h pendingHint, republish bool) {

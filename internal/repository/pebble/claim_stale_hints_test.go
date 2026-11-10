@@ -44,7 +44,7 @@ func TestClaimSkipsExpiredHintsBeforeFreshTask(t *testing.T) {
 			if got.Status != domain.StatusInProgress || !got.ExpiresAt.Equal(*fresh.ExpiresAt) {
 				t.Fatalf("claim changed task lifetime or status: %+v", got)
 			}
-			if hints := len(repo.channelFor(absoluteTestTopic, "tenant-a", 3).ch); hints != 0 {
+			if hints := repo.hintsHeld(absoluteTestTopic, 3); hints != 0 {
 				t.Fatalf("remaining hints=%d", hints)
 			}
 		})
@@ -81,7 +81,7 @@ func TestClaimInspectionBudgetAcrossPrioritiesAndCommands(t *testing.T) {
 	if got, ok, err := repo.Claim(context.Background(), "worker", commands, 60, 3, 3, "tenant-a"); err != nil || ok || got != nil {
 		t.Fatalf("budget exhausted claim=%+v ok=%v err=%v", got, ok, err)
 	}
-	if hints := len(repo.channelFor(first, "tenant-a", 8).ch); hints != 1 {
+	if hints := repo.hintsHeld(first, 8); hints != 1 {
 		t.Fatalf("budget did not stop after three hints: remaining priority-8 hints=%d", hints)
 	}
 	for _, task := range []*domain.Task{want, nextCommand, otherTenant} {
@@ -111,7 +111,7 @@ func TestClaimInspectionBudgetCountsReservedHints(t *testing.T) {
 	if got, ok, err := repo.Claim(context.Background(), "worker", []domain.Command{cmd}, 60, 2, 3, "tenant-a"); err != nil || ok || got != nil {
 		t.Fatalf("reserved hints bypassed budget: task=%+v ok=%v err=%v", got, ok, err)
 	}
-	if hints := len(repo.channelFor(cmd, "tenant-a", 3).ch); hints != 2 {
+	if hints := repo.hintsHeld(cmd, 3); hints != 2 {
 		t.Fatalf("remaining hints=%d want=2", hints)
 	}
 	got, ok, err := repo.Claim(context.Background(), "worker", []domain.Command{cmd}, 60, 2, 3, "tenant-a")
@@ -214,7 +214,7 @@ func TestClaimInspectionRepublishesHintOnWriteError(t *testing.T) {
 			if ghost {
 				wantHints++
 			}
-			if hints := len(repo.channelFor(cmd, "tenant-a", 3).ch); hints != wantHints {
+			if hints := repo.hintsHeld(cmd, 3); hints != wantHints {
 				t.Fatalf("failed write lost hint: got=%d want=%d", hints, wantHints)
 			}
 			repl.fail.Store(false)

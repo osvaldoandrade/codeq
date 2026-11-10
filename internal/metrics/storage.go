@@ -55,6 +55,21 @@ var (
 	MemoryPebbleMinSafeLimitBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_pebble_min_safe_limit_bytes", Help: "Smallest container memory limit at which derived Pebble sizes stay above their per-shard floors for the configured shard count."})
 	// MemoryGoLimitBytes is the Go runtime soft memory limit in effect.
 	MemoryGoLimitBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_go_limit_bytes", Help: "Go runtime soft memory limit (GOMEMLIMIT) in effect."})
+	// MemoryGoLiveHeapBytes is the heap the last GC marked live (ADR 0015).
+	MemoryGoLiveHeapBytes = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_go_live_heap_bytes", Help: "Go heap marked live by the last GC; at the soft limit the GC runs back to back."})
+	// MemoryGCCPUFraction is the GC share of the CPU available to Go between samples.
+	MemoryGCCPUFraction = prometheus.NewGauge(prometheus.GaugeOpts{Namespace: namespace, Name: "memory_gc_cpu_fraction", Help: "Share of the CPU available to Go (GOMAXPROCS) spent in GC since the previous storage sample."})
+	// MemoryPressureWarnings counts sustained memory-pressure warnings logged.
+	MemoryPressureWarnings = prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "memory_pressure_warnings_total", Help: "Rate-limited warnings for a live heap near the Go soft limit or GC consuming CPU."})
+
+	// DispatchHintQueues is the number of non-empty claim hint queues per shard.
+	DispatchHintQueues = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "dispatch_hint_queues", Help: "Claim hint queues held in memory per shard; one per (command, tenant, priority) with queued hints."}, []string{shardLabel})
+	// DispatchHints is the number of claim hints held in memory per shard.
+	DispatchHints = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "dispatch_hints", Help: "Claim hints held in memory per shard."}, []string{shardLabel})
+	// DispatchInFlight is the number of hints a claim is processing per shard.
+	DispatchInFlight = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "dispatch_inflight", Help: "Claim hints being processed per shard."}, []string{shardLabel})
+	// LeaseEntries is the size of the in-memory lease table per shard.
+	LeaseEntries = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "lease_entries", Help: "Entries in the in-memory lease table per shard."}, []string{shardLabel})
 )
 
 func init() {
@@ -67,6 +82,8 @@ func init() {
 		PebbleL0Files, PebbleL0Sublevels, PebbleCompactionDebtBytes, PebbleDiskUsageBytes,
 		PebbleCacheCapacityBytes, PebbleMemTableBytes,
 		MemoryContainerLimitBytes, MemoryGoLimitBytes,
+		MemoryGoLiveHeapBytes, MemoryGCCPUFraction, MemoryPressureWarnings,
+		DispatchHintQueues, DispatchHints, DispatchInFlight, LeaseEntries,
 		MemoryPebbleSizingFloored, MemoryPebbleMinSafeLimitBytes,
 	)
 }

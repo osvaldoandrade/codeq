@@ -110,6 +110,8 @@ type pebbleRuntime struct {
 	topicStore   *topicpebble.TopicStore
 	guard        *diskguard.Guard
 	monitorDone  chan struct{}
+	// pressure is used only by the storage monitor goroutine.
+	pressure *memlimit.PressureMonitor
 }
 
 // newPebbleApplication constructs the Application stack on embedded Pebble.
@@ -635,6 +637,9 @@ func (rt *pebbleRuntime) startReapers(callback services.ResultCallbackService) {
 		if rt.cfg.Raft.Enabled && rt.raftNodes[i] != nil {
 			ref := rt.raftNodes[i]
 			shardOpts.LeaderGate = ref.IsLeader
+			// Sweep only after the leader's barrier and dispatch rebuild
+			// (ADR 0015), never on a state older than the committed log.
+			shardOpts.LeaderReady = repo.EnsureLeaderDispatch
 		}
 		pebblerepo.NewReaper(shardDB, rt.loc, rt.logger, shardOpts).Start(rt.bgCtx)
 	}
@@ -789,9 +794,60 @@ func (rt *pebbleRuntime) startStorageMonitor() {
 }
 
 func (rt *pebbleRuntime) observeEngines() {
+	var dispatch pebblerepo.DispatchFootprint
 	for i, db := range rt.dbs {
-		db.ObserveEngineMetrics(strconv.Itoa(i))
+		shard := strconv.Itoa(i)
+		db.ObserveEngineMetrics(shard)
+		if i < len(rt.taskShards) && rt.taskShards[i] != nil {
+			f := rt.taskShards[i].ObserveDispatchMetrics(shard)
+			dispatch.Queues += f.Queues
+			dispatch.Hints += f.Hints
+			dispatch.InFlight += f.InFlight
+			dispatch.Leases += f.Leases
+		}
 	}
+	rt.observeMemoryPressure(time.Now(), dispatch)
+}
+
+// observeMemoryPressure publishes the Go heap against its soft limit and logs
+// a rate-limited warning while the live heap stays near the limit or the GC
+// keeps consuming CPU: the condition that pinned a Conveste leader and ended
+// in an OOM kill without a single log line (ADR 0015). Logs are the only
+// telemetry some installations keep, so the warning carries the dispatch
+// footprint that explains most leader-only heap.
+func (rt *pebbleRuntime) observeMemoryPressure(now time.Time, dispatch pebblerepo.DispatchFootprint) {
+	if rt.pressure == nil {
+		rt.pressure = memlimit.NewPressureMonitor()
+	}
+	p := rt.pressure.Sample()
+	metrics.MemoryGoLiveHeapBytes.Set(float64(p.LiveHeapBytes))
+	metrics.MemoryGCCPUFraction.Set(p.GCCPUFraction)
+	if !rt.pressure.ShouldWarn(now, p) {
+		return
+	}
+	metrics.MemoryPressureWarnings.Inc()
+	rt.logger.Warn(
+		"memory pressure: live Go heap near the soft limit or GC consuming CPU",
+		"event", "codeq_memory_pressure",
+		"liveHeapBytes", p.LiveHeapBytes,
+		"goLimitBytes", p.GoLimitBytes,
+		"heapRatio", p.HeapRatio(),
+		"gcCpuFraction", p.GCCPUFraction,
+		"raftLeader", rt.leadsAnyGroup(),
+		"dispatchQueues", dispatch.Queues,
+		"dispatchHints", dispatch.Hints,
+		"dispatchInFlight", dispatch.InFlight,
+		"leases", dispatch.Leases,
+	)
+}
+
+func (rt *pebbleRuntime) leadsAnyGroup() bool {
+	for _, node := range rt.raftNodes {
+		if node != nil && node.IsLeader() {
+			return true
+		}
+	}
+	return false
 }
 
 // runEvery calls fn immediately and then every interval until ctx ends.

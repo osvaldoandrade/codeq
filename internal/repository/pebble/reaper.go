@@ -35,12 +35,18 @@ type Reaper struct {
 	// (and fail with ErrNotLeader) or duplicate work the leader is
 	// already doing.
 	leaderGate func() bool
-	onDelayed  func(cmd domain.Command, tenantID string)
+	// leaderReady, when non-nil, runs after leaderGate passes and must
+	// succeed before the tick sweeps (see ReaperOptions.LeaderReady).
+	leaderReady func(context.Context) error
+	onDelayed   func(cmd domain.Command, tenantID string)
 
 	leaseInterval time.Duration // how often to scan lease/*
 	ttlInterval   time.Duration // how often to scan ttl_index
 	leaseBatch    int           // max leases to inspect per tick
 	ttlBatch      int           // max ttl entries to clean per tick
+
+	// now is the clock of the stall watch; nil means time.Now.
+	now func() time.Time
 }
 
 // ReaperOptions configures the cadence and batch sizes; zero values pick
@@ -64,6 +70,17 @@ type ReaperOptions struct {
 	// pkg/app/application_pebble.go to raft.DB.IsLeader when raft is
 	// enabled; nil otherwise (single-node deployments run every tick).
 	LeaderGate func() bool
+	// LeaderReady, when set, runs after LeaderGate passes; an error skips
+	// the tick. Wired to TaskRepository.EnsureLeaderDispatch so a newly
+	// elected leader sweeps only once a Raft barrier has applied every
+	// entry committed before its term and the dispatch index, including
+	// the lease table, has been rebuilt from that state (ADR 0015). A
+	// voter that took over right after its own restart otherwise read the
+	// snapshot it had just restored, older than the log it was about to
+	// apply, and wrote requeues and retirements computed from that stale
+	// state. It also completes a rebuild the election-time attempt left
+	// unfinished on a leader that receives no request.
+	LeaderReady func(context.Context) error
 	// OnDelayed fires after a lease-expired task is written to the
 	// delayed bucket. The repository uses it to bump the process-local
 	// delayed counter; without that bump Claim skips the delayed scan
@@ -109,6 +126,7 @@ func NewReaper(db *DB, tz *time.Location, logger *slog.Logger, opts ReaperOption
 		maxAttemptsDefault: opts.MaxAttemptsDefault,
 		dlqCallback:        opts.DLQCallback,
 		leaderGate:         opts.LeaderGate,
+		leaderReady:        opts.LeaderReady,
 		onDelayed:          opts.OnDelayed,
 		leaseInterval:      opts.LeaseInterval,
 		ttlInterval:        opts.TTLInterval,
@@ -121,8 +139,78 @@ func NewReaper(db *DB, tz *time.Location, logger *slog.Logger, opts ReaperOption
 // shutdown is graceful; logs and continues on individual tick errors so
 // transient failures don't take the reaper offline.
 func (r *Reaper) Start(ctx context.Context) {
-	go r.loop(ctx, r.leaseInterval, r.sweepLeases, "lease")
-	go r.loop(ctx, r.ttlInterval, r.sweepTTL, "ttl")
+	go r.loop(ctx, r.leaseInterval, r.leaseSweep, sweepLease)
+	go r.loop(ctx, r.ttlInterval, r.ttlSweep, sweepTTLLabel)
+}
+
+const (
+	sweepLease    = "lease"
+	sweepTTLLabel = "ttl"
+
+	outcomeIdle     = "idle"
+	outcomeProgress = "progress"
+	outcomeStalled  = "stalled"
+	outcomeError    = "error"
+	outcomeDeferred = "deferred"
+
+	// leaderReadyTimeout bounds the barrier and rebuild one tick waits for.
+	leaderReadyTimeout = 2 * time.Second
+
+	// stallWarnAfter is how long a sweep may keep finding due work it
+	// cannot finish before the reaper warns, and stallWarnEvery how often
+	// it repeats the warning while the stall lasts.
+	stallWarnAfter = time.Minute
+	stallWarnEvery = 5 * time.Minute
+)
+
+// sweepResult is what one reaper sweep did: the due entries it inspected and
+// how many of them it finished (requeued, retired, or dropped from the
+// in-memory or on-disk index). Due entries that stay are the work the next
+// sweep reads again.
+type sweepResult struct {
+	due, done int
+}
+
+// outcome classifies a successful sweep.
+func (s sweepResult) outcome() string {
+	switch {
+	case s.done > 0:
+		return outcomeProgress
+	case s.due == 0:
+		return outcomeIdle
+	default:
+		return outcomeStalled
+	}
+}
+
+// stallWatch rate-limits the warning of one sweep that keeps re-reading due
+// work without finishing any of it. Only the sweep's own goroutine uses it.
+type stallWatch struct {
+	since    time.Time
+	lastWarn time.Time
+}
+
+// observe records one sweep and reports whether to warn now.
+func (w *stallWatch) observe(now time.Time, outcome string) bool {
+	if outcome != outcomeStalled {
+		w.since = time.Time{}
+		return false
+	}
+	if w.since.IsZero() {
+		w.since = now
+	}
+	if now.Sub(w.since) < stallWarnAfter || (!w.lastWarn.IsZero() && now.Sub(w.lastWarn) < stallWarnEvery) {
+		return false
+	}
+	w.lastWarn = now
+	return true
+}
+
+func (r *Reaper) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 // StartReapersForShards is the Phase 8 helper: spawns one Reaper per
@@ -135,9 +223,10 @@ func StartReapersForShards(ctx context.Context, dbs []*DB, tz *time.Location, lo
 	}
 }
 
-func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(context.Context) (int, error), label string) {
+func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(context.Context) (sweepResult, error), label string) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	var stall stallWatch
 	for {
 		select {
 		case <-ctx.Done():
@@ -149,15 +238,47 @@ func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(con
 				// election.
 				continue
 			}
-			n, err := tick(ctx)
-			if err != nil {
-				r.logger.Warn("reaper tick failed", "sweep", label, "err", err)
-				continue
-			}
-			if n > 0 {
-				r.logger.Debug("reaper tick", "sweep", label, "processed", n)
-			}
+			r.tickWhenReady(ctx, tick, label, &stall)
 		}
+	}
+}
+
+// tickWhenReady runs the sweep once this leader has applied its log and
+// rebuilt its dispatch index; until then the tick is deferred, never run on
+// a state older than the committed log.
+func (r *Reaper) tickWhenReady(ctx context.Context, tick func(context.Context) (sweepResult, error), label string, stall *stallWatch) {
+	if r.leaderReady != nil {
+		readyCtx, cancel := context.WithTimeout(ctx, leaderReadyTimeout)
+		err := r.leaderReady(readyCtx)
+		cancel()
+		if err != nil {
+			metrics.ReaperTicks.WithLabelValues(label, outcomeDeferred).Inc()
+			r.logger.Debug("reaper tick deferred until the leader has applied its log", "sweep", label, "err", err)
+			return
+		}
+	}
+	r.runTick(ctx, tick, label, stall)
+}
+
+// runTick runs one sweep and accounts for its outcome. A sweep that keeps
+// finding due work and finishing none of it is a leader burning CPU without
+// progress; it is counted on every tick and warned about, rate limited, with
+// the amount of work it re-reads.
+func (r *Reaper) runTick(ctx context.Context, tick func(context.Context) (sweepResult, error), label string, stall *stallWatch) {
+	res, err := tick(ctx)
+	if err != nil {
+		metrics.ReaperTicks.WithLabelValues(label, outcomeError).Inc()
+		r.logger.Warn("reaper tick failed", "sweep", label, "err", err)
+		return
+	}
+	outcome := res.outcome()
+	metrics.ReaperTicks.WithLabelValues(label, outcome).Inc()
+	if outcome == outcomeProgress {
+		r.logger.Debug("reaper tick", "sweep", label, "processed", res.done)
+	}
+	if stall.observe(r.clock(), outcome) {
+		r.logger.Warn("reaper sweep is making no progress: due entries stay and are re-read every tick",
+			"event", "codeq_reaper_stalled", "sweep", label, "due", res.due, "stalledFor", r.clock().Sub(stall.since).Round(time.Second).String())
 	}
 }
 
@@ -169,57 +290,122 @@ func (r *Reaper) loop(ctx context.Context, interval time.Duration, tick func(con
 // on disk; the in-memory swap removed a per-tick Pebble iter from the
 // reaper's hot path AND eliminated 1 KeyLease write per Claim.
 func (r *Reaper) sweepLeases(ctx context.Context) (int, error) {
+	res, err := r.leaseSweepDetailed(ctx)
+	return res.done - res.cleared, err
+}
+
+// leaseSweepResult extends sweepResult with the stale in-memory entries a
+// lease sweep dropped (counted as done, not as moved).
+type leaseSweepResult struct {
+	sweepResult
+	cleared int
+}
+
+func (r *Reaper) leaseSweep(ctx context.Context) (sweepResult, error) {
+	res, err := r.leaseSweepDetailed(ctx)
+	return res.sweepResult, err
+}
+
+func (r *Reaper) leaseSweepDetailed(ctx context.Context) (leaseSweepResult, error) {
 	now := time.Now().In(r.tz).Unix()
 	ids := r.db.Leases.SnapshotExpired(now, r.leaseBatch)
 	if len(ids) == 0 {
-		return 0, nil
+		return leaseSweepResult{}, nil
 	}
-	moved := 0
+	moved, cleared := 0, 0
+	result := func() leaseSweepResult {
+		return leaseSweepResult{sweepResult: sweepResult{due: len(ids), done: moved + cleared}, cleared: cleared}
+	}
 	// Expired absolute rows retire together in one replicated batch at the
 	// end of the tick instead of one commit per row.
 	var expired []*domain.Task
 	for _, id := range ids {
-		// Double-check the lease is still expired — a Heartbeat between
-		// snapshot and now would have extended it.
-		if e, ok := r.db.Leases.Get(id); ok && e.untilU > now {
-			continue
-		}
-		taskJSON, err := r.db.Get(KeyTask(id))
+		t, action, err := r.inspectExpiredLease(id, now)
 		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				r.db.Leases.Delete(id)
-				continue
-			}
 			err = joinErrors(err, r.retireExpired(expired, &moved))
-			return moved, err
+			return result(), err
 		}
-		var t domain.Task
-		if err := sonic.Unmarshal(taskJSON, &t); err != nil {
-			r.db.Leases.Delete(id)
-			continue
-		}
-		if err := r.db.checkTaskExpiry(&t); err != nil {
-			if errors.Is(err, domain.ErrTaskExpired) {
-				expired = append(expired, &t)
-				continue
+		switch action {
+		case leaseCleared:
+			cleared++
+		case leaseRetire:
+			expired = append(expired, t)
+		case leaseRequeue:
+			if r.requeueExpiredLease(ctx, id, t) {
+				moved++
 			}
-			err = joinErrors(err, r.retireExpired(expired, &moved))
-			return moved, err
 		}
-		if t.Status != domain.StatusInProgress {
-			r.db.Leases.Delete(id)
-			continue
-		}
-		metrics.LeaseExpiredTotal.WithLabelValues(string(t.Command)).Inc()
-		delaySeconds := backoff.Compute(r.backoffPolicy, r.backoffBaseSeconds, r.backoffMaxSeconds, t.Attempts, nil)
-		if err := r.requeueExpiredOne(ctx, &t, delaySeconds); err != nil {
-			r.logger.Warn("reap requeue failed", "id", id, "err", err)
-			continue
-		}
-		moved++
 	}
 	err := r.retireExpired(expired, &moved)
-	return moved, err
+	return result(), err
+}
+
+// leaseAction is what a lease sweep does with one expired lease entry.
+type leaseAction int
+
+const (
+	// leaseCleared: the entry is stale (or was extended) and leaves the
+	// table without a write.
+	leaseCleared leaseAction = iota
+	// leaseRetire: the row's absolute deadline passed; it retires with the
+	// tick's batch.
+	leaseRetire
+	// leaseRequeue: the in-progress row goes back to delayed (or DLQ).
+	leaseRequeue
+)
+
+// inspectExpiredLease reads the row behind one expired lease entry and
+// decides its fate, dropping a stale entry from the table on the spot.
+func (r *Reaper) inspectExpiredLease(id string, now int64) (*domain.Task, leaseAction, error) {
+	// Double-check the lease is still expired — a Heartbeat between
+	// snapshot and now would have extended it.
+	if e, ok := r.db.Leases.Get(id); ok && e.untilU > now {
+		return nil, leaseCleared, nil
+	}
+	taskJSON, err := r.db.Get(KeyTask(id))
+	if errors.Is(err, ErrNotFound) {
+		r.db.Leases.Delete(id)
+		return nil, leaseCleared, nil
+	}
+	if err != nil {
+		return nil, leaseCleared, err
+	}
+	t, decoded := decodeTask(taskJSON)
+	if !decoded {
+		// An undecodable row has no lease to enforce.
+		r.db.Leases.Delete(id)
+		return nil, leaseCleared, nil
+	}
+	if err := r.db.checkTaskExpiry(t); err != nil {
+		if errors.Is(err, domain.ErrTaskExpired) {
+			return t, leaseRetire, nil
+		}
+		return nil, leaseCleared, err
+	}
+	if t.Status != domain.StatusInProgress {
+		r.db.Leases.Delete(id)
+		return nil, leaseCleared, nil
+	}
+	return t, leaseRequeue, nil
+}
+
+// decodeTask decodes a task body and reports whether it decoded.
+func decodeTask(body []byte) (*domain.Task, bool) {
+	var t domain.Task
+	return &t, sonic.Unmarshal(body, &t) == nil
+}
+
+// requeueExpiredLease requeues one in-progress row whose lease expired and
+// reports whether it moved. A failure is logged and leaves the entry for the
+// next sweep.
+func (r *Reaper) requeueExpiredLease(ctx context.Context, id string, t *domain.Task) bool {
+	metrics.LeaseExpiredTotal.WithLabelValues(string(t.Command)).Inc()
+	delaySeconds := backoff.Compute(r.backoffPolicy, r.backoffBaseSeconds, r.backoffMaxSeconds, t.Attempts, nil)
+	if err := r.requeueExpiredOne(ctx, t, delaySeconds); err != nil {
+		r.logger.Warn("reap requeue failed", "id", id, "err", err)
+		return false
+	}
+	return true
 }
 
 // retireExpired retires the expired rows a lease sweep met in one batch and
@@ -313,9 +499,29 @@ func (r *Reaper) requeueExpiredOne(ctx context.Context, t *domain.Task, delaySec
 // ttlBatch per tick. CleanupExpired on the foreground path is bounded too;
 // the reaper exists so an idle deployment still trims stale data.
 func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
+	res, err := r.ttlSweepDetailed(ctx)
+	return res.removed, err
+}
+
+// ttlSweepResult extends sweepResult with the rows the sweep removed.
+type ttlSweepResult struct {
+	sweepResult
+	removed int
+}
+
+func (r *Reaper) ttlSweep(ctx context.Context) (sweepResult, error) {
+	res, err := r.ttlSweepDetailed(ctx)
+	return res.sweepResult, err
+}
+
+// ttlSweepDetailed counts the due TTL index entries as the sweep's due work:
+// an entry the sweep cannot drop stays at the head of the index and is read
+// again by every later sweep. The rotating absolute sweep that runs first is
+// not counted; most identities it visits legitimately need nothing.
+func (r *Reaper) ttlSweepDetailed(ctx context.Context) (ttlSweepResult, error) {
 	absoluteRemoved, err := r.db.sweepAbsolute(ctx, r.ttlBatch)
 	if err != nil {
-		return 0, err
+		return ttlSweepResult{}, err
 	}
 	before := time.Now().In(r.tz)
 	lower, _ := PrefixTTL()
@@ -324,8 +530,28 @@ func (r *Reaper) sweepTTL(ctx context.Context) (int, error) {
 	upper = append(upper, be8(unixSeconds(before)+1)...)
 	hits, err := collectTTLHits(r.db, lower, upper, r.ttlBatch)
 	if err != nil || len(hits) == 0 {
-		return absoluteRemoved, err
+		return ttlSweepResult{sweepResult: sweepResult{done: absoluteRemoved}, removed: absoluteRemoved}, err
 	}
 	n, err := dropExpiredBodies(r.db, hits)
-	return absoluteRemoved + n, err
+	if err != nil {
+		return ttlSweepResult{removed: absoluteRemoved + n}, err
+	}
+	left, err := remainingTTLHits(r.db, hits)
+	return ttlSweepResult{sweepResult: sweepResult{due: len(hits), done: absoluteRemoved + len(hits) - left}, removed: absoluteRemoved + n}, err
+}
+
+// remainingTTLHits counts the due index entries a sweep left in place; the
+// next sweep reads them again. At most ttlBatch point reads per tick.
+func remainingTTLHits(db *DB, hits []ttlHit) (int, error) {
+	left := 0
+	for _, hit := range hits {
+		exists, err := db.Has(hit.key)
+		if err != nil {
+			return left, err
+		}
+		if exists {
+			left++
+		}
+	}
+	return left, nil
 }

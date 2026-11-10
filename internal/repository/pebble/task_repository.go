@@ -40,20 +40,23 @@ type TaskRepository struct {
 
 	reconcile reconcileTracker
 
-	// queues is the lock-free claim fast path. Each (cmd, tenant, prio)
-	// gets a buffered channel of task IDs; producers enqueue to Pebble
-	// AND push the id onto the channel, consumers receive from the
-	// channel and then commit the claim batch. Pebble's internal write
-	// lock still serializes batches, but Go channel send/receive is
-	// essentially free — multiple consumers can race for receives
-	// without any user-space mutex.
+	// queues is the claim fast path: one FIFO of (seq, id) hints per
+	// (cmd, tenant, prio). Producers enqueue to Pebble AND publish the hint;
+	// consumers pop it and commit the claim batch. Every access holds
+	// dispatchMu (see hintQueue), so a plain map suffices.
+	//
+	// A queue exists only while it holds hints. A claim that probes a
+	// priority nobody published to allocates nothing, and a queue that
+	// drains is dropped, so the memory is proportional to the hints held
+	// (ADR 0015). The previous fixed 100k-slot channel per tuple, created
+	// for every priority a claim probed, retained 24 MiB of pointer-bearing
+	// heap per claimed topic on the leader and pushed it into continuous GC
+	// at its soft memory limit.
 	//
 	// Crash recovery: on Open we scan every pending key under
-	// codeq/q/.../pending/* and re-seed the matching channel, so the
-	// fast path is never out of sync with the durable state after a
-	// restart. Channel buffer is sized large enough (per-queue cap) that
-	// producers rarely block; if they do, the send is context-cancellable.
-	queues sync.Map // key string → *queueChan
+	// codeq/q/.../pending/* and re-seed the matching queue, so the fast
+	// path is never out of sync with the durable state after a restart.
+	queues map[string]*hintQueue
 
 	// delayedCount tracks the count of delayed entries per (cmd, tenant).
 	// Incremented when Enqueue/Nack writes to a delayed bucket and
@@ -86,7 +89,7 @@ type TaskRepository struct {
 	// two creates that both miss the key would both commit a task.
 	idempoStripes [32]sync.Mutex
 
-	// dispatchMu guards the hint channel, queued/inflight sets, and the
+	// dispatchMu guards the hint queues, queued/inflight sets, and the
 	// leadership-rebuild flag. Lock order: dispatchMu, then leaseTable.mu.
 	// Never acquire dispatchMu while holding leaseTable.mu.
 	dispatchMu    sync.Mutex
@@ -103,26 +106,58 @@ type TaskRepository struct {
 	clock func() time.Time
 }
 
-// queueChan is the per-queue channel + recovery state. Each hint carries
-// both the seq we used at Enqueue time and the id, so the consumer can
-// rebuild the exact pending key (KeyPending uses (cmd, tenant, prio,
-// seq, id)) and delete it in one shot — no range scan required.
-type queueChan struct {
-	ch chan pendingHint
+// hintQueue is the FIFO of pending hints of one (cmd, tenant, prio). It is
+// guarded by TaskRepository.dispatchMu. Each hint carries both the seq we
+// used at Enqueue time and the id, so the consumer can rebuild the exact
+// pending key (KeyPending uses (cmd, tenant, prio, seq, id)) and delete it
+// in one shot — no range scan required. Its backing array grows with the
+// hints it holds and is released once it drains.
+type hintQueue struct {
+	items []pendingHint
+	head  int
 }
 
-// pendingHint travels through the fast-path channel between a producer
+// hintQueueCompactAt is the consumed prefix length after which pop copies
+// the live hints down, so a long-lived busy queue does not keep its whole
+// history reachable.
+const hintQueueCompactAt = 1024
+
+func (q *hintQueue) len() int { return len(q.items) - q.head }
+
+func (q *hintQueue) push(h pendingHint) { q.items = append(q.items, h) }
+
+// pop removes the oldest hint. The consumed slot is cleared so its id string
+// is not kept reachable by the backing array.
+func (q *hintQueue) pop() (pendingHint, bool) {
+	if q.head >= len(q.items) {
+		return pendingHint{}, false
+	}
+	h := q.items[q.head]
+	q.items[q.head] = pendingHint{}
+	q.head++
+	switch {
+	case q.head == len(q.items):
+		q.items, q.head = nil, 0
+	case q.head >= hintQueueCompactAt && 2*q.head >= len(q.items):
+		q.items = append([]pendingHint(nil), q.items[q.head:]...)
+		q.head = 0
+	}
+	return h, true
+}
+
+// pendingHint travels through the fast-path hint queue between a producer
 // (Enqueue / Abandon / MoveDueDelayed) and a consumer (Claim).
 type pendingHint struct {
 	seq uint64
 	id  string
 }
 
-// channelBufferSize bounds how many task IDs we can stage in memory per
-// queue before producers must wait for a consumer. 100k @ ~24 bytes/id
-// caps memory at ~2.4 MiB per (cmd,tenant,prio) tuple — generous given
-// typical workloads have a handful of active tuples.
-const channelBufferSize = 100_000
+// maxHintsPerQueue bounds how many task IDs one (cmd, tenant, prio) queue
+// stages in memory, as the former channel capacity did. A hint published to
+// a full queue is dropped; its pending key stays durable and the next
+// leadership rebuild (or restart) scans it back. Memory is paid per hint
+// held (about 24 bytes plus the id), never per probed tuple.
+const maxHintsPerQueue = 100_000
 
 const (
 	minPriority         = 0
@@ -180,6 +215,7 @@ func NewTaskRepository(db *DB, tz *time.Location, backoffPolicy string, backoffB
 		backoffMaxSeconds:  backoffMaxSeconds,
 		reconcile:          reconcileTracker{interval: defaultReconcileInterval},
 		leases:             db.Leases,
+		queues:             make(map[string]*hintQueue),
 		queued:             make(map[string]struct{}),
 		inflight:           make(map[string]struct{}),
 	}
@@ -352,8 +388,8 @@ func enqueueLocation(delayed bool) domain.TaskLocation {
 }
 
 // announceEnqueue runs after the enqueue batch commits. It publishes the ID
-// on the fast-path channel (or counts the delayed entry) and updates the
-// metrics. If the channel happens to be full (cap reached) the hint is
+// on the fast-path hint queue (or counts the delayed entry) and updates the
+// metrics. If the queue happens to be full (cap reached) the hint is
 // dropped — the pending key is durable in Pebble, and any reaper or restart
 // will rediscover it. A drop here is a perf regression (claim falls back to
 // a scan), not a correctness one.
@@ -515,10 +551,10 @@ func (r *TaskRepository) idempoStripe(key string) *sync.Mutex {
 	return &r.idempoStripes[h.Sum32()%uint32(len(r.idempoStripes))]
 }
 
-// publishPending pushes a (seq, id) hint onto the per-queue channel
-// non-blocking. A full channel drops the hint; the pending key is already
-// durable, and the next leadership rebuild (or process restart) scans it
-// back onto the channel. There is no claim-time scan.
+// publishPending pushes a (seq, id) hint onto the per-queue FIFO. A full
+// queue drops the hint; the pending key is already durable, and the next
+// leadership rebuild (or process restart) scans it back onto the queue.
+// There is no claim-time scan.
 //
 // While a Raft rebuild has not finished, the hint is skipped on purpose:
 // the rebuild scans Pebble and would otherwise pair with this send.
@@ -673,34 +709,19 @@ func (r *TaskRepository) popFromAnyPriority(ctx context.Context, workerID string
 }
 
 // queueKey is the stable string identifier used to look up the per-queue
-// channel. Uses the same normalization as the on-disk keys (cmdSeg
+// hint FIFO. Uses the same normalization as the on-disk keys (cmdSeg
 // lowercases, tenantSeg maps "" → "_") so that recoverQueues — which
 // parses the (cmd, tenant) tuple out of disk keys — and producer-side
-// channelFor calls coming in with the raw API cmd resolve to the same
-// channel. Without this, recovered hints land on a different map entry
-// from the one Claim later reads from, stranding the IDs.
+// publishes coming in with the raw API cmd resolve to the same queue.
+// Without this, recovered hints land on a different map entry from the one
+// Claim later reads from, stranding the IDs.
 func queueKey(cmd domain.Command, tenantID string, prio int) string {
 	return cmdSeg(cmd) + "\x00" + tenantSeg(tenantID) + "\x00" + strconv.Itoa(prio)
 }
 
-// channelFor returns the buffered ID channel for a (cmd, tenant, prio).
-// LoadOrStore makes the lazy creation safe for concurrent producers and
-// consumers; whichever wins the store gets credited, the loser uses the
-// stored value. New channels start empty (any pre-existing pending keys
-// were seeded by recoverQueues at startup).
-func (r *TaskRepository) channelFor(cmd domain.Command, tenantID string, prio int) *queueChan {
-	k := queueKey(cmd, tenantID, prio)
-	if v, ok := r.queues.Load(k); ok {
-		return v.(*queueChan)
-	}
-	q := &queueChan{ch: make(chan pendingHint, channelBufferSize)}
-	actual, _ := r.queues.LoadOrStore(k, q)
-	return actual.(*queueChan)
-}
-
 // delayedMoveFlagFor returns the per-(cmd, tenantID) CAS flag used to
 // single-flight moveDueDelayedForTenant. Same normalization rules as
-// delayedCounter / channelFor so concurrent callers converge on the
+// delayedCounter / queueKey so concurrent callers converge on the
 // same atomic.
 func (r *TaskRepository) delayedMoveFlagFor(cmd domain.Command, tenantID string) *atomic.Int32 {
 	k := cmdSeg(cmd) + "\x00" + tenantSeg(tenantID)
@@ -729,8 +750,8 @@ func (r *TaskRepository) delayedCounter(cmd domain.Command, tenantID string) *at
 }
 
 // recoverQueues scans every pending key under codeq/q/.../pending/* at
-// startup and re-seeds the matching channel. Without this, IDs that were
-// durably enqueued before a restart would never be claimed (the channel
+// startup and re-seeds the matching hint queue. Without this, IDs that were
+// durably enqueued before a restart would never be claimed (the queue
 // would stay empty until new producers pushed).
 //
 // Runs once during NewTaskRepository so the workload is paid up-front
@@ -777,12 +798,11 @@ func (r *TaskRepository) recoverQueues() error {
 		if !ok {
 			continue
 		}
-		// Non-blocking send: if the channel was sized too small (shouldn't
-		// happen given the cap) we'd drop the recovery hint. Drop is safe
-		// because the pending key stays in Pebble — a later scan/restart
-		// would pick it up. We log loudly if it happens.
+		// A queue already holding maxHintsPerQueue hints refuses the
+		// recovery hint. The pending key stays in Pebble, but the rebuild
+		// fails loudly rather than silently leaving a task undispatched.
 		if !r.sendHintLocked(cmd, tenantID, prio, seq, id) {
-			return fmt.Errorf("channel full during recovery for queue %s/%s/%d (raise channelBufferSize)", cmd, tenantID, prio)
+			return fmt.Errorf("hint queue full during recovery for queue %s/%s/%d (raise maxHintsPerQueue)", cmd, tenantID, prio)
 		}
 	}
 	return it.Error()
@@ -826,9 +846,8 @@ func (r *TaskRepository) recoverDelayedCounts() error {
 }
 
 func (r *TaskRepository) tryPopPriority(ctx context.Context, workerID string, cmd domain.Command, priority, leaseSeconds int, tenantID string, remaining *int, held *expiredHints) (*domain.Task, bool, error) {
-	q := r.channelFor(cmd, tenantID, priority)
 	for *remaining > 0 {
-		h, ok := r.popHintWithinBudget(ctx, q, remaining)
+		h, ok := r.popHintWithinBudget(ctx, cmd, tenantID, priority, remaining)
 		if !ok {
 			return nil, false, ctx.Err()
 		}
@@ -1064,9 +1083,8 @@ func (r *TaskRepository) ClaimMany(ctx context.Context, workerID string, command
 collect:
 	for _, cmd := range commands {
 		for p := maxPriority; p >= minPriority && len(hints) < max; p-- {
-			q := r.channelFor(cmd, tenantID, p)
 			for len(hints) < max {
-				h, ok := r.popHint(q)
+				h, ok := r.popHint(cmd, tenantID, p)
 				if !ok {
 					break
 				}

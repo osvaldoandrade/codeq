@@ -10,6 +10,10 @@ const (
 
 const shardLabel = "shard"
 
+// labelOutcome is the bounded outcome label shared by the reaper sweep and
+// JWKS refresh vectors; each vector documents its fixed value set.
+const labelOutcome = "outcome"
+
 var (
 	// AbsoluteIdentityUsage tracks accepted tasks and their no-payload replay metadata.
 	AbsoluteIdentityUsage = prometheus.NewGaugeVec(prometheus.GaugeOpts{Namespace: namespace, Name: "absolute_identity_usage", Help: "Accepted absolute task identities and replay tombstones held per shard."}, []string{shardLabel})
@@ -19,6 +23,10 @@ var (
 	AbsoluteIdentityRefused = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_identity_refused_total", Help: "New absolute task accepts refused by the per-shard metadata budget."}, []string{shardLabel})
 	// AbsoluteExpiredPurged counts physical absolute payload retirement.
 	AbsoluteExpiredPurged = prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_expired_purged_total", Help: "Absolute task payloads retired by bounded cleanup."})
+	// ReaperTicks counts reaper sweeps by outcome: idle (nothing due),
+	// progress, stalled (due work and none of it finished), error, or deferred
+	// until a new leader has applied its log (ADR 0015).
+	ReaperTicks = prometheus.NewCounterVec(prometheus.CounterOpts{Namespace: namespace, Name: "reaper_ticks_total", Help: "Reaper sweeps by sweep (lease, ttl) and outcome (idle, progress, stalled, error, deferred)."}, []string{"sweep", labelOutcome})
 	// AbsoluteCompletedPurged counts absolute tasks removed entirely on their
 	// acknowledged completion (ADR 0012).
 	AbsoluteCompletedPurged = prometheus.NewCounter(prometheus.CounterOpts{Namespace: namespace, Name: "absolute_completed_purged_total", Help: "Absolute tasks removed entirely on acknowledged completion."})
@@ -165,6 +173,7 @@ var (
 func init() {
 	prometheus.MustRegister(
 		AbsoluteIdentityUsage, AbsoluteIdentityCapacity, AbsoluteIdentityRefused, AbsoluteExpiredPurged, AbsoluteCompletedPurged,
+		ReaperTicks,
 		TaskCreatedTotal,
 		TaskClaimedTotal,
 		TaskCompletedTotal,

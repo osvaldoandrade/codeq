@@ -68,7 +68,7 @@ func purgedTotal(t *testing.T) float64 {
 }
 
 func hintCount(repo *TaskRepository) int {
-	return len(repo.channelFor(absoluteTestTopic, "tenant-a", 3).ch)
+	return repo.hintsHeld(absoluteTestTopic, 3)
 }
 
 // A claim that meets N expired heads before a live task commits twice (one

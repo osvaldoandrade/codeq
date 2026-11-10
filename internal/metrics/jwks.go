@@ -8,9 +8,6 @@ import (
 	"github.com/osvaldoandrade/codeq/pkg/auth/jwks"
 )
 
-// labelOutcome is the fixed refresh-outcome label.
-const labelOutcome = "outcome"
-
 // JWKS validator metrics (ADR 0014). Every label value comes from the fixed
 // sets documented on jwks.Observer; no token data, URL or error text.
 var (
